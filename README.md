@@ -1,6 +1,12 @@
 # Rism
 
-Rism is **Prism with Rust**.
+![CI](https://github.com/AdriaERNI/Rism/actions/workflows/ci.yml/badge.svg)
+![MSRV](https://img.shields.io/badge/rust-1.85%2B-blue)
+![License](https://img.shields.io/badge/license-AGPL--3.0-blue)
+![IRIS](https://img.shields.io/badge/IRIS-2025.3-orange)
+
+Rism is **Prism with Rust** — an MCP server and CLI for InterSystems IRIS
+with **25 tools** and zero server-side helper code.
 
 Prism is an MCP server and CLI for InterSystems IRIS development (SQL, documents,
 compilation, debugging, testing, and ObjectScript execution via the Atelier REST
@@ -55,8 +61,12 @@ rism info                                                 # server version/names
 rism --url http://host:52773 --namespace %SYS sql "SELECT 1"
 ```
 
-Settings resolve env → `~/.rism/settings.json` → defaults (`_SYSTEM/SYS` @
+Settings resolve env (`RISM_IRIS_*`, `RISM_WORKSPACE`, `RISM_DEBUG_TOOLS=0`
+to hide the debugger tools) → `$XDG_CONFIG_HOME/rism/config.toml`
+(`~/.config/rism/config.toml`) → defaults (`_SYSTEM/SYS` @
 `http://localhost:52773`, namespace `USER`, API version auto-negotiated).
+Set `RUST_LOG=debug` for Prism-style REQUEST/RESPONSE tool-call logs on
+stderr.
 
 ### MCP (stdio)
 
@@ -81,4 +91,12 @@ testing, goes through the Atelier REST API and its terminal WebSocket.
 ## Tests
 
 `cargo test` runs unit tests plus wiremock integration tests (`tests/api.rs`)
-that lock every verified Atelier wire quirk.
+that lock every verified Atelier wire quirk. CI additionally smoke-tests the
+full tool surface end-to-end against a **fresh** `iris-community:2025.3`
+service container (everything it creates is `RismCI.*` and deleted after).
+
+## Releases
+
+Tags `v*` build Linux/Windows/macOS binaries and open a GitHub Release from
+CI. Stable releases follow Git Flow (`release/vX.Y.Z` from `development` →
+PR to `main` → tag); `-pre` tags publish as prereleases.
