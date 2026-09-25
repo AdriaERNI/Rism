@@ -5,6 +5,7 @@
 pub mod command;
 pub mod compile;
 pub mod documents;
+pub mod host;
 pub mod monitor;
 pub mod scoring;
 pub mod serverinfo;

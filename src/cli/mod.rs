@@ -71,6 +71,27 @@ pub enum Commands {
         #[arg(long, default_value = "cuk")]
         flags: String,
     },
+    /// Run a shell command on the local host
+    Shell {
+        /// Command (bash / `PowerShell` on Windows)
+        command: String,
+        /// Timeout seconds
+        #[arg(long)]
+        timeout: Option<u64>,
+    },
+    /// Read a workspace file
+    Cat {
+        /// Path relative to `RISM_WORKSPACE`
+        path: String,
+    },
+    /// List workspace files
+    Ls {
+        /// Directory (default workspace root)
+        path: Option<String>,
+        /// Glob pattern
+        #[arg(long)]
+        pattern: Option<String>,
+    },
     /// Live metrics + load score snapshot
     Monitor {
         /// Include all raw samples
@@ -133,6 +154,9 @@ pub enum DocCommands {
     Get {
         /// Document name (e.g. My.Class.cls)
         name: String,
+        /// Also save to this local path (explicit local file, like --file)
+        #[arg(long)]
+        save: Option<String>,
     },
     /// Upload a document WITHOUT compiling
     Put {
@@ -184,7 +208,10 @@ impl Commands {
             | Self::Info
             | Self::Exec { .. }
             | Self::Test(_)
-            | Self::Monitor { .. } => None,
+            | Self::Monitor { .. }
+            | Self::Shell { .. }
+            | Self::Cat { .. }
+            | Self::Ls { .. } => None,
         }
     }
 
@@ -207,10 +234,13 @@ impl Commands {
                     count: *count,
                     namespace: ns_override.clone(),
                 }),
-                DocCommands::Get { name } => DocCall::Get(GetDocumentArgs {
-                    name: name.clone(),
-                    namespace: ns_override.clone(),
-                }),
+                DocCommands::Get { name, save } => DocCall::Get {
+                    args: GetDocumentArgs {
+                        name: name.clone(),
+                        namespace: ns_override.clone(),
+                    },
+                    save: save.clone(),
+                },
                 DocCommands::Put {
                     name,
                     file,
@@ -253,7 +283,10 @@ impl Commands {
             | Self::Info
             | Self::Exec { .. }
             | Self::Test(_)
-            | Self::Monitor { .. } => None,
+            | Self::Monitor { .. }
+            | Self::Shell { .. }
+            | Self::Cat { .. }
+            | Self::Ls { .. } => None,
         }
     }
 }
@@ -263,8 +296,13 @@ impl Commands {
 pub enum DocCall {
     /// list
     List(ListDocumentsArgs),
-    /// get
-    Get(GetDocumentArgs),
+    /// get (with optional local save)
+    Get {
+        /// Shared args.
+        args: GetDocumentArgs,
+        /// Local path to save content to.
+        save: Option<String>,
+    },
     /// put (compile flag says which)
     Put {
         /// Shared put args.

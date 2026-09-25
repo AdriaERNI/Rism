@@ -44,6 +44,10 @@ rism test run MyApp.Tests.Calculator                      # %UnitTest (nothing u
 rism test list --filter MyApp
 rism test results --limit 5
 rism monitor                                          # scored load snapshot
+rism shell 'git status'                               # local host shell
+rism cat src/x.cls                                    # workspace file read
+rism ls --pattern '**/*.cls'                          # workspace listing
+rism doc get My.Class.cls --save ./local.cls          # server -> local file
 rism info                                                 # server version/namespaces
 rism --url http://host:52773 --namespace %SYS sql "SELECT 1"
 ```
@@ -60,8 +64,10 @@ rism mcp
 Tools: `execute_sql`, `list_documents`, `get_document`, `put_document`,
 `put_and_compile`, `delete_document`, `compile_documents`, `execute_command`,
 `run_tests`, `list_tests`, `get_test_results`, `monitor_system`,
-`get_server_info`. All namespace-scoped ones accept an optional `namespace`
-override.
+`get_server_info`, `run_shell`, `read_file`, `list_files`. All
+namespace-scoped ones accept an optional `namespace` override. Host-side
+tools (`run_shell`, `read_file`, `list_files`) act on the machine Rism runs
+on; file tools are rooted at `RISM_WORKSPACE` with traversal blocked.
 
 Rism never uploads helper code to the server — everything, including unit
 testing, goes through the Atelier REST API and its terminal WebSocket.
