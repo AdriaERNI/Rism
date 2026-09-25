@@ -1,0 +1,177 @@
+name: CI
+
+on:
+  push:
+    branches: [main, development]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+
+  test:
+    name: Test
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --all-targets
+
+  # End-to-end against a FRESH IRIS Community (same image Prism CI uses).
+  # Rule inherited from Prism CI: anything the smoke creates is namespaced
+  # RismCI.* and deleted afterwards — never query or touch pre-existing code.
+  live-smoke:
+    name: Live smoke (fresh IRIS)
+    needs: test
+    runs-on: ubuntu-latest
+    services:
+      iris:
+        image: intersystemsdc/iris-community:2025.3
+        ports:
+          - 52773:52773
+          - 1972:1972
+        env:
+          IRIS_USERNAME: _SYSTEM
+          IRIS_PASSWORD: SYS
+        options: >-
+          --health-cmd "/irisHealth.sh"
+          --health-interval 15s
+          --health-timeout 10s
+          --health-retries 20
+          --health-start-period 90s
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build
+      - name: Wait for Atelier API
+        run: |
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -u _SYSTEM:SYS \
+              http://localhost:52773/api/atelier/ || true)
+            [ "$code" = "200" ] && exit 0
+            sleep 5
+          done
+          echo "Atelier API never answered (last code $code)"; exit 1
+      - name: Smoke all doors end-to-end
+        env:
+          RISM_BIN: target/debug/rism
+        run: |
+          set -euo pipefail
+          $RISM_BIN info | grep -q "IRIS for"
+
+          # documents round-trip (create -> compile -> get -> delete)
+          mkdir -p /tmp/ci && cat > /tmp/ci/t.cls <<'EOF'
+          Class RismCI.Smoke Extends %RegisteredObject
+          {
+          ClassMethod Ok() As %Status
+          {
+            Quit $$$OK
+          }
+          }
+          EOF
+          $RISM_BIN doc put RismCI.Smoke.cls --file /tmp/ci/t.cls
+          $RISM_BIN compile RismCI.Smoke.cls | grep -q "successfully"
+          $RISM_BIN doc get RismCI.Smoke.cls | grep -q "RismCI.Smoke"
+
+          # SQL + terminal
+          $RISM_BIN sql "select Name from %Dictionary.ClassDefinition where Name='RismCI.Smoke'" | grep -q "RismCI.Smoke"
+          $RISM_BIN exec 'write "smoke-ok"' | grep -q "smoke-ok"
+
+          # unit-testing trio (tests our own uploaded class)
+          cat > /tmp/ci/test.cls <<'EOF'
+          Class RismCI.SmokeTest Extends %UnitTest.TestCase
+          {
+          Method TestOk()
+          {
+            Do $$$AssertEquals(##class(RismCI.Smoke).Ok(), $$$OK)
+          }
+          }
+          EOF
+          $RISM_BIN doc put RismCI.SmokeTest.cls --file /tmp/ci/test.cls
+          $RISM_BIN test list --filter RismCI.% | grep -q "SmokeTest"
+          $RISM_BIN test run RismCI.SmokeTest | grep -qiE "pass|ok"
+          $RISM_BIN test results --limit 1 >/dev/null
+
+          # debugger (scripted session, entry breakpoint)
+          $RISM_BIN debug run '##class(RismCI.Smoke).Ok()' --stop-on-entry | grep -q "ended"
+
+          # monitor endpoints (Prometheus API lives beside Atelier)
+          $RISM_BIN monitor | grep -qiE "overall|score"
+
+          # cleanup — nothing persists on CI IRIS
+          $RISM_BIN doc delete RismCI.SmokeTest.cls
+          $RISM_BIN doc delete RismCI.Smoke.cls
+          echo "LIVE SMOKE OK"
+
+  # Tagged builds: three native release binaries, packaged by `release`.
+  build:
+    name: Build ${{ matrix.os }}
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [lint, test]
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: rism-x86_64-unknown-linux-gnu
+            bin: target/release/rism
+          - os: windows-latest
+            artifact: rism-x86_64-pc-windows-msvc.exe
+            bin: target/release/rism.exe
+          - os: macos-latest
+            artifact: rism-aarch64-apple-darwin
+            bin: target/release/rism
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.bin }}
+
+  release:
+    name: GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+      - name: Pre-release detection (dev tags are prereleases, Git Flow)
+        id: version
+        run: |
+          TAG=${GITHUB_REF_NAME}
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          if [[ "$TAG" == *-* ]]; then
+            echo "prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+          fi
+      - uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          generate_release_notes: true
+          prerelease: ${{ steps.version.outputs.prerelease }}
+          files: artifacts/**/*
