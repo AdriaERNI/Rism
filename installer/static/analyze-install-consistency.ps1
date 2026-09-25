@@ -28,13 +28,15 @@ foreach ($m in [regex]::Matches($iss, '(?m)^(?:SetupIconFile|LicenseFile|WizardI
     if (Test-Path $abs) { Ok "asset $raw exists" } else { Fail "asset $raw NOT FOUND ($abs)" }
 }
 
-# 4. PATH contract. Inno entries may continue across lines with a trailing
-#    backslash — flatten (backslash + newline -> space) before matching.
-$flat = $iss -replace '\\(\r?\n)', ' '
-if ($flat -match '(?m)^Root: HKCU;.*"Path"') { Ok 'HKCU PATH entry' } else { Fail 'HKCU PATH entry missing' }
-if ($flat -match '(?m)^Root: HKLM;.*"Path"') { Ok 'HKLM PATH entry' } else { Fail 'HKLM PATH entry missing' }
-if ($flat -match '(?m)Tasks: modifypath')     { Ok 'modifypath task wired to entries' } else { Fail 'PATH entries not bound to modifypath task' }
-if ($iss  -match '(?m)^Name: "modifypath"')  { Ok 'modifypath task declared' } else { Fail 'modifypath task not declared' }
+# 4. PATH contract: [Code]-based (add on install, surgical remove on
+#    uninstall) — mirrors Prism's Store-tested pattern. Inno [Registry]
+#    round-trips with {olddata} corrupt *Path* values; never go back.
+if ($iss -match 'procedure EnvAddPath')   { Ok 'EnvAddPath present' } else { Fail 'EnvAddPath missing' }
+if ($iss -match 'procedure EnvRemovePath'){ Ok 'EnvRemovePath present' } else { Fail 'PATH removal on uninstall missing' }
+if ($iss -match 'CurStepChanged')         { Ok 'install hook wired' } else { Fail 'ssPostInstall hook missing' }
+if ($iss -match 'CurUninstallStepChanged'){ Ok 'uninstall hook wired' } else { Fail 'uninstall hook missing' }
+if ($iss -match '(?m)Root: HKCU;.*"Path"|Root: HKLM;.*"Path"') { Fail 'PATH via [Registry] regressed (corrupts *Path* on uninstall)' } else { Ok 'no [Registry] PATH hack' }
+if ($iss -match '(?m)^Name: "modifypath"')  { Ok 'modifypath task declared' } else { Fail 'modifypath task not declared' }
 
 # 5. Silent-install contract used by windows-installer.yml (postinstall smoke)
 if ($flat -match 'Filename: "\{app\}.*--version') { Ok 'postinstall --version verification' } else { Fail 'postinstall smoke run missing' }
