@@ -9,6 +9,10 @@ use rmcp::{ServerHandler, ServiceExt, tool, tool_handler, tool_router};
 
 use crate::iris::IrisClient;
 use crate::settings::Settings;
+use crate::tools::documents::{
+    DeleteDocumentArgs, GetDocumentArgs, ListDocumentsArgs, PutDocumentArgs, delete_document,
+    get_document, list_documents, put_and_compile, put_document,
+};
 use crate::tools::sql::{ExecuteSqlArgs, execute_sql};
 
 /// The Rism MCP server (stdio transport).
@@ -49,6 +53,65 @@ impl RismMcp {
                 e.to_string(),
             )])),
         }
+    }
+
+    #[tool(
+        description = "List documents in a namespace. Optional LIKE filter (e.g. 'My.%'), filetypes (CLS, RTN, ...), and count."
+    )]
+    async fn list_documents(
+        &self,
+        Parameters(args): Parameters<ListDocumentsArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        Ok(map_json(list_documents(&self.client, &args).await))
+    }
+
+    #[tool(description = "Get a document's source (as text lines) plus metadata.")]
+    async fn get_document(
+        &self,
+        Parameters(args): Parameters<GetDocumentArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        Ok(map_json(get_document(&self.client, &args).await))
+    }
+
+    #[tool(
+        description = "Upload/overwrite a document WITHOUT compiling. Content is an array of source lines."
+    )]
+    async fn put_document(
+        &self,
+        Parameters(args): Parameters<PutDocumentArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        Ok(map_json(put_document(&self.client, &args).await))
+    }
+
+    #[tool(
+        description = "Upload/overwrite a document AND compile it. Returns the compile console log; fails with the IRIS compile errors when compilation fails."
+    )]
+    async fn put_and_compile(
+        &self,
+        Parameters(args): Parameters<PutDocumentArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        Ok(map_json(put_and_compile(&self.client, &args).await))
+    }
+
+    #[tool(description = "Delete a document from the server.")]
+    async fn delete_document(
+        &self,
+        Parameters(args): Parameters<DeleteDocumentArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        Ok(map_json(delete_document(&self.client, &args).await))
+    }
+}
+
+/// Shared result mapping: JSON-pretty on success, tool-level error text.
+fn map_json<T: serde::Serialize>(res: crate::Result<T>) -> CallToolResult {
+    match res {
+        Ok(v) => match serde_json::to_string_pretty(&v) {
+            Ok(text) => CallToolResult::success(vec![ContentBlock::text(text)]),
+            Err(e) => CallToolResult::error(vec![ContentBlock::text(format!(
+                "serialization failed: {e}"
+            ))]),
+        },
+        Err(e) => CallToolResult::error(vec![ContentBlock::text(e.to_string())]),
     }
 }
 

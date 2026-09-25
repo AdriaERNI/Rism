@@ -1,12 +1,15 @@
 //! `rism` binary — thin dispatch shell. No logic lives here: parse, call
 //! `rism::tools::*`, render. (rust-bestpractices.md §1/§3)
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 
-use rism::cli::{Cli, Commands, OutputFormat, render};
+use rism::cli::{Cli, Commands, DocCall, OutputFormat, render};
 use rism::iris::IrisClient;
 use rism::settings::Settings;
+use rism::tools::documents::{
+    delete_document, get_document, list_documents, put_and_compile, put_document,
+};
 use rism::tools::sql::execute_sql;
 
 #[tokio::main]
@@ -32,14 +35,57 @@ async fn main() -> Result<()> {
     if let Some(args) = cli.command.to_execute_sql(&cli.namespace) {
         let res = execute_sql(&client, &args).await?;
         render::render_sql(&res, cli.format);
+    } else if let Some(call) = cli.command.to_doc(&cli.namespace) {
+        dispatch_doc(&client, call, cli.format).await?;
     } else {
         // Commands::Mcp handled above; clap guarantees we can't reach here.
         debug_assert!(false, "unhandled command");
-        if cli.format == OutputFormat::Json {
-            println!("null");
-        }
     }
     Ok(())
+}
+
+async fn dispatch_doc(client: &IrisClient, call: DocCall, format: OutputFormat) -> Result<()> {
+    match call {
+        DocCall::List(args) => {
+            render::render_doc_list(&list_documents(client, &args).await?, format);
+            Ok(())
+        }
+        DocCall::Get(args) => {
+            render::render_doc_get(&get_document(client, &args).await?, format);
+            Ok(())
+        }
+        DocCall::Put {
+            mut args,
+            file,
+            compile,
+        } => {
+            args.content = read_source(&file).await.context("reading source file")?;
+            let res = if compile {
+                put_and_compile(client, &args).await?
+            } else {
+                put_document(client, &args).await?
+            };
+            render::render_doc_put(&res, format);
+            Ok(())
+        }
+        DocCall::Delete(args) => {
+            let v = delete_document(client, &args).await?;
+            render::render_json(&v, format, || println!("deleted {}", args.name));
+            Ok(())
+        }
+    }
+}
+
+async fn read_source(path: &str) -> Result<Vec<String>> {
+    if path == "-" {
+        use tokio::io::AsyncReadExt;
+        let mut buf = String::new();
+        tokio::io::stdin().read_to_string(&mut buf).await?;
+        Ok(buf.lines().map(str::to_string).collect())
+    } else {
+        let text = tokio::fs::read_to_string(path).await?;
+        Ok(text.lines().map(str::to_string).collect())
+    }
 }
 
 fn resolve_settings(cli: &Cli) -> Result<Settings> {
