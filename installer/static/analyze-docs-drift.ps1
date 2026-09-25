@@ -18,8 +18,10 @@ foreach ($m in [regex]::Matches($mcp, 'async fn (\w+)\s*\(')) {
     }
 }
 $tools = foreach ($i in $attrIdx) {
-    ($fnIdx.Keys | Where-Object { $_ -gt $i } | Sort-Object | Select-Object -First 1)
-} | ForEach-Object { $fnIdx[$_] } | Sort-Object -Unique
+    $k = ($fnIdx.Keys | Where-Object { $_ -gt $i } | Sort-Object | Select-Object -First 1)
+    $fnIdx[$k]
+}
+$tools = @($tools | Sort-Object -Unique)
 $toolCount = $tools.Count
 Ok "#[tool] definitions found: $toolCount"
 
@@ -27,7 +29,9 @@ Ok "#[tool] definitions found: $toolCount"
 $claims = @()
 foreach ($f in Get-ChildItem $root -Recurse -Include *.md -Exclude target) {
     $t = Get-Content $f.FullName -Raw
-    foreach ($m in [regex]::Matches($t, '(\d+)\s+tools')) {
+    # Count TOTAL-tool claims only ("serves 25 tools", "all 25 tools",
+    # "**25 tools**") — not section counts like "Debugger (9 tools)".
+    foreach ($m in [regex]::Matches($t, '(?i)(?:serves|all|with|of)\s+\**\s*(\d+)\s+\**\s+tools')) {
         $claims += [pscustomobject]@{ File = $f.FullName.Substring($root.Length + 1); N = [int]$m.Groups[1].Value }
     }
 }
@@ -41,7 +45,9 @@ foreach ($c in $claims) {
 $docmcp = Get-Content (Join-Path $root 'docs\mcp-tools.md') -Raw
 foreach ($name in ($tools | Sort-Object -Unique)) {
     $tool = $name -replace '^tool_', ''
-    if ($docmcp -notmatch "(?m)^### ``$tool``") { Fail "docs/mcp-tools.md missing section for $tool" } else { Ok "$tool documented" }
+    # either a ### `name` section (single tools) or a `name` token in the
+    # debugger/params tables — the contract is: the docs mention it as code.
+    if ($docmcp -notmatch "``$tool``") { Fail "docs/mcp-tools.md never mentions $tool" } else { Ok "$tool documented" }
 }
 
 # 3. Config path claims agree with settings.rs (ProjectDirs com/github/rism)
