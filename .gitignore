@@ -1,0 +1,55 @@
+# Build artifacts
+/target/
+**/target/
+
+# Backup files from serde/borsh derive expansions or tooling
+**/*.rs.bk
+
+# Cargo lock: KEEP committed for the CLI/MCP binaries (reproducible builds).
+# Uncomment the next line only if Rism ever becomes a pure library crate:
+# Cargo.lock
+
+# Release / distribution artifacts (cargo-dist, release workflow)
+/dist/
+*.deb
+*.rpm
+*.AppImage
+*.exe
+*.msi
+
+# Profiling & coverage
+*.profraw
+*.profdata
+coverage/
+tarpaulin-report.html
+lcov.info
+
+# Environment & secrets (dev IRIS credentials live in compose.yaml, not .env)
+.env
+.env.*
+!.env.example
+
+# Local-only development notes (not part of the repo documentation)
+/documentation/
+
+# IDE / editor
+/.idea/
+/.vscode/
+*.swp
+*.swo
+*~
+\#*\#
+.\#*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local tool caches / scratch
+.rism/
+/scratch/
+
+
+# Added by cargo
+
+/target
