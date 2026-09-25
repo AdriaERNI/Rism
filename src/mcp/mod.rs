@@ -17,6 +17,9 @@ use crate::tools::documents::{
 };
 use crate::tools::serverinfo::{GetServerInfoArgs, get_server_info};
 use crate::tools::sql::{ExecuteSqlArgs, execute_sql};
+use crate::tools::testing::{
+    GetTestResultsArgs, ListTestsArgs, RunTestsArgs, get_test_results, list_tests, run_tests,
+};
 
 /// The Rism MCP server (stdio transport).
 #[derive(Clone)]
@@ -124,6 +127,36 @@ impl RismMcp {
         Parameters(args): Parameters<ExecuteCommandArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         Ok(map_json(execute_command(&self.client, &args).await))
+    }
+
+    #[tool(
+        description = "Run %UnitTest tests on the IRIS server (via the manager; no code is uploaded). Returns per-method results with assertion details for failures."
+    )]
+    async fn run_tests(
+        &self,
+        Parameters(args): Parameters<RunTestsArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        Ok(map_json(run_tests(&self.client, &args).await))
+    }
+
+    #[tool(
+        description = "Discover %UnitTest.TestCase classes and their Test* methods on the server (pure SQL over %Dictionary)."
+    )]
+    async fn list_tests(
+        &self,
+        Parameters(args): Parameters<ListTestsArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        Ok(map_json(list_tests(&self.client, &args).await))
+    }
+
+    #[tool(
+        description = "Read stored %UnitTest results history (runs newest first), optionally filtered by class."
+    )]
+    async fn get_test_results(
+        &self,
+        Parameters(args): Parameters<GetTestResultsArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        Ok(map_json(get_test_results(&self.client, &args).await))
     }
 
     #[tool(

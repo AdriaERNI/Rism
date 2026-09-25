@@ -6,6 +6,7 @@ use crate::tools::compile::CompileResult;
 use crate::tools::documents::{DocumentOut, ListDocumentsResult, PutDocumentResult};
 use crate::tools::serverinfo::ServerInfoOut;
 use crate::tools::sql::SqlResult;
+use crate::tools::testing::{ListTestsResult, RunTestsResult, TestHistoryResult};
 
 use super::OutputFormat;
 
@@ -132,6 +133,82 @@ pub fn render_info(info: &ServerInfoOut, format: OutputFormat) {
             println!("version:   {}", info.version);
             println!("atelier:   v{}", info.api);
             println!("namespace(s): {}", info.namespaces.join(", "));
+        },
+    );
+}
+
+/// Render a test run.
+pub fn render_run_tests(res: &RunTestsResult, format: OutputFormat) {
+    render_json(
+        &serde_json::to_value(res).unwrap_or_default(),
+        format,
+        || {
+            for m in &res.methods {
+                let flag = match m.status.as_str() {
+                    "passed" => "PASS",
+                    "failed" => "FAIL",
+                    "skipped" => "SKIP",
+                    _ => "??  ",
+                };
+                println!("[{flag}] {} ({}s)", m.name, m.duration);
+                if let Some(e) = &m.error {
+                    println!("       {e}");
+                }
+                for a in &m.assertions {
+                    let st = a.get("Status").and_then(serde_json::Value::as_i64);
+                    println!(
+                        "       assert: {} — {} [{:?}]",
+                        a.get("Action")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or_default(),
+                        a.get("Description")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or_default(),
+                        st
+                    );
+                }
+            }
+            println!(
+                "\n{}: {} passed, {} failed, {} skipped",
+                res.class, res.passed, res.failed, res.skipped
+            );
+        },
+    );
+}
+
+/// Render test discovery.
+pub fn render_list_tests(res: &ListTestsResult, format: OutputFormat) {
+    render_json(
+        &serde_json::to_value(res).unwrap_or_default(),
+        format,
+        || {
+            for c in &res.classes {
+                println!("{} ({} methods)", c.name, c.methods.len());
+                for m in &c.methods {
+                    println!("  - {m}");
+                }
+            }
+            println!("\n{} class(es)", res.count);
+        },
+    );
+}
+
+/// Render results history.
+pub fn render_results(res: &TestHistoryResult, format: OutputFormat) {
+    render_json(
+        &serde_json::to_value(res).unwrap_or_default(),
+        format,
+        || {
+            for r in &res.runs {
+                println!(
+                    "run {} @ {}  {} [{}]",
+                    r.run_id,
+                    r.run_time,
+                    r.class.as_str().unwrap_or_default(),
+                    r.status
+                );
+            }
+            println!("\n{} row(s)", res.count);
         },
     );
 }

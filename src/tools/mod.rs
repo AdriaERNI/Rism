@@ -7,3 +7,4 @@ pub mod compile;
 pub mod documents;
 pub mod serverinfo;
 pub mod sql;
+pub mod testing;
