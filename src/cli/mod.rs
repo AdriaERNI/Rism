@@ -71,6 +71,12 @@ pub enum Commands {
         #[arg(long, default_value = "cuk")]
         flags: String,
     },
+    /// Live metrics + load score snapshot
+    Monitor {
+        /// Include all raw samples
+        #[arg(long)]
+        raw: bool,
+    },
     /// Show IRIS server info (also a connectivity smoke test)
     Info,
     /// Serve as an MCP server over stdio
@@ -177,7 +183,8 @@ impl Commands {
             | Self::Compile { .. }
             | Self::Info
             | Self::Exec { .. }
-            | Self::Test(_) => None,
+            | Self::Test(_)
+            | Self::Monitor { .. } => None,
         }
     }
 
@@ -245,7 +252,8 @@ impl Commands {
             | Self::Compile { .. }
             | Self::Info
             | Self::Exec { .. }
-            | Self::Test(_) => None,
+            | Self::Test(_)
+            | Self::Monitor { .. } => None,
         }
     }
 }

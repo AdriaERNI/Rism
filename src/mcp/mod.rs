@@ -15,6 +15,7 @@ use crate::tools::documents::{
     DeleteDocumentArgs, GetDocumentArgs, ListDocumentsArgs, PutDocumentArgs, delete_document,
     get_document, list_documents, put_and_compile, put_document,
 };
+use crate::tools::monitor::{MonitorArgs, monitor_system};
 use crate::tools::serverinfo::{GetServerInfoArgs, get_server_info};
 use crate::tools::sql::{ExecuteSqlArgs, execute_sql};
 use crate::tools::testing::{
@@ -127,6 +128,16 @@ impl RismMcp {
         Parameters(args): Parameters<ExecuteCommandArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         Ok(map_json(execute_command(&self.client, &args).await))
+    }
+
+    #[tool(
+        description = "Fetch live IRIS metrics and return a scored load snapshot: overall + cpu/memory/disk/process sub-scores (0-100), health grade, key metrics, aggregates (DB sizes, top processes, CSP connections). Compare two snapshots: lower score wins."
+    )]
+    async fn monitor_system(
+        &self,
+        Parameters(args): Parameters<MonitorArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        Ok(map_json(monitor_system(&self.client, &args).await))
     }
 
     #[tool(

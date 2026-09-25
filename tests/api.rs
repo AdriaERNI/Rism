@@ -277,6 +277,45 @@ async fn run_tests_rejects_unsafe_names_before_any_call() {
     assert!(matches!(err, rism::Error::Config(_)), "{err}");
 }
 
+// Monitor: /api/monitor/* is NOT envelope JSON — plain text endpoints.
+#[tokio::test]
+async fn monitor_metrics_parses_plain_text() {
+    let mock = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/monitor/metrics"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            "# HELP iris_cpu_usage CPU\niris_cpu_usage 40\niris_phys_mem_percent_used{id=\"x\"} 50\n",
+        ))
+        .mount(&mock)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/monitor/alerts"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("[]"))
+        .mount(&mock)
+        .await;
+
+    let client = client(&mock);
+    let res = rism::tools::monitor::monitor_system(
+        &client,
+        &rism::tools::monitor::MonitorArgs {
+            include_raw_metrics: true,
+        },
+    )
+    .await
+    .expect("snapshot");
+    assert_eq!(res.snapshot.metric_count, 2);
+    assert!((res.snapshot.metrics["iris_cpu_usage"] - 40.0).abs() < f64::EPSILON);
+    assert_eq!(res.snapshot.alerts_count, 0);
+    assert!(res.raw_metrics.is_some());
+    // cpu: only iris_cpu_usage present — iris_cpu_pct contributes only when
+    // the metric exists (Prism-parity guard; Prism scores this fixture at 40)
+    assert!(
+        (res.snapshot.score.cpu - 40.0).abs() < f64::EPSILON,
+        "cpu {}",
+        res.snapshot.score.cpu
+    );
+}
+
 // §4 — docnames passes filter/filetypes/count as query params.
 #[tokio::test]
 async fn docnames_query_params() {
