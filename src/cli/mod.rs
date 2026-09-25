@@ -3,6 +3,9 @@
 
 use clap::{Parser, Subcommand};
 
+use crate::tools::documents::{
+    DeleteDocumentArgs, GetDocumentArgs, ListDocumentsArgs, PutDocumentArgs,
+};
 use crate::tools::sql::ExecuteSqlArgs;
 
 pub mod render;
@@ -46,13 +49,69 @@ pub enum Commands {
         #[arg(long)]
         max_rows: Option<u32>,
     },
+    /// Document operations (list/get/put/compile/delete)
+    #[command(subcommand)]
+    Doc(DocCommands),
     /// Serve as an MCP server over stdio
     Mcp,
+}
+
+/// Document subcommands.
+#[derive(Subcommand, Debug)]
+pub enum DocCommands {
+    /// List documents
+    List {
+        /// SQL LIKE filter on names (e.g. 'My.%')
+        #[arg(long)]
+        filter: Option<String>,
+        /// Filetypes to include (e.g. CLS,RTN)
+        #[arg(long, value_delimiter = ',')]
+        filetypes: Vec<String>,
+        /// Max documents
+        #[arg(long)]
+        count: Option<u32>,
+    },
+    /// Get a document's source
+    Get {
+        /// Document name (e.g. My.Class.cls)
+        name: String,
+    },
+    /// Upload a document WITHOUT compiling
+    Put {
+        /// Document name
+        name: String,
+        /// Source file ('-' reads stdin)
+        #[arg(long)]
+        file: String,
+        /// Fail instead of overwriting if the server copy changed since read
+        #[arg(long)]
+        no_ignore_conflict: bool,
+    },
+    /// Upload a document AND compile it
+    Compile {
+        /// Document name
+        name: String,
+        /// Source file ('-' reads stdin)
+        #[arg(long)]
+        file: String,
+        /// Fail instead of overwriting if the server copy changed since read
+        #[arg(long)]
+        no_ignore_conflict: bool,
+        /// Compile flags
+        #[arg(long, default_value = "cuk")]
+        flags: String,
+    },
+    /// Delete a document
+    Delete {
+        /// Document name
+        name: String,
+    },
 }
 
 impl Commands {
     /// Convert the CLI shape into the canonical shared args (namespace comes
     /// from the global flag; tools layer falls back to settings when None).
+    /// One variant per command; dispatch in [`main`].
     #[must_use]
     pub fn to_execute_sql(&self, ns_override: &Option<String>) -> Option<ExecuteSqlArgs> {
         match self {
@@ -61,7 +120,90 @@ impl Commands {
                 namespace: ns_override.clone(),
                 max_rows: *max_rows,
             }),
-            Self::Mcp => None,
+            Self::Mcp | Self::Doc(_) => None,
         }
     }
+
+    /// Shared args for the document tools, or None when the command isn't `doc`.
+    #[must_use]
+    pub fn to_doc(&self, ns_override: &Option<String>) -> Option<DocCall> {
+        match self {
+            Self::Doc(d) => Some(match d {
+                DocCommands::List {
+                    filter,
+                    filetypes,
+                    count,
+                } => DocCall::List(ListDocumentsArgs {
+                    filter: filter.clone(),
+                    filetypes: if filetypes.is_empty() {
+                        None
+                    } else {
+                        Some(filetypes.clone())
+                    },
+                    count: *count,
+                    namespace: ns_override.clone(),
+                }),
+                DocCommands::Get { name } => DocCall::Get(GetDocumentArgs {
+                    name: name.clone(),
+                    namespace: ns_override.clone(),
+                }),
+                DocCommands::Put {
+                    name,
+                    file,
+                    no_ignore_conflict,
+                } => DocCall::Put {
+                    args: PutDocumentArgs {
+                        name: name.clone(),
+                        content: Vec::new(),
+                        ignore_conflict: !no_ignore_conflict,
+                        namespace: ns_override.clone(),
+                        flags: None,
+                    },
+                    file: file.clone(),
+                    compile: false,
+                },
+                DocCommands::Compile {
+                    name,
+                    file,
+                    no_ignore_conflict,
+                    flags,
+                } => DocCall::Put {
+                    args: PutDocumentArgs {
+                        name: name.clone(),
+                        content: Vec::new(),
+                        ignore_conflict: !no_ignore_conflict,
+                        namespace: ns_override.clone(),
+                        flags: Some(flags.clone()),
+                    },
+                    file: file.clone(),
+                    compile: true,
+                },
+                DocCommands::Delete { name } => DocCall::Delete(DeleteDocumentArgs {
+                    name: name.clone(),
+                    namespace: ns_override.clone(),
+                }),
+            }),
+            Self::Sql { .. } | Self::Mcp => None,
+        }
+    }
+}
+
+/// A dispatched document call (content filled from file at exec time).
+#[derive(Debug)]
+pub enum DocCall {
+    /// list
+    List(ListDocumentsArgs),
+    /// get
+    Get(GetDocumentArgs),
+    /// put (compile flag says which)
+    Put {
+        /// Shared put args.
+        args: PutDocumentArgs,
+        /// Source path or '-' for stdin.
+        file: String,
+        /// Compile after put?
+        compile: bool,
+    },
+    /// delete
+    Delete(DeleteDocumentArgs),
 }

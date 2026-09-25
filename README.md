@@ -21,3 +21,40 @@ docker compose up -d
   instance first — e.g. Prism's — to free `52773`).
 
 Shut down with `docker compose down` (add `-v` to wipe the data volume).
+
+## Usage
+
+Every capability exists exactly once in `src/tools/` and is exposed through
+both doors — CLI and MCP.
+
+### CLI
+
+```bash
+rism sql "SELECT Name FROM %Dictionary.ClassDefinition"
+rism --format json sql --max-rows 10 "SELECT * FROM %Library.RoutineMgr_StudioOpenDialog"
+rism doc list --filter "My.%" --filetypes CLS,RTN
+rism doc get My.Class.cls
+rism doc compile My.Class.cls --file src/My.Class.cls     # put + compile
+cat src/My.Class.cls | rism doc compile My.Class.cls --file -
+rism doc put My.Class.cls --file src/My.Class.cls         # upload, no compile
+rism doc delete My.Class.cls
+rism --url http://host:52773 --namespace %SYS sql "SELECT 1"
+```
+
+Settings resolve env → `~/.rism/settings.json` → defaults (`_SYSTEM/SYS` @
+`http://localhost:52773`, namespace `USER`, API version auto-negotiated).
+
+### MCP (stdio)
+
+```bash
+rism mcp
+```
+
+Tools: `execute_sql`, `list_documents`, `get_document`, `put_document`,
+`put_and_compile`, `delete_document`. All accept an optional `namespace`
+override.
+
+## Tests
+
+`cargo test` runs unit tests plus wiremock integration tests (`tests/api.rs`)
+that lock every verified Atelier wire quirk.
