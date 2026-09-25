@@ -14,6 +14,7 @@
 //! 2. Property rendering needs `feature_set max_data` first — it fills the
 //!    agent's `Features` array. See [`crate::tools::debugger`] for the order.
 
+use std::fmt::Write as _;
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -109,13 +110,14 @@ impl DbgpConnection {
         data: Option<&[u8]>,
     ) -> Result<Element> {
         self.tx_id += 1;
-        let mut line = format!("{name} -i {}", self.tx_id);
+        let mut line = String::new();
+        let _ = write!(line, "{name} -i {}", self.tx_id);
         for (k, v) in args {
-            line.push_str(&format!(" -{k} {v}"));
+            let _ = write!(line, " -{k} {v}");
         }
         if let Some(bytes) = data {
             let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
-            line.push_str(&format!(" -- {b64}"));
+            let _ = write!(line, " -- {b64}");
         }
         // The agent frames commands by newline — without it nothing replies.
         line.push('\n');
