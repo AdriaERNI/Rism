@@ -191,6 +191,35 @@ async fn sql_nested_error_surfaces() {
     );
 }
 
+// §2 — negotiate_version() must repoint later calls at the server's API.
+#[tokio::test]
+async fn version_negotiation_repoints_calls() {
+    let mock = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/atelier/"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "status": {"errors": [], "summary": ""}, "console": [],
+            "result": {"content": {"version": "IRIS 2024.1", "api": 7}}
+        })))
+        .mount(&mock)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/atelier/v7/USER/action/query")) // v7, not the v8 default!
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "status": {"errors": [], "summary": ""}, "console": [],
+            "result": {"content": []}
+        })))
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    let client = client(&mock);
+    client.negotiate_version().await;
+    rism::iris::sql::query(&client, "USER", "SELECT 1", 10)
+        .await
+        .expect("v7 path used after negotiation");
+}
+
 // §4 — docnames passes filter/filetypes/count as query params.
 #[tokio::test]
 async fn docnames_query_params() {

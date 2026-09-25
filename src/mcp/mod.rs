@@ -9,10 +9,12 @@ use rmcp::{ServerHandler, ServiceExt, tool, tool_handler, tool_router};
 
 use crate::iris::IrisClient;
 use crate::settings::Settings;
+use crate::tools::compile::{CompileDocumentsArgs, compile_documents};
 use crate::tools::documents::{
     DeleteDocumentArgs, GetDocumentArgs, ListDocumentsArgs, PutDocumentArgs, delete_document,
     get_document, list_documents, put_and_compile, put_document,
 };
+use crate::tools::serverinfo::{GetServerInfoArgs, get_server_info};
 use crate::tools::sql::{ExecuteSqlArgs, execute_sql};
 
 /// The Rism MCP server (stdio transport).
@@ -28,9 +30,11 @@ impl RismMcp {
     ///
     /// # Errors
     /// Config errors from [`IrisClient::new`].
-    pub fn new(settings: Settings) -> crate::Result<Self> {
+    pub async fn new(settings: Settings) -> crate::Result<Self> {
+        let client = IrisClient::new(settings)?;
+        client.negotiate_version().await;
         Ok(Self {
-            client: IrisClient::new(settings)?,
+            client,
             tool_router: Self::tool_router(),
         })
     }
@@ -100,6 +104,26 @@ impl RismMcp {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         Ok(map_json(delete_document(&self.client, &args).await))
     }
+
+    #[tool(
+        description = "Compile documents already on the server (no upload). Returns the compile console log; fails with IRIS errors on compile failure."
+    )]
+    async fn compile_documents(
+        &self,
+        Parameters(args): Parameters<CompileDocumentsArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        Ok(map_json(compile_documents(&self.client, &args).await))
+    }
+
+    #[tool(
+        description = "Get IRIS server info: product version, Atelier API version, namespace list. Also a connectivity smoke test."
+    )]
+    async fn get_server_info(
+        &self,
+        Parameters(args): Parameters<GetServerInfoArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        Ok(map_json(get_server_info(&self.client, &args).await))
+    }
 }
 
 /// Shared result mapping: JSON-pretty on success, tool-level error text.
@@ -134,7 +158,7 @@ pub async fn serve(settings: Settings) -> anyhow::Result<()> {
         .with_ansi(false)
         .init();
 
-    let server = RismMcp::new(settings)?;
+    let server = RismMcp::new(settings).await?;
     let service = server
         .serve(rmcp::transport::stdio())
         .await

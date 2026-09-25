@@ -18,7 +18,7 @@ pub struct IrisClient {
 struct Inner {
     http: reqwest::Client,
     base: String, // no trailing slash
-    settings: Settings,
+    settings: std::sync::Mutex<Settings>,
 }
 
 /// `status.errors[]` envelope entry.
@@ -73,24 +73,29 @@ impl IrisClient {
             inner: Arc::new(Inner {
                 http,
                 base: settings.iris_base_url.trim_end_matches('/').to_string(),
-                settings,
+                settings: std::sync::Mutex::new(settings),
             }),
         })
     }
 
-    /// Effective settings.
+    /// Effective settings snapshot.
     #[must_use]
-    pub fn settings(&self) -> &Settings {
-        &self.inner.settings
+    pub fn settings(&self) -> Settings {
+        self.inner
+            .settings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// Atelier API prefix for a path tail: `/api/atelier/v{N}`.
     #[must_use]
     pub fn api_prefix(&self) -> String {
-        let v = if self.inner.settings.iris_api_version == 0 {
+        let st = self.settings();
+        let v = if st.iris_api_version == 0 {
             8 // sensible default before negotiation
         } else {
-            self.inner.settings.iris_api_version
+            st.iris_api_version
         };
         format!("/api/atelier/v{v}")
     }
@@ -106,19 +111,49 @@ impl IrisClient {
         format!("{}{}/{}", self.inner.base, self.api_prefix(), ns)
     }
 
-    /// GET a URL, returning the parsed envelope.
+    /// Set the negotiated API version (from [`crate::iris::serverinfo`]).
+    pub fn set_api_version(&self, version: u8) {
+        if version > 0 {
+            let mut st = self
+                .inner
+                .settings
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            st.iris_api_version = version;
+        }
+    }
+
+    /// Negotiate the Atelier API version against `GET {base}/api/atelier/`.
+    ///
+    /// Silently keeps the default when the probe fails (offline, auth...):
+    /// every later call will fail with its own clear error anyway.
+    pub async fn negotiate_version(&self) {
+        let url = format!("{}{}/", self.inner.base, "/api/atelier");
+        if let Ok(env) = self.get(&url).await {
+            if let Some(v) = env
+                .result
+                .get("content")
+                .and_then(|c| c.get("api"))
+                .and_then(Value::as_u64)
+                .and_then(|n| u8::try_from(n).ok())
+            {
+                self.set_api_version(v);
+                tracing::info!("negotiated Atelier API v{v}");
+            }
+        }
+    }
+
+    /// GET a URL, returning the envelope.
     ///
     /// # Errors
     /// Transport, status, envelope, or IRIS in-envelope errors.
     pub async fn get(&self, url: &str) -> Result<Envelope> {
+        let st = self.settings();
         let resp = self
             .inner
             .http
             .get(url)
-            .basic_auth(
-                &self.inner.settings.iris_username,
-                Some(&self.inner.settings.iris_password),
-            )
+            .basic_auth(&st.iris_username, Some(&st.iris_password))
             .send()
             .await?;
         self.absorb(resp, "GET", url).await
@@ -129,14 +164,12 @@ impl IrisClient {
     /// # Errors
     /// Transport, status, envelope, or IRIS in-envelope errors.
     pub async fn post_json(&self, url: &str, body: &Value) -> Result<Envelope> {
+        let st = self.settings();
         let resp = self
             .inner
             .http
             .post(url)
-            .basic_auth(
-                &self.inner.settings.iris_username,
-                Some(&self.inner.settings.iris_password),
-            )
+            .basic_auth(&st.iris_username, Some(&st.iris_password))
             .json(body)
             .send()
             .await?;
@@ -153,14 +186,12 @@ impl IrisClient {
         query: &[(&str, &str)],
         body: &Value,
     ) -> Result<Envelope> {
+        let st = self.settings();
         let resp = self
             .inner
             .http
             .put(url)
-            .basic_auth(
-                &self.inner.settings.iris_username,
-                Some(&self.inner.settings.iris_password),
-            )
+            .basic_auth(&st.iris_username, Some(&st.iris_password))
             .query(query)
             .json(body)
             .send()
@@ -173,14 +204,12 @@ impl IrisClient {
     /// # Errors
     /// Transport, status, envelope, or IRIS in-envelope errors.
     pub async fn delete(&self, url: &str) -> Result<Envelope> {
+        let st = self.settings();
         let resp = self
             .inner
             .http
             .delete(url)
-            .basic_auth(
-                &self.inner.settings.iris_username,
-                Some(&self.inner.settings.iris_password),
-            )
+            .basic_auth(&st.iris_username, Some(&st.iris_password))
             .send()
             .await?;
         self.absorb(resp, "DELETE", url).await

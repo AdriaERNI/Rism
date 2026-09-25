@@ -7,9 +7,11 @@ use clap::Parser;
 use rism::cli::{Cli, Commands, DocCall, OutputFormat, render};
 use rism::iris::IrisClient;
 use rism::settings::Settings;
+use rism::tools::compile::{CompileDocumentsArgs, compile_documents};
 use rism::tools::documents::{
     delete_document, get_document, list_documents, put_and_compile, put_document,
 };
+use rism::tools::serverinfo::{GetServerInfoArgs, get_server_info};
 use rism::tools::sql::execute_sql;
 
 #[tokio::main]
@@ -31,10 +33,24 @@ async fn main() -> Result<()> {
         .init();
 
     let client = IrisClient::new(resolve_settings(&cli)?)?;
+    client.negotiate_version().await;
 
     if let Some(args) = cli.command.to_execute_sql(&cli.namespace) {
         let res = execute_sql(&client, &args).await?;
         render::render_sql(&res, cli.format);
+    } else if matches!(cli.command, Commands::Compile { .. }) {
+        let Commands::Compile { names, flags } = &cli.command else {
+            unreachable!("matched above")
+        };
+        let args = CompileDocumentsArgs {
+            names: names.clone(),
+            flags: Some(flags.clone()),
+            namespace: cli.namespace.clone(),
+        };
+        render::render_compile(&compile_documents(&client, &args).await?, cli.format);
+    } else if matches!(cli.command, Commands::Info) {
+        let info = get_server_info(&client, &GetServerInfoArgs {}).await?;
+        render::render_info(&info, cli.format);
     } else if let Some(call) = cli.command.to_doc(&cli.namespace) {
         dispatch_doc(&client, call, cli.format).await?;
     } else {

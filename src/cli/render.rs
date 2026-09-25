@@ -1,7 +1,9 @@
 //! Terminal rendering for shared-tool results. The ONLY module allowed to
 //! print to stdout in CLI mode.
 
+use crate::tools::compile::CompileResult;
 use crate::tools::documents::{DocumentOut, ListDocumentsResult, PutDocumentResult};
+use crate::tools::serverinfo::ServerInfoOut;
 use crate::tools::sql::SqlResult;
 
 use super::OutputFormat;
@@ -78,6 +80,38 @@ pub fn render_doc_put(res: &PutDocumentResult, format: OutputFormat) {
             for line in &res.console {
                 println!("{line}");
             }
+        },
+    );
+}
+
+/// Render a standalone compile result.
+pub fn render_compile(res: &CompileResult, format: OutputFormat) {
+    render_json(
+        &serde_json::to_value(res).unwrap_or_default(),
+        format,
+        || {
+            for line in &res.console {
+                println!("{line}");
+            }
+            for st in &res.statuses {
+                if !st.status.is_empty() {
+                    println!("{}: {}", st.name, st.status);
+                }
+            }
+        },
+    );
+}
+
+/// Render server info.
+pub fn render_info(info: &ServerInfoOut, format: OutputFormat) {
+    render_json(
+        &serde_json::to_value(info).unwrap_or_default(),
+        format,
+        || {
+            println!("base:      {}", info.base_url);
+            println!("version:   {}", info.version);
+            println!("atelier:   v{}", info.api);
+            println!("namespace(s): {}", info.namespaces.join(", "));
         },
     );
 }

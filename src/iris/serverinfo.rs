@@ -22,10 +22,10 @@ pub struct ServerInfo {
 /// # Errors
 /// Propagates [`crate::error::Error`] from the transport/envelope layer.
 pub async fn server_info(client: &IrisClient) -> Result<ServerInfo> {
+    // Root (unversioned) endpoint: the whole point is discovering the version.
     let url = format!(
-        "{}{}/",
-        client.settings().iris_base_url.trim_end_matches('/'),
-        client.api_prefix()
+        "{}/api/atelier/",
+        client.settings().iris_base_url.trim_end_matches('/')
     );
     let env = client.get(&url).await?;
 

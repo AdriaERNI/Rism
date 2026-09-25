@@ -52,6 +52,16 @@ pub enum Commands {
     /// Document operations (list/get/put/compile/delete)
     #[command(subcommand)]
     Doc(DocCommands),
+    /// Compile documents already on the server (no upload)
+    Compile {
+        /// Document names (e.g. My.Class.cls)
+        names: Vec<String>,
+        /// Compile flags
+        #[arg(long, default_value = "cuk")]
+        flags: String,
+    },
+    /// Show IRIS server info (also a connectivity smoke test)
+    Info,
     /// Serve as an MCP server over stdio
     Mcp,
 }
@@ -120,7 +130,7 @@ impl Commands {
                 namespace: ns_override.clone(),
                 max_rows: *max_rows,
             }),
-            Self::Mcp | Self::Doc(_) => None,
+            Self::Mcp | Self::Doc(_) | Self::Compile { .. } | Self::Info => None,
         }
     }
 
@@ -183,7 +193,7 @@ impl Commands {
                     namespace: ns_override.clone(),
                 }),
             }),
-            Self::Sql { .. } | Self::Mcp => None,
+            Self::Sql { .. } | Self::Mcp | Self::Compile { .. } | Self::Info => None,
         }
     }
 }
