@@ -29,6 +29,8 @@ pub struct Settings {
     pub sql_max_rows: u32,
     /// Terminal output bound (chars); 0 = unlimited.
     pub terminal_max_output_chars: usize,
+    /// Local workspace root for host-side file tools (empty = disabled).
+    pub workspace_root: String,
 }
 
 impl Default for Settings {
@@ -42,6 +44,7 @@ impl Default for Settings {
             timeout_secs: 30,
             sql_max_rows: 1_000,
             terminal_max_output_chars: 100_000,
+            workspace_root: String::new(),
         }
     }
 }
@@ -109,6 +112,9 @@ impl Settings {
             if let Ok(n) = v.trim().parse::<u8>() {
                 self.iris_api_version = n;
             }
+        }
+        if let Ok(v) = std::env::var("RISM_WORKSPACE") {
+            self.workspace_root = v;
         }
     }
 

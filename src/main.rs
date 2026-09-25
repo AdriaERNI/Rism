@@ -12,6 +12,9 @@ use rism::tools::compile::{CompileDocumentsArgs, compile_documents};
 use rism::tools::documents::{
     delete_document, get_document, list_documents, put_and_compile, put_document,
 };
+use rism::tools::host::{
+    ListFilesArgs, ReadFileArgs, RunShellArgs, list_files, read_file, run_shell,
+};
 use rism::tools::monitor::{MonitorArgs, monitor_system};
 use rism::tools::serverinfo::{GetServerInfoArgs, get_server_info};
 use rism::tools::sql::execute_sql;
@@ -98,6 +101,7 @@ async fn main() -> Result<()> {
         )
         .await?;
         render::render_monitor(&res, cli.format);
+    } else if dispatch_host(&client, &cli).await? {
     } else if matches!(cli.command, Commands::Compile { .. }) {
         let Commands::Compile { names, flags } = &cli.command else {
             unreachable!("matched above")
@@ -120,14 +124,56 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+/// Returns true when the command was a host-side one (Shell/Cat/Ls).
+async fn dispatch_host(client: &IrisClient, cli: &Cli) -> Result<bool> {
+    match &cli.command {
+        Commands::Shell { command, timeout } => {
+            let res = run_shell(
+                client,
+                &RunShellArgs {
+                    command: command.clone(),
+                    timeout_secs: *timeout,
+                    cwd: None,
+                },
+            )
+            .await?;
+            render::render_shell(&res, cli.format);
+        }
+        Commands::Cat { path } => {
+            let res = read_file(client, &ReadFileArgs { path: path.clone() }).await?;
+            render::render_read_file(&res, cli.format);
+        }
+        Commands::Ls { path, pattern } => {
+            let res = list_files(
+                client,
+                &ListFilesArgs {
+                    path: path.clone(),
+                    pattern: pattern.clone(),
+                    max_results: None,
+                },
+            )
+            .await?;
+            render::render_list_files(&res, cli.format);
+        }
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
 async fn dispatch_doc(client: &IrisClient, call: DocCall, format: OutputFormat) -> Result<()> {
     match call {
         DocCall::List(args) => {
             render::render_doc_list(&list_documents(client, &args).await?, format);
             Ok(())
         }
-        DocCall::Get(args) => {
-            render::render_doc_get(&get_document(client, &args).await?, format);
+        DocCall::Get { args, save } => {
+            let doc = get_document(client, &args).await?;
+            if let Some(path) = save {
+                let text = doc.content.join("\n");
+                rism::tools::host::save_local(std::path::Path::new(&path), &text).await?;
+                eprintln!("saved {} lines to {path}", doc.content.len());
+            }
+            render::render_doc_get(&doc, format);
             Ok(())
         }
         DocCall::Put {

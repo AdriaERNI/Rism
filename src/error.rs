@@ -73,6 +73,10 @@ pub enum Error {
     #[error("configuration error: {0}")]
     Config(String),
 
+    /// Local filesystem or subprocess I/O failure.
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+
     /// Terminal WebSocket session failure (timeout, closed, server error frame).
     #[error("terminal error: {0}")]
     Terminal(String),

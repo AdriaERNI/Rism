@@ -4,6 +4,7 @@
 use crate::tools::command::CommandResult;
 use crate::tools::compile::CompileResult;
 use crate::tools::documents::{DocumentOut, ListDocumentsResult, PutDocumentResult};
+use crate::tools::host::{ListFilesResult, ReadFileResult, ShellResult};
 use crate::tools::monitor::MonitorResult;
 use crate::tools::serverinfo::ServerInfoOut;
 use crate::tools::sql::SqlResult;
@@ -261,6 +262,73 @@ pub fn render_monitor(res: &MonitorResult, format: OutputFormat) {
                     );
                 }
             }
+        },
+    );
+}
+
+/// Render a shell result.
+pub fn render_shell(res: &ShellResult, format: OutputFormat) {
+    render_json(
+        &serde_json::to_value(res).unwrap_or_default(),
+        format,
+        || {
+            print!("{}", res.stdout);
+            if !res.stderr.is_empty() {
+                eprint!("{}", res.stderr);
+            }
+            if res.exit_code != 0 {
+                std::process::exit(res.exit_code);
+            }
+        },
+    );
+}
+
+/// Render a file read.
+pub fn render_read_file(res: &ReadFileResult, format: OutputFormat) {
+    if let Some(err) = &res.error {
+        eprintln!("error: {err}");
+        std::process::exit(1);
+    }
+    render_json(
+        &serde_json::to_value(res).unwrap_or_default(),
+        format,
+        || {
+            print!("{}", res.content);
+            if let Some(msg) = &res.truncation_message {
+                eprintln!("{msg}");
+            }
+        },
+    );
+}
+
+/// Render a workspace listing.
+pub fn render_list_files(res: &ListFilesResult, format: OutputFormat) {
+    if let Some(err) = &res.error {
+        eprintln!("error: {err}");
+        std::process::exit(1);
+    }
+    render_json(
+        &serde_json::to_value(res).unwrap_or_default(),
+        format,
+        || {
+            for f in &res.files {
+                let kind = if f.is_dir { "d" } else { "-" };
+                println!(
+                    "{kind} {:>10}  {}",
+                    if f.is_dir {
+                        String::new()
+                    } else {
+                        f.size.to_string()
+                    },
+                    f.path
+                );
+            }
+            println!(
+                "\n{} entr(y/ies){}
+",
+                res.count,
+                if res.truncated { " (truncated)" } else { "" }
+            );
         },
     );
 }

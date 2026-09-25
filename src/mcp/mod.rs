@@ -15,6 +15,9 @@ use crate::tools::documents::{
     DeleteDocumentArgs, GetDocumentArgs, ListDocumentsArgs, PutDocumentArgs, delete_document,
     get_document, list_documents, put_and_compile, put_document,
 };
+use crate::tools::host::{
+    ListFilesArgs, ReadFileArgs, RunShellArgs, list_files, read_file, run_shell,
+};
 use crate::tools::monitor::{MonitorArgs, monitor_system};
 use crate::tools::serverinfo::{GetServerInfoArgs, get_server_info};
 use crate::tools::sql::{ExecuteSqlArgs, execute_sql};
@@ -128,6 +131,36 @@ impl RismMcp {
         Parameters(args): Parameters<ExecuteCommandArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         Ok(map_json(execute_command(&self.client, &args).await))
+    }
+
+    #[tool(
+        description = "Run a shell command on the LOCAL host running Rism (bash; PowerShell on Windows). Returns stdout/stderr/exit_code; the command is killed after the timeout. NOT for IRIS — for ObjectScript use execute_command."
+    )]
+    async fn run_shell(
+        &self,
+        Parameters(args): Parameters<RunShellArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        Ok(map_json(run_shell(&self.client, &args).await))
+    }
+
+    #[tool(
+        description = "Read a text file from the local workspace (RISM_WORKSPACE root; traversal blocked, binary rejected, 100k-char cap). For IRIS source use get_document."
+    )]
+    async fn read_file(
+        &self,
+        Parameters(args): Parameters<ReadFileArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        Ok(map_json(read_file(&self.client, &args).await))
+    }
+
+    #[tool(
+        description = "List files in the local workspace (optional glob pattern, max_results cap). For IRIS source use list_documents."
+    )]
+    async fn list_files(
+        &self,
+        Parameters(args): Parameters<ListFilesArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        Ok(map_json(list_files(&self.client, &args).await))
     }
 
     #[tool(
