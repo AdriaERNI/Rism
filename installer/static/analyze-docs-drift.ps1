@@ -31,7 +31,7 @@ foreach ($f in Get-ChildItem $root -Recurse -Include *.md -Exclude target) {
     $t = Get-Content $f.FullName -Raw
     # Count TOTAL-tool claims only ("serves 25 tools", "all 25 tools",
     # "**25 tools**") — not section counts like "Debugger (9 tools)".
-    foreach ($m in [regex]::Matches($t, '(?i)(?:serves|all|with|of)\s+\**\s*(\d+)\s+\**\s+tools')) {
+    foreach ($m in [regex]::Matches($t, '(?<!\()\b(\d+)\s+tools\b')) {
         $claims += [pscustomobject]@{ File = $f.FullName.Substring($root.Length + 1); N = [int]$m.Groups[1].Value }
     }
 }
