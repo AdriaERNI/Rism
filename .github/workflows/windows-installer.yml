@@ -52,18 +52,30 @@ jobs:
     name: Install / upgrade / uninstall (windows-latest)
     runs-on: windows-latest
     needs: consistency
-    services:
-      iris:
-        image: intersystemsdc/iris-community:2025.3
-        ports: ["52773:52773"]
-        options: >-
-          --health-cmd "/irisHealth.sh"
-          --health-interval 15s
-          --health-timeout 10s
-          --health-retries 20
-          --health-start-period 90s
     steps:
       - uses: actions/checkout@v5
+
+      # `services:` is Linux-runner-only; Windows runners run Docker Desktop in
+      # Linux-containers mode, so drive the same image with explicit docker.
+      - name: Start IRIS (Linux container on Docker Desktop)
+        shell: pwsh
+        run: |
+          docker run -d --name iris -p 52773:52773 `
+            -e IRIS_USERNAME=_SYSTEM -e IRIS_PASSWORD=SYS `
+            intersystemsdc/iris-community:2025.3 --check-caps false
+          $ok = $false
+          for ($i = 0; $i -lt 60; $i++) {
+            Start-Sleep -Seconds 10
+            try {
+              $r = Invoke-WebRequest -Uri "http://localhost:52773/api/atelier/" -UseBasicParsing -TimeoutSec 5
+              # 200 or 401 (auth wall) both mean the web server is serving
+              $ok = $true; break
+            } catch {
+              if ($_.Exception.Response.StatusCode.value__ -in 401, 403) { $ok = $true; break }
+            }
+          }
+          if (-not $ok) { docker logs iris | Select-Object -Last 20; Write-Error "IRIS did not come up in 10 min"; exit 1 }
+          Write-Host "IRIS up after $($i + 1) polls" 
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -143,3 +155,8 @@ jobs:
         with:
           name: rism-windows-installer
           path: installer/Output/*.exe
+
+      - name: Stop IRIS container
+        if: always()
+        shell: pwsh
+        run: docker rm -f iris | Out-Null
