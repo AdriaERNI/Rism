@@ -104,7 +104,7 @@ jobs:
           }
           EOF
           $RISM_BIN doc put RismCI.SmokeTest.cls --file /tmp/ci/test.cls
-          $RISM_BIN test list --filter RismCI.% | grep -q "SmokeTest"
+          $RISM_BIN test list --filter RismCI | grep -q "SmokeTest"
           $RISM_BIN test run RismCI.SmokeTest | grep -qiE "pass|ok"
           $RISM_BIN test results --limit 1 >/dev/null
 
