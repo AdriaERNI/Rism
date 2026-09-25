@@ -63,10 +63,10 @@ Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Name: "{group}\{#MyAppName} documentation"; Filename: "{#MyAppURL}"
 
 [Code]
-; PATH via [Code], not [Registry]: Inno cannot safely restore a *Path* value on
-; uninstall ({olddata} round-trips broke the CI absence check). This mirrors
-; Prism's proven installer: add on install, surgically remove on uninstall.
-; Pattern ported from Prism prism.iss EnvAddPath/EnvRemovePath (Store-tested).
+{ PATH via [Code], not [Registry]: Inno cannot safely restore a *Path* value }
+{ on uninstall: olddata round-trips broke the CI absence check. Pattern       }
+{ ported from Prism prism.iss EnvAddPath/EnvRemovePath (Store-tested).         }
+{ NOTE: inside [Code], a leading ';' is NOT a comment — use brace blocks.    }
 procedure EnvAddPath(Path: string);
 var
   Root: Integer;
