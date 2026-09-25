@@ -4,11 +4,15 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 
-use rism::cli::{Cli, Commands, DocCall, OutputFormat, TestCommands, render};
+use rism::cli::{Cli, Commands, DebugCommands, DocCall, OutputFormat, TestCommands, render};
 use rism::iris::IrisClient;
 use rism::settings::Settings;
 use rism::tools::command::{ExecuteCommandArgs, execute_command};
 use rism::tools::compile::{CompileDocumentsArgs, compile_documents};
+use rism::tools::debugger::{
+    BreakpointSpec, DebugAttachArgs, DebugListProcessesArgs, DebugRunArgs, debug_attach,
+    debug_list_processes, debug_run,
+};
 use rism::tools::documents::{
     delete_document, get_document, list_documents, put_and_compile, put_document,
 };
@@ -92,6 +96,8 @@ async fn main() -> Result<()> {
                 render::render_results(&get_test_results(&client, &args).await?, cli.format);
             }
         }
+    } else if let Commands::Debug(d) = &cli.command {
+        dispatch_debug(&client, d, cli.namespace.clone(), cli.format).await?;
     } else if let Commands::Monitor { raw } = &cli.command {
         let res = monitor_system(
             &client,
@@ -216,4 +222,63 @@ fn resolve_settings(cli: &Cli) -> Result<Settings> {
         s.iris_base_url.clone_from(url);
     }
     Ok(s)
+}
+
+async fn dispatch_debug(
+    client: &IrisClient,
+    dbg: &DebugCommands,
+    global_ns: Option<String>,
+    format: OutputFormat,
+) -> Result<()> {
+    match dbg {
+        DebugCommands::Ps { system, ns } => {
+            let args = DebugListProcessesArgs {
+                namespace: ns.clone().or(global_ns),
+                system: Some(*system),
+            };
+            render::render_debug_ps(&debug_list_processes(client, &args).await?, format);
+        }
+        DebugCommands::Run {
+            target,
+            stop_on_entry,
+            class,
+            method,
+            offset,
+            max_stops,
+        } => {
+            let breakpoint = class.clone().map(|class| BreakpointSpec {
+                class: Some(class),
+                method: method.clone(),
+                routine: None,
+                offset: Some(*offset).filter(|o| *o > 0),
+                condition: None,
+            });
+            let args = DebugRunArgs {
+                target: target.clone(),
+                stop_on_entry: Some(*stop_on_entry),
+                breakpoint,
+                namespace: global_ns,
+                max_stops: Some(*max_stops),
+            };
+            render::render_debug_run(&debug_run(client, &args).await?, format);
+        }
+        DebugCommands::Attach { pid } => {
+            let args = DebugAttachArgs {
+                pid: *pid,
+                namespace: global_ns,
+            };
+            let info = debug_attach(client, &args).await?;
+            render::render_debug_attach(&info, format);
+            // The WS dies with this process: stop the session explicitly so
+            // the attached job resumes instead of waiting on the debug agent.
+            let _ = rism::tools::debugger::debug_stop(
+                client,
+                &rism::tools::debugger::DebugStopArgs {
+                    session_id: info.session_id,
+                },
+            )
+            .await;
+        }
+    }
+    Ok(())
 }

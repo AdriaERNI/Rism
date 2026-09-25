@@ -69,6 +69,19 @@ pub enum Error {
     #[error("SQL error: {0}")]
     Sql(String),
 
+    /// DBGP debugger protocol error (`XDebug` agent).
+    #[error("DBGP error {code}: {message}")]
+    Dbgp {
+        /// `DBGp` error code (0 for unparsable/agent-crash frames).
+        code: u32,
+        /// Message text from the agent.
+        message: String,
+    },
+
+    /// Debugger session logic problem (no session, timeout, bad action).
+    #[error("debug error: {0}")]
+    Debug(String),
+
     /// Configuration/settings problem.
     #[error("configuration error: {0}")]
     Config(String),

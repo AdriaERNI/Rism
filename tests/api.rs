@@ -5,7 +5,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use serde_json::json;
-use wiremock::matchers::{body_json, header, method, path, query_param};
+use wiremock::matchers::{body_json, header, method, path, path_regex, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use rism::iris::IrisClient;
@@ -344,4 +344,35 @@ async fn docnames_query_params() {
     .await
     .expect("list");
     assert_eq!(docs.len(), 1);
+}
+
+// §debug — debug_list_processes maps the %SYS/jobs envelope (Prism parity).
+#[tokio::test]
+async fn debug_list_processes_maps_jobs() {
+    let mock = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path_regex(r"/api/atelier/v\d/%25SYS/jobs"))
+        .and(query_param("system", "0"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "status": {"errors": [], "summary": ""}, "console": [],
+            "result": {"content": [
+                {"pid": 4711, "namespace": "USER", "routine": "%ZPT", "state": "CMD", "device": "|TCP|1"},
+                {"pid": 9, "namespace": "%SYS", "routine": "X", "state": "HANG", "device": "/dev/null"}
+            ]}
+        })))
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    let client = client(&mock);
+    let args = rism::tools::debugger::DebugListProcessesArgs {
+        namespace: Some("USER".into()),
+        system: Some(false),
+    };
+    let procs = rism::tools::debugger::debug_list_processes(&client, &args)
+        .await
+        .expect("jobs");
+    assert_eq!(procs.len(), 1, "namespace filter client-side");
+    assert_eq!(procs[0].pid, 4711);
+    assert_eq!(procs[0].state, "CMD");
 }

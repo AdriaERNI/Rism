@@ -11,6 +11,12 @@ use crate::iris::IrisClient;
 use crate::settings::Settings;
 use crate::tools::command::{ExecuteCommandArgs, execute_command};
 use crate::tools::compile::{CompileDocumentsArgs, compile_documents};
+use crate::tools::debugger::{
+    DebugAttachArgs, DebugBreakpointsArgs, DebugInspectArgs, DebugListProcessesArgs,
+    DebugStackArgs, DebugStartArgs, DebugStepArgs, DebugStopArgs, DebugVariablesArgs, debug_attach,
+    debug_breakpoints, debug_inspect, debug_list_processes, debug_stack, debug_start, debug_step,
+    debug_stop, debug_variables,
+};
 use crate::tools::documents::{
     DeleteDocumentArgs, GetDocumentArgs, ListDocumentsArgs, PutDocumentArgs, delete_document,
     get_document, list_documents, put_and_compile, put_document,
@@ -211,6 +217,88 @@ impl RismMcp {
         Parameters(args): Parameters<GetServerInfoArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         Ok(map_json(get_server_info(&self.client, &args).await))
+    }
+
+    #[tool(description = "List running IRIS processes (jobs) for debugger attach.")]
+    async fn debug_list_processes(
+        &self,
+        Parameters(args): Parameters<DebugListProcessesArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        Ok(map_json(debug_list_processes(&self.client, &args).await))
+    }
+
+    #[tool(
+        description = "Start a DBGP debug session on an ObjectScript target (##class(Pkg.Cls).Method(args) or Do^Routine). Returns session_id; one session at a time."
+    )]
+    async fn debug_start(
+        &self,
+        Parameters(args): Parameters<DebugStartArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        Ok(map_json(debug_start(&self.client, &args).await))
+    }
+
+    #[tool(
+        description = "Attach the debugger to a running IRIS process by pid (from debug_list_processes). Pauses it; call debug_stop to resume."
+    )]
+    async fn debug_attach(
+        &self,
+        Parameters(args): Parameters<DebugAttachArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        Ok(map_json(debug_attach(&self.client, &args).await))
+    }
+
+    #[tool(
+        description = "Debug step action: step_into|step_over|step_out|run|break|stop. Returns new state, location, variables at breaks."
+    )]
+    async fn debug_step(
+        &self,
+        Parameters(args): Parameters<DebugStepArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        Ok(map_json(debug_step(&self.client, &args).await))
+    }
+
+    #[tool(
+        description = "Variables at the current break (context: private|public|class). Always run after stack_get internally — required by the IRIS agent."
+    )]
+    async fn debug_variables(
+        &self,
+        Parameters(args): Parameters<DebugVariablesArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        Ok(map_json(debug_variables(&self.client, &args).await))
+    }
+
+    #[tool(description = "Evaluate an ObjectScript expression/variable in the break context.")]
+    async fn debug_inspect(
+        &self,
+        Parameters(args): Parameters<DebugInspectArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        Ok(map_json(debug_inspect(&self.client, &args).await))
+    }
+
+    #[tool(description = "Call stack frames of the current break (levels start at 1 on IRIS).")]
+    async fn debug_stack(
+        &self,
+        Parameters(args): Parameters<DebugStackArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        Ok(map_json(debug_stack(&self.client, &args).await))
+    }
+
+    #[tool(
+        description = "Breakpoints: action list|set|remove|enable|disable. Entry breakpoints need offset 1 on current IRIS (offset 0 fails)."
+    )]
+    async fn debug_breakpoints(
+        &self,
+        Parameters(args): Parameters<DebugBreakpointsArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        Ok(map_json(debug_breakpoints(&self.client, &args).await))
+    }
+
+    #[tool(description = "Stop a debug session and resume the target process.")]
+    async fn debug_stop(
+        &self,
+        Parameters(args): Parameters<DebugStopArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        Ok(map_json(debug_stop(&self.client, &args).await))
     }
 }
 
