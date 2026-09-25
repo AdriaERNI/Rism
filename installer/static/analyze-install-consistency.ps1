@@ -42,6 +42,10 @@ if ($flat -match 'Filename: "\{app\}.*--version') { Ok 'postinstall --version ve
 # 6. No stray vendor leftovers
 if ($iss -match 'vortexis|zyx') { Fail 'stale vendor reference in .iss' } else { Ok 'no stale vendor refs' }
 
+# 6b. Flag-name trap: Inno has no 'checked' flag (only 'unchecked'); ISCC dies
+#     with "unknown flag" on it.
+if ($iss -match 'Flags:[^\r\n]*\bchecked\b') { Fail "'Flags: checked' is not an Inno flag (use default or 'unchecked')" } else { Ok 'no invalid Flags tokens' }
+
 # 7. OutputBaseFilename matches what CI expects to find
 if ($iss -match '(?m)^OutputBaseFilename=rism-\{#AppVersion\}-setup') { Ok 'OutputBaseFilename contract' } else { Fail 'OutputBaseFilename drifted from CI expectation' }
 
