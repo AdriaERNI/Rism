@@ -72,7 +72,7 @@ var
   Root: Integer;
   Key: string;
   Paths: string;
-begin  // HKCU root type: Integer is the declared param type for Reg* APIs
+begin
   if IsAdminInstallMode then
   begin Root := HKLM; Key := 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment'; end
   else
@@ -98,8 +98,10 @@ begin
   if P > 0 then
     Delete(Paths, P - 1, Length(Path) + 1)
   else if Uppercase(Copy(Paths, 1, Length(Path))) = Uppercase(Path) then
-    // installed as the very first entry
-    Delete(Paths, 1, Length(Path) + 1)
+  begin
+    { installed as the very first entry }
+    Delete(Paths, 1, Length(Path) + 1);
+  end
   else
     exit;
   RegWriteStringValue(Root, Key, 'Path', Paths);
@@ -107,7 +109,7 @@ end;
 
 procedure EnvRemovePath(Path: string);
 begin
-  // scrub both hives: an admin install wrote HKLM, per-user wrote HKCU
+  { scrub both hives: an admin install wrote HKLM, per-user wrote HKCU }
   RemovePathFrom(HKLM, 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment', Path);
   RemovePathFrom(HKCU, 'Environment', Path);
 end;
