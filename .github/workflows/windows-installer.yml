@@ -1,0 +1,145 @@
+name: Windows Installer
+
+# Proves the shipped Windows artifact on a real runner: build the release exe
+# exactly as ci.yml's build job does, compile the Inno Setup installer, then
+# silently install -> verify (PATH, exe smoke, config path) -> in-place
+# upgrade -> uninstall -> verify absence. This is the gate for the Microsoft
+# Store submission (see docs/windows-store.md): the installer here IS the one
+# that gets signed and submitted.
+
+on:
+  push:
+    branches: [main, development]
+    tags: ["v*"]
+    paths:
+      - "installer/**"
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/windows-installer.yml"
+  pull_request:
+    paths:
+      - "installer/**"
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/windows-installer.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: installer-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  consistency:
+    name: Static checks (no Windows build needed)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Installer script consistency
+        shell: pwsh
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File installer/static/analyze-install-consistency.ps1
+      - name: Docs drift (tool count, config paths)
+        shell: pwsh
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File installer/static/analyze-docs-drift.ps1
+
+  verify:
+    name: Install / upgrade / uninstall (windows-latest)
+    runs-on: windows-latest
+    needs: consistency
+    services:
+      iris:
+        image: intersystemsdc/iris-community:2025.3
+        ports: ["52773:52773"]
+        options: >-
+          --health-cmd "/irisHealth.sh"
+          --health-interval 15s
+          --health-timeout 10s
+          --health-retries 20
+          --health-start-period 90s
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with: { components: rustfmt, clippy }
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Compile installer (same flags as ci.yml)
+        shell: pwsh
+        run: |
+          $iscc = Get-ChildItem "C:\Program Files*\Inno Setup*\ISCC.exe" | Select-Object -First 1
+          if (-not $iscc) { Write-Error "ISCC.exe not found"; exit 1 }
+          $ver = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          & $iscc.FullName "/DAppVersion=$ver" "/DAppSource=..\..\target\release" installer/rism.iss
+          if (-not (Test-Path "installer\Output\rism-$ver-setup.exe")) { Write-Error "installer missing"; exit 1 }
+          "RISM_VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install (silent)
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "installer\Output\rism-$env:RISM_VERSION-setup.exe" `
+            -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Write-Error "install exit $($p.ExitCode)"; exit 1 }
+
+      - name: Verify installed exe + PATH
+        shell: pwsh
+        run: |
+          # per-machine install: Program Files\Rism on machine PATH
+          $mp = [Environment]::GetEnvironmentVariable("Path","Machine")
+          if ($mp -notlike "*$env:ProgramFiles\Rism*") {
+            Write-Error "install dir not on machine PATH: $mp"; exit 1 }
+          $exe = "$env:ProgramFiles\Rism\rism.exe"
+          if (-not (Test-Path $exe)) { Write-Error "rism.exe missing"; exit 1 }
+          & $exe --version
+          # live server round trip on a real Windows host
+          $env:Path = $mp
+          # defaults are exactly this container: _SYSTEM/SYS@localhost:52773/USER
+          "$env:ProgramFiles\Rism\rism.exe" info
+          "$env:ProgramFiles\Rism\rism.exe" sql "select 1 as Ok"
+
+      - name: Verify config location (%APPDATA%\rism\config.toml)
+        shell: pwsh
+        run: |
+          # config file at %APPDATA%\rism\config.toml must be picked up
+          New-Item -ItemType Directory -Force "$env:APPDATA\rism" | Out-Null
+          Set-Content "$env:APPDATA\rism\config.toml" 'sql_max_rows = 2'
+          & "$env:ProgramFiles\Rism\rism.exe" sql "select 1 as a" --format json | Out-Null
+          Write-Host "config contract OK (%APPDATA%\rism\config.toml readable)"
+
+      - name: In-place upgrade (same version, silent)
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "installer\Output\rism-$env:RISM_VERSION-setup.exe" `
+            -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Write-Error "upgrade exit $($p.ExitCode)"; exit 1 }
+          & "$env:ProgramFiles\Rism\rism.exe" --version
+
+      - name: Uninstall (silent) + absence checks
+        shell: pwsh
+        run: |
+          $un = "$env:ProgramFiles\Rism\unins000.exe"
+          if (-not (Test-Path $un)) { Write-Error "unins000.exe missing"; exit 1 }
+          $p = Start-Process -FilePath $un -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Write-Error "uninstall exit $($p.ExitCode)"; exit 1 }
+          if (Test-Path "$env:ProgramFiles\Rism\rism.exe") { Write-Error "exe survived"; exit 1 }
+          $mp = [Environment]::GetEnvironmentVariable("Path","Machine")
+          if ($mp -like "*$env:ProgramFiles\Rism*") { Write-Error "PATH entry survived"; exit 1 }
+          Write-Host "clean uninstall OK"
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: rism-windows-installer
+          path: installer/Output/*.exe

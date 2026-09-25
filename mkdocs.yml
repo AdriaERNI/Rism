@@ -1,0 +1,54 @@
+site_name: Rism
+site_description: Prism with Rust — CLI + MCP server for InterSystems IRIS via the Atelier REST API (zero server-side uploads)
+site_url: https://adriaerni.github.io/Rism/
+repo_url: https://github.com/AdriaERNI/Rism
+repo_name: AdriaERNI/Rism
+copyright: AGPL-3.0-or-later
+
+theme:
+  name: material
+  logo: assets/logo.svg
+  favicon: assets/favicon.png
+  features:
+    - navigation.instant
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+    - content.code.copy
+    - toc.follow
+  palette:
+    - scheme: slate
+      primary: teal
+      accent: orange
+      toggle:
+        icon: material/weather-night
+        name: Light mode
+    - scheme: default
+      primary: teal
+      accent: orange
+      toggle:
+        icon: material/weather-sunny
+        name: Dark mode
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - footnotes
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Configuration: configuration.md
+  - CLI Reference: cli-reference.md
+  - MCP Tools: mcp-tools.md
+  - Debugger: debugger.md
+  - Development: development.md
+  - Windows Store: windows-store.md
+  - Changelog: CHANGELOG.md

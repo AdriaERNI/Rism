@@ -143,10 +143,22 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release --locked
+      - name: Build Inno Setup installer (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          $iscc = Get-ChildItem "C:\Program Files*\Inno Setup*\ISCC.exe" | Select-Object -First 1
+          if (-not $iscc) { Write-Error "ISCC.exe not found"; exit 1 }
+          $ver = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          & $iscc.FullName "/DAppVersion=$ver" "/DAppSource=..\..\target\release" installer/rism.iss
+          if (-not (Test-Path "installer\Output\rism-$ver-setup.exe")) { Write-Error "installer missing"; exit 1 }
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
-          path: ${{ matrix.bin }}
+          path: |
+            ${{ matrix.bin }}
+            installer/Output/*.exe
 
   release:
     name: GitHub Release

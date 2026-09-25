@@ -1,6 +1,7 @@
 # Rism
 
 ![CI](https://github.com/AdriaERNI/Rism/actions/workflows/ci.yml/badge.svg)
+![Docs](https://github.com/AdriaERNI/Rism/actions/workflows/pages.yml/badge.svg)
 ![MSRV](https://img.shields.io/badge/rust-1.85%2B-blue)
 ![License](https://img.shields.io/badge/license-AGPL--3.0-blue)
 ![IRIS](https://img.shields.io/badge/IRIS-2025.3-orange)
@@ -11,6 +12,13 @@ with **25 tools** and zero server-side helper code.
 Prism is an MCP server and CLI for InterSystems IRIS development (SQL, documents,
 compilation, debugging, testing, and ObjectScript execution via the Atelier REST
 API). Rism is its Rust rewrite.
+
+## Documentation
+
+Full docs live on **GitHub Pages**: <https://adriaerni.github.io/Rism/> —
+getting started, configuration, CLI reference, all 25 MCP tools, debugger,
+and the [Windows Store guide](https://adriaerni.github.io/Rism/windows-store/).
+Sources in [`docs/`](docs/), built with mkdocs-material (CI-enforced, `--strict`).
 
 ## Development environment
 
