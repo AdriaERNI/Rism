@@ -373,6 +373,7 @@ impl ServerHandler for RismMcp {
 
     /// The 9 `debug_*` tools vanish from tools/list when disabled —
     /// discovery-level parity with Prism's `_SKIP_MODULES` gating.
+    #[allow(clippy::unused_async)] // trait forces async; body is sync by design
     async fn list_tools(
         &self,
         request: Option<rmcp::model::PaginatedRequestParams>,
