@@ -27,6 +27,8 @@ pub struct Settings {
     pub timeout_secs: u64,
     /// Default SQL max rows.
     pub sql_max_rows: u32,
+    /// Terminal output bound (chars); 0 = unlimited.
+    pub terminal_max_output_chars: usize,
 }
 
 impl Default for Settings {
@@ -39,6 +41,7 @@ impl Default for Settings {
             iris_api_version: 0,
             timeout_secs: 30,
             sql_max_rows: 1_000,
+            terminal_max_output_chars: 100_000,
         }
     }
 }

@@ -72,6 +72,10 @@ pub enum Error {
     /// Configuration/settings problem.
     #[error("configuration error: {0}")]
     Config(String),
+
+    /// Terminal WebSocket session failure (timeout, closed, server error frame).
+    #[error("terminal error: {0}")]
+    Terminal(String),
 }
 
 impl Error {

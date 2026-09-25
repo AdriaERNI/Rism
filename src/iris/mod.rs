@@ -7,5 +7,6 @@ pub mod documents;
 pub mod http;
 pub mod serverinfo;
 pub mod sql;
+pub mod terminal;
 
 pub use http::IrisClient;

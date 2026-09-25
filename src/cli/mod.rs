@@ -52,6 +52,14 @@ pub enum Commands {
     /// Document operations (list/get/put/compile/delete)
     #[command(subcommand)]
     Doc(DocCommands),
+    /// Execute an `ObjectScript` command via the terminal WebSocket
+    Exec {
+        /// `ObjectScript` command
+        command: String,
+        /// Timeout seconds
+        #[arg(long)]
+        timeout: Option<u64>,
+    },
     /// Compile documents already on the server (no upload)
     Compile {
         /// Document names (e.g. My.Class.cls)
@@ -130,7 +138,9 @@ impl Commands {
                 namespace: ns_override.clone(),
                 max_rows: *max_rows,
             }),
-            Self::Mcp | Self::Doc(_) | Self::Compile { .. } | Self::Info => None,
+            Self::Mcp | Self::Doc(_) | Self::Compile { .. } | Self::Info | Self::Exec { .. } => {
+                None
+            }
         }
     }
 
@@ -193,7 +203,11 @@ impl Commands {
                     namespace: ns_override.clone(),
                 }),
             }),
-            Self::Sql { .. } | Self::Mcp | Self::Compile { .. } | Self::Info => None,
+            Self::Sql { .. }
+            | Self::Mcp
+            | Self::Compile { .. }
+            | Self::Info
+            | Self::Exec { .. } => None,
         }
     }
 }

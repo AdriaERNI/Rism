@@ -9,6 +9,7 @@ use rmcp::{ServerHandler, ServiceExt, tool, tool_handler, tool_router};
 
 use crate::iris::IrisClient;
 use crate::settings::Settings;
+use crate::tools::command::{ExecuteCommandArgs, execute_command};
 use crate::tools::compile::{CompileDocumentsArgs, compile_documents};
 use crate::tools::documents::{
     DeleteDocumentArgs, GetDocumentArgs, ListDocumentsArgs, PutDocumentArgs, delete_document,
@@ -113,6 +114,16 @@ impl RismMcp {
         Parameters(args): Parameters<CompileDocumentsArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         Ok(map_json(compile_documents(&self.client, &args).await))
+    }
+
+    #[tool(
+        description = "Execute an ObjectScript command in the IRIS terminal (WebSocket). For method calls, globals, system utilities — anything ObjectScript."
+    )]
+    async fn execute_command(
+        &self,
+        Parameters(args): Parameters<ExecuteCommandArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        Ok(map_json(execute_command(&self.client, &args).await))
     }
 
     #[tool(

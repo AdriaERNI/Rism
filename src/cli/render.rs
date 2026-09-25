@@ -1,6 +1,7 @@
 //! Terminal rendering for shared-tool results. The ONLY module allowed to
 //! print to stdout in CLI mode.
 
+use crate::tools::command::CommandResult;
 use crate::tools::compile::CompileResult;
 use crate::tools::documents::{DocumentOut, ListDocumentsResult, PutDocumentResult};
 use crate::tools::serverinfo::ServerInfoOut;
@@ -80,6 +81,25 @@ pub fn render_doc_put(res: &PutDocumentResult, format: OutputFormat) {
             for line in &res.console {
                 println!("{line}");
             }
+        },
+    );
+}
+
+/// Render a terminal command result.
+pub fn render_command(res: &CommandResult, format: OutputFormat) {
+    render_json(
+        &serde_json::to_value(res).unwrap_or_default(),
+        format,
+        || {
+            if !res.output.is_empty() {
+                println!("{}", res.output.trim_end_matches('\n'));
+            }
+            let more = if res.output_truncated {
+                format!(" (truncated, {} chars omitted)", res.output_omitted_chars)
+            } else {
+                String::new()
+            };
+            eprintln!("prompt: {}{more}", res.prompt.trim());
         },
     );
 }

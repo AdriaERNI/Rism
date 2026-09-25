@@ -7,6 +7,7 @@ use clap::Parser;
 use rism::cli::{Cli, Commands, DocCall, OutputFormat, render};
 use rism::iris::IrisClient;
 use rism::settings::Settings;
+use rism::tools::command::{ExecuteCommandArgs, execute_command};
 use rism::tools::compile::{CompileDocumentsArgs, compile_documents};
 use rism::tools::documents::{
     delete_document, get_document, list_documents, put_and_compile, put_document,
@@ -38,6 +39,16 @@ async fn main() -> Result<()> {
     if let Some(args) = cli.command.to_execute_sql(&cli.namespace) {
         let res = execute_sql(&client, &args).await?;
         render::render_sql(&res, cli.format);
+    } else if matches!(cli.command, Commands::Exec { .. }) {
+        let Commands::Exec { command, timeout } = &cli.command else {
+            unreachable!("matched above")
+        };
+        let args = ExecuteCommandArgs {
+            command: command.clone(),
+            namespace: cli.namespace.clone(),
+            timeout_secs: *timeout,
+        };
+        render::render_command(&execute_command(&client, &args).await?, cli.format);
     } else if matches!(cli.command, Commands::Compile { .. }) {
         let Commands::Compile { names, flags } = &cli.command else {
             unreachable!("matched above")
