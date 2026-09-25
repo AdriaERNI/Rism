@@ -77,7 +77,7 @@ jobs:
           $iscc = Get-ChildItem "C:\Program Files*\Inno Setup*\ISCC.exe" | Select-Object -First 1
           if (-not $iscc) { Write-Error "ISCC.exe not found"; exit 1 }
           $ver = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
-          & $iscc.FullName "/DAppVersion=$ver" "/DAppSource=..\..\target\release" installer/rism.iss
+          & $iscc.FullName "/DAppVersion=$ver" installer/rism.iss
           if (-not (Test-Path "installer\Output\rism-$ver-setup.exe")) { Write-Error "installer missing"; exit 1 }
           "RISM_VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
