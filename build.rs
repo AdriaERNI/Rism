@@ -8,7 +8,10 @@ fn main() {
     res.set("FileDescription", "Prism with Rust — IRIS CLI + MCP server");
     res.set("CompanyName", "Adria Sanchez");
     res.set("LegalCopyright", "AGPL-3.0-or-later");
-    // winresource picks up CARGO_PKG_VERSION for the fixedFileInfo.
+    // FileVersion/ProductVersion STRINGS (what VersionInfo.FileVersion reads
+    // back in PowerShell) are NOT derived from FixedFileInfo — set explicitly.
+    res.set("FileVersion", env!("CARGO_PKG_VERSION"));
+    res.set("ProductVersion", env!("CARGO_PKG_VERSION"));
     if let Err(e) = res.compile() {
         println!("cargo:warning=winresource: {e}");
     }

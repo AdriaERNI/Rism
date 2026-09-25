@@ -99,6 +99,7 @@ jobs:
           if (-not (Test-Path $exe)) { Write-Error "rism.exe missing"; exit 1 }
           # version resource matches the tag-derived installer version
           $info = (Get-Item $exe).VersionInfo
+          Write-Host "exe FileVersion='$($info.FileVersion)' ProductVersion='$($info.ProductVersion)' (expect $env:RISM_VERSION)"
           if ($info.FileVersion -notlike "$env:RISM_VERSION*") {
             Write-Error "exe version '$($info.FileVersion)' != $env:RISM_VERSION"; exit 1 }
           # PATH resolution from a fresh shell context
@@ -113,7 +114,9 @@ jobs:
           $code = $LASTEXITCODE
           if ($code -eq 0) { Write-Error "info against dead port should fail"; exit 1 }
           if ($err -match "panicked") { Write-Error "panic on connect failure"; exit 1 }
-          Write-Host "clean-failure contract OK (exit $code)"
+          Write-Host "clean-failure contract OK (expected exit $code)"
+          # pwsh leaks $LASTEXITCODE from the intentional-failure cmd /c above
+          exit 0
 
       - name: Verify config pickup (%APPDATA%\rism\config.toml)
         shell: pwsh
@@ -126,6 +129,7 @@ jobs:
           $out = cmd /c "$env:ProgramFiles\Rism\rism.exe info 2>&1"
           if ($out -notmatch '59998') { Write-Error "config file not applied: $out"; exit 1 }
           Remove-Item "$env:APPDATA\rism\config.toml"
+          exit 0  # same $LASTEXITCODE leak: rism info failed on purpose
 
       - name: In-place upgrade (same version, silent)
         shell: pwsh
@@ -146,6 +150,7 @@ jobs:
           $mp = [Environment]::GetEnvironmentVariable("Path","Machine")
           if ($mp -like "*$env:ProgramFiles\Rism*") { Write-Error "PATH entry survived"; exit 1 }
           Write-Host "clean uninstall OK"
+          exit 0
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v5
