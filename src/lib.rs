@@ -17,6 +17,7 @@
 pub mod cli;
 pub mod error;
 pub mod iris;
+pub mod logfmt;
 pub mod mcp;
 pub mod settings;
 pub mod tools;

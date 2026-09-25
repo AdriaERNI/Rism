@@ -317,7 +317,85 @@ fn map_json<T: serde::Serialize>(res: crate::Result<T>) -> CallToolResult {
 
 #[tool_handler(router = self.tool_router, name = "rism", version = "0.1.0",
     instructions = "IRIS development tools via the Atelier API: SQL, documents, compilation.")]
-impl ServerHandler for RismMcp {}
+impl ServerHandler for RismMcp {
+    /// Prism-parity request/response logging (log.py): every tool call is
+    /// logged to stderr at DEBUG with truncation. Debug tools are gated off
+    /// when `debug_tools_enabled` is false (attach pauses live jobs — Prism
+    /// hides the whole module in that case).
+    async fn call_tool(
+        &self,
+        request: rmcp::model::CallToolRequestParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> std::result::Result<rmcp::model::CallToolResponse, rmcp::ErrorData> {
+        let name = request.name.to_string();
+        if name.starts_with("debug_") && !self.client.settings().debug_tools_enabled {
+            return Ok(rmcp::model::CallToolResponse::Complete(
+                CallToolResult::error(vec![ContentBlock::text(
+                    "debugger tools are disabled (set RISM_DEBUG_TOOLS=1 to enable)",
+                )]),
+            ));
+        }
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            let params = request.arguments.as_ref().map_or_else(
+                || serde_json::json!({}),
+                |obj| serde_json::Value::Object(obj.clone().into_iter().collect()),
+            );
+            tracing::debug!(
+                "\n{}\n{}",
+                crate::logfmt::request_banner(&name),
+                crate::logfmt::pretty(&crate::logfmt::truncate_params(&params))
+            );
+        }
+        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        let res = self.tool_router.call(tcc).await;
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            let text = match res.as_ref().ok() {
+                Some(rmcp::model::CallToolResponse::Complete(r)) => r
+                    .content
+                    .first()
+                    .and_then(|c| match c {
+                        rmcp::model::ContentBlock::Text(t) => Some(t.text.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_default(),
+                _ => String::new(),
+            };
+            let value = serde_json::from_str::<serde_json::Value>(&text)
+                .unwrap_or_else(|_| serde_json::json!(&text));
+            tracing::debug!(
+                "\n{}\n{}",
+                crate::logfmt::response_banner(&name),
+                crate::logfmt::pretty(&crate::logfmt::truncate_result(&value))
+            );
+        }
+        res
+    }
+
+    /// The 9 `debug_*` tools vanish from tools/list when disabled —
+    /// discovery-level parity with Prism's `_SKIP_MODULES` gating.
+    async fn list_tools(
+        &self,
+        request: Option<rmcp::model::PaginatedRequestParams>,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> std::result::Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
+        let supports_cache_hints = context
+            .protocol_version()
+            .is_some_and(|version| version >= rmcp::model::ProtocolVersion::V_2026_07_28);
+        let _ = request;
+        let mut res = rmcp::model::ListToolsResult {
+            result_type: Some(rmcp::model::ResultType::COMPLETE),
+            tools: self.tool_router.list_all(),
+            meta: None,
+            next_cursor: None,
+            ttl_ms: supports_cache_hints.then_some(0),
+            cache_scope: supports_cache_hints.then_some(rmcp::model::CacheScope::Public),
+        };
+        if !self.client.settings().debug_tools_enabled {
+            res.tools.retain(|t| !t.name.as_ref().starts_with("debug_"));
+        }
+        Ok(res)
+    }
+}
 
 /// Serve the MCP over stdio until the client disconnects.
 ///

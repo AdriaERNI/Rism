@@ -31,6 +31,9 @@ pub struct Settings {
     pub terminal_max_output_chars: usize,
     /// Local workspace root for host-side file tools (empty = disabled).
     pub workspace_root: String,
+    /// Expose the `debug_*` tools (default on; `RISM_DEBUG_TOOLS=0` hides them —
+    /// attaching pauses live IRIS jobs, so some deployments disable them).
+    pub debug_tools_enabled: bool,
 }
 
 impl Default for Settings {
@@ -45,6 +48,7 @@ impl Default for Settings {
             sql_max_rows: 1_000,
             terminal_max_output_chars: 100_000,
             workspace_root: String::new(),
+            debug_tools_enabled: true,
         }
     }
 }
@@ -115,6 +119,12 @@ impl Settings {
         }
         if let Ok(v) = std::env::var("RISM_WORKSPACE") {
             self.workspace_root = v;
+        }
+        if let Ok(v) = std::env::var("RISM_DEBUG_TOOLS") {
+            self.debug_tools_enabled = !matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "off" | "no"
+            );
         }
     }
 
