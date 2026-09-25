@@ -60,6 +60,9 @@ pub enum Commands {
         #[arg(long)]
         timeout: Option<u64>,
     },
+    /// Unit-testing operations (run/list/results)
+    #[command(subcommand)]
+    Test(TestCommands),
     /// Compile documents already on the server (no upload)
     Compile {
         /// Document names (e.g. My.Class.cls)
@@ -72,6 +75,37 @@ pub enum Commands {
     Info,
     /// Serve as an MCP server over stdio
     Mcp,
+}
+
+/// Test subcommands.
+#[derive(Subcommand, Debug)]
+pub enum TestCommands {
+    /// Run `%UnitTest` tests for a class (or one method)
+    Run {
+        /// Test class extending %UnitTest.TestCase
+        class: String,
+        /// Single Test* method
+        #[arg(long)]
+        method: Option<String>,
+        /// Timeout seconds
+        #[arg(long)]
+        timeout: Option<u64>,
+    },
+    /// List discovered test classes and methods
+    List {
+        /// Class-name prefix filter
+        #[arg(long)]
+        filter: Option<String>,
+    },
+    /// Show stored test-run history
+    Results {
+        /// Filter by class
+        #[arg(long)]
+        class: Option<String>,
+        /// Max runs
+        #[arg(long, default_value = "10")]
+        limit: u32,
+    },
 }
 
 /// Document subcommands.
@@ -138,9 +172,12 @@ impl Commands {
                 namespace: ns_override.clone(),
                 max_rows: *max_rows,
             }),
-            Self::Mcp | Self::Doc(_) | Self::Compile { .. } | Self::Info | Self::Exec { .. } => {
-                None
-            }
+            Self::Mcp
+            | Self::Doc(_)
+            | Self::Compile { .. }
+            | Self::Info
+            | Self::Exec { .. }
+            | Self::Test(_) => None,
         }
     }
 
@@ -207,7 +244,8 @@ impl Commands {
             | Self::Mcp
             | Self::Compile { .. }
             | Self::Info
-            | Self::Exec { .. } => None,
+            | Self::Exec { .. }
+            | Self::Test(_) => None,
         }
     }
 }

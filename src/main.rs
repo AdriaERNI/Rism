@@ -4,7 +4,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 
-use rism::cli::{Cli, Commands, DocCall, OutputFormat, render};
+use rism::cli::{Cli, Commands, DocCall, OutputFormat, TestCommands, render};
 use rism::iris::IrisClient;
 use rism::settings::Settings;
 use rism::tools::command::{ExecuteCommandArgs, execute_command};
@@ -14,6 +14,9 @@ use rism::tools::documents::{
 };
 use rism::tools::serverinfo::{GetServerInfoArgs, get_server_info};
 use rism::tools::sql::execute_sql;
+use rism::tools::testing::{
+    GetTestResultsArgs, ListTestsArgs, RunTestsArgs, get_test_results, list_tests, run_tests,
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -49,6 +52,42 @@ async fn main() -> Result<()> {
             timeout_secs: *timeout,
         };
         render::render_command(&execute_command(&client, &args).await?, cli.format);
+    } else if let Commands::Test(t) = &cli.command {
+        match t {
+            TestCommands::Run {
+                class,
+                method,
+                timeout,
+            } => {
+                let args = RunTestsArgs {
+                    test_class: class.clone(),
+                    test_method: method.clone(),
+                    namespace: cli.namespace.clone(),
+                    timeout_secs: *timeout,
+                };
+                let res = run_tests(&client, &args).await?;
+                render::render_run_tests(&res, cli.format);
+                if res.status == "failed" {
+                    // CI-friendly: `rism test run` exits non-zero on failures.
+                    std::process::exit(1);
+                }
+            }
+            TestCommands::List { filter } => {
+                let args = ListTestsArgs {
+                    filter: filter.clone(),
+                    namespace: cli.namespace.clone(),
+                };
+                render::render_list_tests(&list_tests(&client, &args).await?, cli.format);
+            }
+            TestCommands::Results { class, limit } => {
+                let args = GetTestResultsArgs {
+                    test_class: class.clone(),
+                    max_runs: Some(*limit),
+                    namespace: cli.namespace.clone(),
+                };
+                render::render_results(&get_test_results(&client, &args).await?, cli.format);
+            }
+        }
     } else if matches!(cli.command, Commands::Compile { .. }) {
         let Commands::Compile { names, flags } = &cli.command else {
             unreachable!("matched above")

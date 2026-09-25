@@ -220,6 +220,63 @@ async fn version_negotiation_repoints_calls() {
         .expect("v7 path used after negotiation");
 }
 
+// Testing trio: discovery and history must go through action/query as pure
+// SQL — never via an uploaded helper class (Rism's no-upload design rule).
+#[tokio::test]
+async fn list_tests_is_sql_only() {
+    let mock = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/atelier/v8/USER/action/query"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "status": {"errors": [], "summary": ""}, "console": [],
+            "result": {"content": [
+                {"class_name": "My.Tests", "method_name": "TestA"},
+                {"class_name": "My.Tests", "method_name": "TestB"}
+            ]}
+        })))
+        .mount(&mock)
+        .await;
+    // Guard: if any code path tries PUT/doc routes (an upload), the mock
+    // server has no route for them and they would 404 — assert none happen.
+    Mock::given(method("PUT"))
+        .respond_with(ResponseTemplate::new(418))
+        .expect(0)
+        .mount(&mock)
+        .await;
+
+    let client = client(&mock);
+    let res = rism::tools::testing::list_tests(
+        &client,
+        &rism::tools::testing::ListTestsArgs {
+            filter: Some("My.Tests".into()),
+            namespace: None,
+        },
+    )
+    .await
+    .expect("list");
+    assert_eq!(res.count, 1);
+    assert_eq!(res.classes[0].methods, vec!["TestA", "TestB"]);
+    mock.verify().await;
+}
+
+#[tokio::test]
+async fn run_tests_rejects_unsafe_names_before_any_call() {
+    let mock = MockServer::start().await;
+    let client = client(&mock);
+    let err = rism::tools::testing::run_tests(
+        &client,
+        &rism::tools::testing::RunTestsArgs {
+            test_class: "Bobby'; DROP TABLE x;--".into(),
+            test_method: None,
+            namespace: None,
+            timeout_secs: None,
+        },
+    )
+    .await
+    .expect_err("injection must be refused");
+    assert!(matches!(err, rism::Error::Config(_)), "{err}");
+}
+
 // §4 — docnames passes filter/filetypes/count as query params.
 #[tokio::test]
 async fn docnames_query_params() {
