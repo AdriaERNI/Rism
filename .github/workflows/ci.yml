@@ -86,7 +86,7 @@ jobs:
           }
           EOF
           $RISM_BIN doc put RismCI.Smoke.cls --file /tmp/ci/t.cls
-          $RISM_BIN compile RismCI.Smoke.cls | grep -q "successfully"
+          $RISM_BIN compile RismCI.Smoke.cls | grep -q "successfully"  # doc put skips compile
           $RISM_BIN doc get RismCI.Smoke.cls | grep -q "RismCI.Smoke"
 
           # SQL + terminal
@@ -104,6 +104,7 @@ jobs:
           }
           EOF
           $RISM_BIN doc put RismCI.SmokeTest.cls --file /tmp/ci/test.cls
+          $RISM_BIN compile RismCI.SmokeTest.cls >/dev/null
           $RISM_BIN test list --filter RismCI | grep -q "SmokeTest"
           $RISM_BIN test run RismCI.SmokeTest | grep -qiE "pass|ok"
           $RISM_BIN test results --limit 1 >/dev/null
