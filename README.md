@@ -39,6 +39,7 @@ cat src/My.Class.cls | rism doc compile My.Class.cls --file -
 rism doc put My.Class.cls --file src/My.Class.cls         # upload, no compile
 rism doc delete My.Class.cls
 rism compile My.Class.cls My.Other.cls                    # compile, no upload
+rism exec 'write $ZVERSION,!'                             # ObjectScript via WS terminal
 rism info                                                 # server version/namespaces
 rism --url http://host:52773 --namespace %SYS sql "SELECT 1"
 ```
@@ -53,7 +54,7 @@ rism mcp
 ```
 
 Tools: `execute_sql`, `list_documents`, `get_document`, `put_document`,
-`put_and_compile`, `delete_document`, `compile_documents`,
+`put_and_compile`, `delete_document`, `compile_documents`, `execute_command`,
 `get_server_info`. All namespace-scoped ones accept an optional `namespace`
 override.
 

@@ -111,6 +111,44 @@ impl IrisClient {
         format!("{}{}/{}", self.inner.base, self.api_prefix(), ns)
     }
 
+    /// Authenticate once against the unversioned root and return the session
+    /// cookies (CSPSESSIONID + CSPWSERVERID). Used by the terminal WebSocket:
+    /// a dedicated session per connection — sharing one loses output (§7).
+    ///
+    /// # Errors
+    /// Transport errors or non-2xx status.
+    pub async fn auth_cookies(&self) -> Result<Vec<(String, String)>> {
+        let st = self.settings();
+        let url = format!("{}/api/atelier/", self.inner.base);
+        let resp = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(st.timeout_secs))
+            .build()
+            .map_err(|e| Error::Config(format!("client build: {e}")))?
+            .get(&url)
+            .basic_auth(&st.iris_username, Some(&st.iris_password))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(Error::HttpStatus {
+                status: resp.status().as_u16(),
+                method: "GET".to_string(),
+                path: "/api/atelier/".to_string(),
+            });
+        }
+        let cookies = resp
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .filter_map(|raw| {
+                let (pair, _) = raw.split_once(';')?;
+                let (name, value) = pair.split_once('=')?;
+                Some((name.trim().to_string(), value.trim().to_string()))
+            })
+            .collect();
+        Ok(cookies)
+    }
+
     /// Set the negotiated API version (from [`crate::iris::serverinfo`]).
     pub fn set_api_version(&self, version: u8) {
         if version > 0 {
