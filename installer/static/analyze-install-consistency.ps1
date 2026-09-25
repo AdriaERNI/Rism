@@ -51,6 +51,14 @@ if ($iss -match 'vortexis|zyx') { Fail 'stale vendor reference in .iss' } else {
 #     with "unknown flag" on it.
 if ($iss -match 'Flags:[^\r\n]*\bchecked\b') { Fail "'Flags: checked' is not an Inno flag (use default or 'unchecked')" } else { Ok 'no invalid Flags tokens' }
 
+# 6c. Inno Pascal [Code] supports only { } comments — a // anywhere after the
+#     [Code] marker aborts ISCC ("'BEGIN' expected"). Catch it statically.
+$m = [regex]::Match($iss, '(?m)^\[Code\]')
+if ($m.Success) {
+    $codeLines = ($iss.Substring($m.Index) -split "`n") | Where-Object { $_ -notmatch '^\s*;' }
+    if (($codeLines -join "`n") -match '//') { Fail "'//' comment in [Code] (Inno Pascal needs braces)" } else { Ok 'no // in [Code]' }
+} else { Fail 'no [Code] section — PATH contract cannot hold' }
+
 # 7. OutputBaseFilename matches what CI expects to find
 if ($iss -match '(?m)^OutputBaseFilename=rism-\{#AppVersion\}-setup') { Ok 'OutputBaseFilename contract' } else { Fail 'OutputBaseFilename drifted from CI expectation' }
 
