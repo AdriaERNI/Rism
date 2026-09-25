@@ -50,15 +50,15 @@ foreach ($name in ($tools | Sort-Object -Unique)) {
     if ($docmcp -notmatch "``$tool``") { Fail "docs/mcp-tools.md never mentions $tool" } else { Ok "$tool documented" }
 }
 
-# 3. Config path claims agree with settings.rs (ProjectDirs com/github/rism)
+# 3. Config path claims agree with settings.rs (BaseDirs + rism/config.toml)
 $settings = Get-Content (Join-Path $root 'src\settings.rs') -Raw
-if ($settings -match 'ProjectDirs::from\("com", "github", "rism"\)') {
+if ($settings -match 'BaseDirs::new\(\)[\s\S]{0,120}config_dir\(\)\.join\("rism"\)') {
     $cfg = Get-Content (Join-Path $root 'docs\configuration.md') -Raw
     if ($cfg -match '%APPDATA%') { Ok 'Windows config path documented (%APPDATA%)' } else { Fail 'configuration.md lost the %APPDATA% row' }
     if ($cfg -match '\.config/rism/config\.toml' ) { Ok 'Linux config path documented' } else { Fail 'configuration.md lost the Linux path' }
     # the password-skipped promise must hold in code
     if ($settings -match '#\[serde\(skip\)\][\s\S]{0,80}pub iris_password') { Ok 'password is serde-skipped, as docs promise' } else { Fail 'docs promise password-skipped but code changed' }
-} else { Fail 'settings.rs ProjectDirs changed — recheck docs/configuration.md paths' }
+} else { Fail 'settings.rs config path scheme changed — recheck docs/configuration.md' }
 
 # 4. Version parity: Cargo.toml vs docs/CHANGELOG.md top entry
 $cargoVer = (Select-String -Path (Join-Path $root 'Cargo.toml') -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value

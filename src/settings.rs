@@ -92,11 +92,16 @@ impl Settings {
         Ok(s)
     }
 
-    /// Config file location: `$XDG_CONFIG_HOME` / platform equivalent.
+    /// Config file location — one convention on every OS:
+    /// `<user config dir>/rism/config.toml`, where the config dir honours
+    /// `$XDG_CONFIG_HOME` on Linux, `%APPDATA%` on Windows and
+    /// `~/Library/Application Support` on macOS (`BaseDirs::config_dir`).
+    /// `ProjectDirs` is deliberately NOT used: it nests the organization
+    /// name and a `config` subfolder, which would make the Windows path
+    /// `%APPDATA%\github\rism\config\config.toml`.
     #[must_use]
     pub fn config_path() -> Option<PathBuf> {
-        directories::ProjectDirs::from("com", "github", "rism")
-            .map(|d| d.config_dir().join("config.toml"))
+        directories::BaseDirs::new().map(|d| d.config_dir().join("rism").join("config.toml"))
     }
 
     fn apply_env(&mut self) {
