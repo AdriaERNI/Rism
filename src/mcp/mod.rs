@@ -373,12 +373,15 @@ impl ServerHandler for RismMcp {
 
     /// The 9 `debug_*` tools vanish from tools/list when disabled —
     /// discovery-level parity with Prism's `_SKIP_MODULES` gating.
-    #[allow(clippy::unused_async)] // trait forces async; body is sync by design
     async fn list_tools(
         &self,
         request: Option<rmcp::model::PaginatedRequestParams>,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> std::result::Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
+        // Trait-mandated async with no real I/O: one yield keeps newer
+        // toolchains' `unused_async`-on-trait-impl satisfied (method-level
+        // allow is ignored by that check — learned from CI run 36171856244).
+        tokio::task::yield_now().await;
         let supports_cache_hints = context
             .protocol_version()
             .is_some_and(|version| version >= rmcp::model::ProtocolVersion::V_2026_07_28);
