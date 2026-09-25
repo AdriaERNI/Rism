@@ -95,7 +95,7 @@ impl Settings {
     /// Config file location: `$XDG_CONFIG_HOME` / platform equivalent.
     #[must_use]
     pub fn config_path() -> Option<PathBuf> {
-        directories::ProjectDirs::from("eu", "vortexis", "rism")
+        directories::ProjectDirs::from("com", "github", "rism")
             .map(|d| d.config_dir().join("config.toml"))
     }
 

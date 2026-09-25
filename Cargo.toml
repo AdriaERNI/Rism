@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "Rust MCP server and CLI for InterSystems IRIS development"
 license = "AGPL-3.0"
-repository = "https://git.vortexis.eu/blkpws/Rism"
+repository = "https://github.com/AdriaERNI/Rism"
 rust-version = "1.85"
 
 [lib]
