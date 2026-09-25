@@ -4,6 +4,7 @@
 
 pub mod command;
 pub mod compile;
+pub mod debugger;
 pub mod documents;
 pub mod host;
 pub mod monitor;

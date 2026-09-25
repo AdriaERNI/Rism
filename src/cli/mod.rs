@@ -92,6 +92,9 @@ pub enum Commands {
         #[arg(long)]
         pattern: Option<String>,
     },
+    /// Interactive debugging (DBGP over the Atelier API — no uploads)
+    #[command(subcommand)]
+    Debug(DebugCommands),
     /// Live metrics + load score snapshot
     Monitor {
         /// Include all raw samples
@@ -102,6 +105,46 @@ pub enum Commands {
     Info,
     /// Serve as an MCP server over stdio
     Mcp,
+}
+
+/// Debug subcommands. CLI sessions are self-contained: each command opens,
+/// drives, and closes the debug session (target process resumes on exit).
+#[derive(Subcommand, Debug, Clone)]
+pub enum DebugCommands {
+    /// List debuggable IRIS processes (jobs)
+    Ps {
+        /// Include system processes
+        #[arg(long)]
+        system: bool,
+        /// Filter by namespace
+        #[arg(long)]
+        ns: Option<String>,
+    },
+    /// Run a target under the debugger to completion (print stops)
+    Run {
+        /// `ObjectScript` target, e.g. '##class(Pkg.Cls).Method(1,2)'
+        target: String,
+        /// Break at the entry line, then continue
+        #[arg(long)]
+        stop_on_entry: bool,
+        /// Breakpoint class (with --method)
+        #[arg(long)]
+        class: Option<String>,
+        /// Breakpoint method
+        #[arg(long)]
+        method: Option<String>,
+        /// Breakpoint line offset in the method
+        #[arg(long, default_value_t = 1)]
+        offset: u32,
+        /// Max stops before forcing completion
+        #[arg(long, default_value_t = 50)]
+        max_stops: u32,
+    },
+    /// Attach to a running process, capture its location, resume it
+    Attach {
+        /// Process id (from `rism debug ps`)
+        pid: u32,
+    },
 }
 
 /// Test subcommands.
@@ -208,6 +251,7 @@ impl Commands {
             | Self::Info
             | Self::Exec { .. }
             | Self::Test(_)
+            | Self::Debug(_)
             | Self::Monitor { .. }
             | Self::Shell { .. }
             | Self::Cat { .. }
@@ -283,6 +327,7 @@ impl Commands {
             | Self::Info
             | Self::Exec { .. }
             | Self::Test(_)
+            | Self::Debug(_)
             | Self::Monitor { .. }
             | Self::Shell { .. }
             | Self::Cat { .. }

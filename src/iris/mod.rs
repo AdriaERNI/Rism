@@ -3,6 +3,7 @@
 //! map and every verified wire quirk this layer encodes).
 
 pub mod compile;
+pub mod dbgp;
 pub mod documents;
 pub mod http;
 pub mod monitor;

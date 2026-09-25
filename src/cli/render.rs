@@ -3,6 +3,7 @@
 
 use crate::tools::command::CommandResult;
 use crate::tools::compile::CompileResult;
+use crate::tools::debugger::{DebugRunResult, DebugSessionInfo, ProcessInfo};
 use crate::tools::documents::{DocumentOut, ListDocumentsResult, PutDocumentResult};
 use crate::tools::host::{ListFilesResult, ReadFileResult, ShellResult};
 use crate::tools::monitor::MonitorResult;
@@ -398,4 +399,85 @@ fn render_row(cells: &[String], widths: &[usize]) -> String {
         .join("  ")
         .trim_end()
         .to_string()
+}
+
+/// Render debug process list.
+pub fn render_debug_ps(procs: &[ProcessInfo], format: OutputFormat) {
+    render_json(
+        &serde_json::to_value(procs).unwrap_or_default(),
+        format,
+        || {
+            if procs.is_empty() {
+                println!("no non-system jobs running");
+                return;
+            }
+            println!("PID     NAMESPACE    ROUTINE                  STATE              DEVICE");
+            for p in procs {
+                println!(
+                    "{:<7} {:<12} {:<24.24} {:<18.18} {}",
+                    p.pid, p.namespace, p.routine, p.state, p.device
+                );
+            }
+        },
+    );
+}
+
+/// Render a scripted debug run.
+pub fn render_debug_run(res: &DebugRunResult, format: OutputFormat) {
+    render_json(
+        &serde_json::to_value(res).unwrap_or_default(),
+        format,
+        || {
+            for (i, stop) in res.stops.iter().enumerate() {
+                let loc = stop
+                    .location
+                    .document
+                    .clone()
+                    .unwrap_or_else(|| "?".to_string());
+                let line = stop
+                    .location
+                    .line
+                    .map_or_else(String::new, |l| format!(":{l}"));
+                let method = stop
+                    .location
+                    .method
+                    .as_ref()
+                    .map_or_else(String::new, |m| format!(" {m}"));
+                println!("stop {} at {loc}{line}{method}", i + 1);
+                for v in &stop.variables {
+                    let val = v.value.clone().unwrap_or_else(|| "-".to_string());
+                    println!("    {} = {val}  ({})", v.name, v.r#type);
+                }
+            }
+            let capped = if res.capped { " (capped)" } else { "" };
+            println!("{} — {} stop(s){capped}", res.state, res.stops.len());
+        },
+    );
+}
+
+/// Render an attach result.
+pub fn render_debug_attach(info: &DebugSessionInfo, format: OutputFormat) {
+    render_json(
+        &serde_json::to_value(info).unwrap_or_default(),
+        format,
+        || {
+            println!(
+                "{} {}",
+                info.state,
+                info.location
+                    .as_ref()
+                    .map(|l| format!(
+                        "at {}:{} {}",
+                        l.document.clone().unwrap_or_default(),
+                        l.line.unwrap_or(0),
+                        l.method.clone().unwrap_or_default()
+                    ))
+                    .unwrap_or_default()
+            );
+            for v in &info.variables {
+                let val = v.value.clone().unwrap_or_else(|| "-".to_string());
+                println!("    {} = {val}  ({})", v.name, v.r#type);
+            }
+        },
+    );
 }

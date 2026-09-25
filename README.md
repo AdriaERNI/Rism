@@ -44,6 +44,9 @@ rism test run MyApp.Tests.Calculator                      # %UnitTest (nothing u
 rism test list --filter MyApp
 rism test results --limit 5
 rism monitor                                          # scored load snapshot
+rism debug run '##class(Pkg.Cls).Add(1,2)' --stop-on-entry   # scripted debug
+rism debug ps                                               # attach targets
+rism debug attach <pid>                                     # peek a live job
 rism shell 'git status'                               # local host shell
 rism cat src/x.cls                                    # workspace file read
 rism ls --pattern '**/*.cls'                          # workspace listing
@@ -64,7 +67,10 @@ rism mcp
 Tools: `execute_sql`, `list_documents`, `get_document`, `put_document`,
 `put_and_compile`, `delete_document`, `compile_documents`, `execute_command`,
 `run_tests`, `list_tests`, `get_test_results`, `monitor_system`,
-`get_server_info`, `run_shell`, `read_file`, `list_files`. All
+`get_server_info`, `run_shell`, `read_file`, `list_files`, and the debugger
+suite (`debug_start`, `debug_attach`, `debug_list_processes`, `debug_step`,
+`debug_variables`, `debug_inspect`, `debug_stack`, `debug_breakpoints`,
+`debug_stop`). All
 namespace-scoped ones accept an optional `namespace` override. Host-side
 tools (`run_shell`, `read_file`, `list_files`) act on the machine Rism runs
 on; file tools are rooted at `RISM_WORKSPACE` with traversal blocked.
