@@ -51,7 +51,8 @@ PrivilegesRequiredOverridesAllowed=dialog
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "modifypath"; Description: "Add {#MyAppName} to PATH"; GroupDescription: "Integration:"; Flags: checked
+; default state is checked (there is no "checked" flag in Inno — only "unchecked")
+Name: "modifypath"; Description: "Add {#MyAppName} to PATH"; GroupDescription: "Integration:"
 
 [Files]
 Source: "{#AppSource}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
