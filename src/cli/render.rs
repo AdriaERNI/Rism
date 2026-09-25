@@ -4,6 +4,7 @@
 use crate::tools::command::CommandResult;
 use crate::tools::compile::CompileResult;
 use crate::tools::documents::{DocumentOut, ListDocumentsResult, PutDocumentResult};
+use crate::tools::monitor::MonitorResult;
 use crate::tools::serverinfo::ServerInfoOut;
 use crate::tools::sql::SqlResult;
 use crate::tools::testing::{ListTestsResult, RunTestsResult, TestHistoryResult};
@@ -209,6 +210,57 @@ pub fn render_results(res: &TestHistoryResult, format: OutputFormat) {
                 );
             }
             println!("\n{} row(s)", res.count);
+        },
+    );
+}
+
+/// Render a monitor snapshot.
+pub fn render_monitor(res: &MonitorResult, format: OutputFormat) {
+    render_json(
+        &serde_json::to_value(res).unwrap_or_default(),
+        format,
+        || {
+            let s = &res.snapshot;
+            println!(
+                "grade: {:<9} overall {:>5.1}  (cpu {:.1}  mem {:.1}  disk {:.1}  proc {:.1})",
+                s.grade,
+                s.score.overall,
+                s.score.cpu,
+                s.score.memory,
+                s.score.disk,
+                s.score.process
+            );
+            println!(
+                "alerts: {}   samples: {}   db: {:.2} GB total, {:.2} GB max, {} dbs, {:.1} ms avg latency",
+                s.alerts_count,
+                s.metric_count,
+                s.aggregated.db_total_size_gb,
+                s.aggregated.db_total_max_gb,
+                s.aggregated.db_count,
+                s.aggregated.db_avg_latency_ms
+            );
+            println!(
+                "smh: {:.2} GB   csp conns: {:.0} ({:.0} in use)",
+                s.aggregated.smh_total_gb,
+                s.aggregated.csp_total_connections,
+                s.aggregated.csp_in_use_connections
+            );
+            let cpu: Vec<String> = s
+                .aggregated
+                .cpu_by_type
+                .iter()
+                .map(|(k, v)| format!("{k}={v:.0}"))
+                .collect();
+            println!("cpu by type: {}", cpu.join("  "));
+            if !s.aggregated.top_processes.is_empty() {
+                println!("top processes (by commands):");
+                for p in &s.aggregated.top_processes {
+                    println!(
+                        "  pid {:<6} {:>8} cmds  {:<12} {:<12} {}",
+                        p.pid, p.commands, p.jobtype, p.namespace, p.routine
+                    );
+                }
+            }
         },
     );
 }

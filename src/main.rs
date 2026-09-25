@@ -12,6 +12,7 @@ use rism::tools::compile::{CompileDocumentsArgs, compile_documents};
 use rism::tools::documents::{
     delete_document, get_document, list_documents, put_and_compile, put_document,
 };
+use rism::tools::monitor::{MonitorArgs, monitor_system};
 use rism::tools::serverinfo::{GetServerInfoArgs, get_server_info};
 use rism::tools::sql::execute_sql;
 use rism::tools::testing::{
@@ -88,6 +89,15 @@ async fn main() -> Result<()> {
                 render::render_results(&get_test_results(&client, &args).await?, cli.format);
             }
         }
+    } else if let Commands::Monitor { raw } = &cli.command {
+        let res = monitor_system(
+            &client,
+            &MonitorArgs {
+                include_raw_metrics: *raw,
+            },
+        )
+        .await?;
+        render::render_monitor(&res, cli.format);
     } else if matches!(cli.command, Commands::Compile { .. }) {
         let Commands::Compile { names, flags } = &cli.command else {
             unreachable!("matched above")

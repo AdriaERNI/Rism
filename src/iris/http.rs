@@ -161,6 +161,34 @@ impl IrisClient {
         }
     }
 
+    /// GET a URL that returns PLAIN TEXT (the /api/monitor/* endpoints are
+    /// not Atelier envelope APIs — verified live: exposition text + JSON array).
+    ///
+    /// # Errors
+    /// Transport errors or non-2xx status.
+    pub async fn get_text(&self, url: &str) -> Result<String> {
+        let st = self.settings();
+        let resp = self
+            .inner
+            .http
+            .get(url)
+            .basic_auth(&st.iris_username, Some(&st.iris_password))
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(Error::HttpStatus {
+                status: status.as_u16(),
+                method: "GET".to_string(),
+                path: url
+                    .strip_prefix(&self.inner.base)
+                    .unwrap_or(url)
+                    .to_string(),
+            });
+        }
+        Ok(resp.text().await?)
+    }
+
     /// Negotiate the Atelier API version against `GET {base}/api/atelier/`.
     ///
     /// Silently keeps the default when the probe fails (offline, auth...):

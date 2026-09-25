@@ -43,6 +43,7 @@ rism exec 'write $ZVERSION,!'                             # ObjectScript via WS 
 rism test run MyApp.Tests.Calculator                      # %UnitTest (nothing uploaded)
 rism test list --filter MyApp
 rism test results --limit 5
+rism monitor                                          # scored load snapshot
 rism info                                                 # server version/namespaces
 rism --url http://host:52773 --namespace %SYS sql "SELECT 1"
 ```
@@ -58,8 +59,9 @@ rism mcp
 
 Tools: `execute_sql`, `list_documents`, `get_document`, `put_document`,
 `put_and_compile`, `delete_document`, `compile_documents`, `execute_command`,
-`run_tests`, `list_tests`, `get_test_results`, `get_server_info`. All
-namespace-scoped ones accept an optional `namespace` override.
+`run_tests`, `list_tests`, `get_test_results`, `monitor_system`,
+`get_server_info`. All namespace-scoped ones accept an optional `namespace`
+override.
 
 Rism never uploads helper code to the server — everything, including unit
 testing, goes through the Atelier REST API and its terminal WebSocket.

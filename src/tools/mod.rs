@@ -5,6 +5,8 @@
 pub mod command;
 pub mod compile;
 pub mod documents;
+pub mod monitor;
+pub mod scoring;
 pub mod serverinfo;
 pub mod sql;
 pub mod testing;
