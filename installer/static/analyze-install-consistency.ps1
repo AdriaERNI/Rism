@@ -51,12 +51,14 @@ if ($iss -match 'vortexis|zyx') { Fail 'stale vendor reference in .iss' } else {
 #     with "unknown flag" on it.
 if ($iss -match 'Flags:[^\r\n]*\bchecked\b') { Fail "'Flags: checked' is not an Inno flag (use default or 'unchecked')" } else { Ok 'no invalid Flags tokens' }
 
-# 6c. Inno Pascal [Code] supports only { } comments — a // anywhere after the
-#     [Code] marker aborts ISCC ("'BEGIN' expected"). Catch it statically.
-$m = [regex]::Match($iss, '(?m)^\[Code\]')
+# 6c. Inside [Code], ';' starts NOTHING — it is Pascal's statement separator,
+#     so ';'-prefixed "comment" lines abort ISCC with "'BEGIN' expected".
+#     Legal comments there: { } always, // from Inno 6.3. Catch the trap.
+$m = [regex]::Match($iss, '(?m)^\[Code\][\s\S]*$')
 if ($m.Success) {
-    $codeLines = ($iss.Substring($m.Index) -split "`n") | Where-Object { $_ -notmatch '^\s*;' }
-    if (($codeLines -join "`n") -match '//') { Fail "'//' comment in [Code] (Inno Pascal needs braces)" } else { Ok 'no // in [Code]' }
+    $codeLines = $m.Value -split "\r?\n"
+    $bad = $codeLines | Where-Object { $_ -match '^\s*;' }
+    if ($bad) { Fail "';' pseudo-comments in [Code] (use braces): $($bad[0].Trim())" } else { Ok 'no ; pseudo-comments in [Code]' }
 } else { Fail 'no [Code] section — PATH contract cannot hold' }
 
 # 7. OutputBaseFilename matches what CI expects to find
