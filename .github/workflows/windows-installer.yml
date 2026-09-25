@@ -126,7 +126,9 @@ jobs:
           # file loaded through the documented precedence chain (settings.rs)
           New-Item -ItemType Directory -Force "$env:APPDATA\rism" | Out-Null
           Set-Content "$env:APPDATA\rism\config.toml" 'iris_base_url = "http://127.0.0.1:59998"'
-          $out = cmd /c "$env:ProgramFiles\Rism\rism.exe info 2>&1"
+          # native pwsh stderr capture (cmd /c would need double-quotes around
+          # a path containing spaces; avoid the trap altogether)
+          $out = (& "$env:ProgramFiles\Rism\rism.exe" info 2>&1 | Out-String)
           if ($out -notmatch '59998') { Write-Error "config file not applied: $out"; exit 1 }
           Remove-Item "$env:APPDATA\rism\config.toml"
           exit 0  # same $LASTEXITCODE leak: rism info failed on purpose
