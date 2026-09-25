@@ -11,7 +11,7 @@ $issPath = Join-Path $PSScriptRoot '..\rism.iss'
 $iss = Get-Content $issPath -Raw
 # Inno entries may continue across lines with a trailing backslash — flatten
 # (backslash + newline -> space) so regexes can match a whole logical entry.
-$flat = $iss -replace '\(\r?\n)', ' '
+$flat = $iss -replace '\[\s]+', ' '
 
 # 1. Required [Setup] keys
 foreach ($k in 'AppId','AppName','AppVersion','DefaultDirName','UninstallDisplayName',
