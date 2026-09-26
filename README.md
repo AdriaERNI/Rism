@@ -111,6 +111,6 @@ service container (everything it creates is `RismCI.*` and deleted after).
 
 ## Releases
 
-Tags `v*` build Linux/Windows/macOS binaries and open a GitHub Release from
+Tags `v*` build Linux/Windows binaries and open a GitHub Release from
 CI. Stable releases follow Git Flow (`release/vX.Y.Z` from `development` →
 PR to `main` → tag); `-pre` tags publish as prereleases.
