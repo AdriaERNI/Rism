@@ -19,10 +19,16 @@ Download the archive for your platform from the
 [releases page](https://github.com/AdriaERNI/Rism/releases) and put `rism` on your
 PATH:
 
-- **Linux / macOS:** `rism-<version>-<os>.tar.gz` → extract, `chmod +x rism`
-- **Windows:** `rism-<version>-windows.zip` → extract, or install with
-  `rism-<version>-setup.exe` (adds to PATH, Start-menu entry; see
-  [Windows Store](windows-store.md))
+| Platform | File |
+|---|---|
+| Linux (x86-64) | `rism-<version>-linux-x86_64.tar.gz` |
+| Windows (x86-64) | `rism-<version>-windows-x86_64.zip` — or `rism-<version>-setup.exe` installer (PATH task, uninstall entry; see [Windows Store](windows-store.md)) |
+| Windows (ARM64 / 32-bit) | `rism-<version>-windows-arm64.zip` / `-windows-i686.zip` |
+
+Supported platforms: Linux (x86-64) and Windows (x64 / ARM64 / 32-bit).
+
+Every build is statically linked against `rustls` (no system OpenSSL/MSVC
+redistributable needed) and runs on any stock install of that OS.
 
 === From source ===
 

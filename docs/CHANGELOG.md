@@ -27,7 +27,7 @@ All notable changes to Rism. Versioning follows
   install + PATH task; CI job installs/upgrades/uninstalls it on
   `windows-latest` against a live IRIS.
 - **CI**: lint (fmt + clippy `-D warnings`), unit tests, fresh-IRIS live smoke,
-  tagged release builds (Linux/Windows/macOS + installer), GitHub Pages.
+  tagged release builds (Linux/Windows + installer), GitHub Pages.
 - **Docs**: this site (`docs/`, mkdocs-material).
 
 ### Parity notes
