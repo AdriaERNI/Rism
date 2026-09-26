@@ -1,0 +1,45 @@
+# nfpm — Linux package definitions (deb / rpm / archlinux) from one file.
+# Built in CI on the linux release leg (actions/download-tool + nfpm pkg).
+#
+# Env substitution (nfpm expands os.Env while parsing):
+#   RISM_VERSION  semver without leading v (from Cargo.toml)
+#   RISM_ARCH     Go arch nomenclature: amd64 | arm64 (per matrix leg)
+#   RISM_RELEASE  numeric package release (1; CI uses 0.1 for pre-releases,
+#                 arch's pkgrel must parse as an integer)
+#
+# Install contract (Prism/Inno parity, adapted to Linux): packages own ONLY
+# system paths (/usr/bin, /usr/share/doc). ~/.config/rism is created by the
+# program at first use — never packaged, never deleted on uninstall.
+# No runtime deps: rustls is statically linked (no libssl).
+
+name: rism
+arch: "${RISM_ARCH}"
+version: "${RISM_VERSION}"
+version_schema: semver
+release: "${RISM_RELEASE}"
+maintainer: "Adria Sanchez <adria.sanchez@betterask.erni>"
+vendor: "AdriaERNI"
+homepage: "https://github.com/AdriaERNI/Rism"
+description: "Rust MCP server and CLI for InterSystems IRIS via the Atelier API - no uploads, no .NET"
+license: "AGPL-3.0"
+section: "utils"
+priority: "optional"
+
+contents:
+  - dst: /usr/share/doc/rism
+    type: dir
+  - src: dist/usr/bin/rism
+    dst: /usr/bin/rism
+    file_info:
+      mode: 0755
+  - src: README.md
+    dst: /usr/share/doc/rism/README.md
+    file_info:
+      mode: 0644
+  - src: LICENSE
+    dst: /usr/share/doc/rism/LICENSE
+    file_info:
+      mode: 0644
+
+scripts:
+  postinstall: packaging/postinst.sh

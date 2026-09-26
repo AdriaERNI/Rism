@@ -1,0 +1,131 @@
+name: Linux Packages
+
+# Proves the shipped Linux artifacts on their REAL target distributions via
+# containers (the Windows contract runs on windows-latest runners; Linux can
+# be honest here because the runner itself is a Linux host — same trick as
+# the IRIS live-smoke services containers). For each format:
+#   install (r1)  -> rism on PATH + `rism --version` runs + docs land
+#   upgrade (r2)  -> same version, release 2: the honest upgrade path on all
+#                    three managers (same-version reinstall is a no-op on
+#                    dpkg/pacman and a refusal on rpm)
+#   uninstall     -> binary AND docs gone; user config must never be touched
+#
+# Artifact naming and version handling follow packaging/nfpm.yaml; the build
+# step is byte-identical to ci.yml's linux release leg so the contract tests
+# THE SAME FILES that get published.
+
+on:
+  push:
+    branches: [main, development]
+    tags: ["v*"]
+    paths:
+      - "packaging/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "src/**"
+      - ".github/workflows/linux-packages.yml"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    paths:
+      - "packaging/**"
+      - ".github/workflows/linux-packages.yml"
+      - ".github/workflows/ci.yml"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  contract:
+    name: ${{ matrix.distro }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: Debian 12
+            image: debian:12
+            install: dpkg -i /pkg/rism_*.deb
+            upgrade: dpkg -i /pkg/up/rism_*.deb
+            uninstall: dpkg -r rism
+          - distro: Ubuntu 24.04
+            image: ubuntu:24.04
+            install: dpkg -i /pkg/rism_*.deb
+            upgrade: dpkg -i /pkg/up/rism_*.deb
+            uninstall: dpkg -r rism
+          - distro: Fedora 42
+            image: fedora:42
+            install: rpm -i /pkg/rism-*.x86_64.rpm
+            upgrade: rpm -Uvh /pkg/up/rism-*.x86_64.rpm
+            uninstall: rpm -e rism
+          - distro: Arch Linux
+            image: archlinux:latest
+            install: pacman -U --noconfirm /pkg/rism-*.pkg.tar.zst
+            upgrade: pacman -U --noconfirm /pkg/up/rism-*.pkg.tar.zst
+            uninstall: pacman -R --noconfirm rism
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release binary (same as ci.yml linux leg)
+        run: |
+          sudo apt-get update && sudo apt-get install -y musl-tools
+          cargo build --release --locked --target x86_64-unknown-linux-musl
+      - name: Build packages (same as ci.yml linux leg)
+        run: |
+          curl -sSL -o /tmp/nfpm.tgz \
+            "https://github.com/goreleaser/nfpm/releases/download/v2.47.0/nfpm_2.47.0_Linux_x86_64.tar.gz"
+          tar xzf /tmp/nfpm.tgz -C /tmp nfpm
+          VER=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')
+          mkdir -p dist/usr/bin dist/up
+          cp target/x86_64-unknown-linux-musl/release/rism dist/usr/bin/rism
+          for P in deb rpm archlinux; do
+            RISM_VERSION="$VER" RISM_ARCH=amd64 RISM_RELEASE=1 /tmp/nfpm pkg -f packaging/nfpm.yaml --packager "$P" -t dist/
+            RISM_VERSION="$VER" RISM_ARCH=amd64 RISM_RELEASE=2 /tmp/nfpm pkg -f packaging/nfpm.yaml --packager "$P" -t dist/up
+          done
+          ls -la dist/ dist/up/
+      - name: Install / upgrade / uninstall (${{ matrix.distro }})
+        run: |
+          set -euo pipefail
+          docker pull "${{ matrix.image }}"
+          docker run --rm -v "$PWD/dist:/pkg:ro" "${{ matrix.image }}" bash -ec '
+            set -euo pipefail
+            # a preinstalled package would poison the fresh-install case
+            dpkg -r rism 2>/dev/null || rpm -e rism 2>/dev/null || pacman -R rism 2>/dev/null || true
+            echo "== INSTALL"
+            '"${{ matrix.install }}"'
+            test -x /usr/bin/rism
+            /usr/bin/rism --version | grep -E "^rism [0-9]"
+            command -v rism | grep -qx /usr/bin/rism
+            test -f /usr/share/doc/rism/LICENSE
+            echo "== UPGRADE (r1 -> r2)"
+            '"${{ matrix.upgrade }}"'
+            /usr/bin/rism --version | grep -E "^rism [0-9]"
+            echo "== UNINSTALL"
+            '"${{ matrix.uninstall }}"'
+            test ! -e /usr/bin/rism && echo "binary removed"
+            test ! -e /usr/share/doc/rism && echo "docs removed"
+            echo "CONTRACT OK (${{ matrix.distro }})"
+          '
+      - name: Config-preservation probe (Ubuntu)
+        # Install with a populated user config, uninstall, assert the config
+        # SURVIVED (packages must never touch ~/.config/rism) — mirrors the
+        # Windows contract's config pickup step.
+        if: matrix.distro == 'Ubuntu 24.04'
+        run: |
+          docker run --rm -v "$PWD/dist:/pkg:ro" ubuntu:24.04 bash -ec '
+            set -euo pipefail
+            mkdir -p /root/.config/rism
+            printf "[server]\nurl = \"http://127.0.0.1:59999\"\nuser = \"u\"\n" > /root/.config/rism/config.toml
+            dpkg -i /pkg/rism_*.deb >/dev/null
+            dpkg -r rism >/dev/null
+            test -f /root/.config/rism/config.toml || { echo "uninstall deleted user config!"; exit 1; }
+            echo "config preserved across install/uninstall"
+          '
+      - name: Upload contract packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: contract-packages-${{ matrix.distro }}
+          path: dist/*

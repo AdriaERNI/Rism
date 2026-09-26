@@ -131,7 +131,7 @@ jobs:
         include:
           - os: ubuntu-latest
             label: linux-x86_64
-            target: x86_64-unknown-linux-gnu
+            target: x86_64-unknown-linux-musl
             ext: tar.gz
           - os: windows-latest
             label: windows-x86_64
@@ -154,6 +154,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # Hosted runners ship the full MSVC toolset (x64 host + x86/arm64 cross
       # libs) — plain cargo cross-target builds, no linker overrides needed.
+      # musl needs the static libc linker wrapper (musl-gcc) only.
+      - name: musl toolchain (linux leg)
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
       - run: cargo build --release --locked --target ${{ matrix.target }}
       - name: Build Inno Setup installer (Windows x64 only)
         if: matrix.label == 'windows-x86_64'
@@ -178,6 +182,20 @@ jobs:
           else
             tar -czf "rism-${VER}-${{ matrix.label }}.tar.gz" -C "$(dirname "$BIN")" "$(basename "$BIN")"
           fi
+      - name: Build Linux packages (deb / rpm / archlinux)
+        if: matrix.label == 'linux-x86_64'
+        shell: bash
+        run: |
+          curl -sSL -o /tmp/nfpm.tgz \
+            "https://github.com/goreleaser/nfpm/releases/download/v2.47.0/nfpm_2.47.0_Linux_x86_64.tar.gz"
+          tar xzf /tmp/nfpm.tgz -C /tmp nfpm
+          VER=${GITHUB_REF_NAME#v}
+          mkdir -p dist/usr/bin && cp target/${{ matrix.target }}/release/rism dist/usr/bin/rism
+          export RISM_VERSION="$VER" RISM_ARCH=amd64 RISM_RELEASE=1
+          /tmp/nfpm pkg -f packaging/nfpm.yaml --packager deb       -t dist/
+          /tmp/nfpm pkg -f packaging/nfpm.yaml --packager rpm       -t dist/
+          /tmp/nfpm pkg -f packaging/nfpm.yaml --packager archlinux -t dist/
+          ls -la dist/
       - uses: actions/upload-artifact@v7
         with:
           name: rism-${{ github.ref_name }}-${{ matrix.label }}${{ matrix.label == 'windows-x86_64' && '-installer' || '' }}
@@ -185,6 +203,16 @@ jobs:
           path: |
             rism-*
             installer/Output/*.exe
+      - name: Upload Linux packages (linux leg only)
+        if: matrix.label == 'linux-x86_64'
+        uses: actions/upload-artifact@v7
+        with:
+          name: rism-${{ github.ref_name }}-linux-packages
+          if-no-files-found: error
+          path: |
+            dist/*.deb
+            dist/*.rpm
+            dist/*.pkg.tar.zst
 
   release:
     name: GitHub Release
