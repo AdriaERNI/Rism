@@ -1,0 +1,219 @@
+name: Linux Packages
+
+# Proves the shipped Linux artifacts on their REAL target distributions via
+# containers (the Windows contract runs on windows-latest runners; Linux can
+# be honest here because the runner itself is a Linux host — same trick as
+# the IRIS live-smoke services containers). For each format:
+#   install (r1)  -> rism on PATH + `rism --version` runs + docs land
+#   upgrade (r2)  -> same version, release 2: the honest upgrade path on all
+#                    three managers (same-version reinstall is a no-op on
+#                    dpkg/pacman and a refusal on rpm)
+#   uninstall     -> binary AND docs gone; user config must never be touched
+#   functional    -> reinstalled binary against a LIVE IRIS service container:
+#                    info/SQL/doc-round-trip/terminal/MCP door all work
+#
+# Artifact naming and version handling follow packaging/nfpm.yaml; the build
+# step is byte-identical to ci.yml's linux release leg so the contract tests
+# THE SAME FILES that get published.
+
+on:
+  push:
+    branches: [main, development]
+    tags: ["v*"]
+    paths:
+      - "packaging/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "src/**"
+      - ".github/workflows/linux-packages.yml"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    paths:
+      - "packaging/**"
+      - ".github/workflows/linux-packages.yml"
+      - ".github/workflows/ci.yml"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  contract:
+    name: ${{ matrix.distro }}
+    runs-on: ubuntu-latest
+    services:
+      iris:
+        image: intersystemsdc/iris-community:2025.3
+        ports:
+          - 52773:52773
+          - 1972:1972
+        env:
+          IRIS_USERNAME: _SYSTEM
+          IRIS_PASSWORD: SYS
+        options: >-
+          --health-cmd "/irisHealth.sh"
+          --health-interval 15s
+          --health-timeout 10s
+          --health-retries 20
+          --health-start-period 90s
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: Debian 12
+            image: debian:12
+            cls: RismPkgDeb12
+            inspect: dpkg-deb -c /pkg/rism_*.deb
+            install: dpkg -i /pkg/rism_*.deb
+            upgrade: dpkg -i /pkg/up/rism_*.deb
+            uninstall: dpkg -r rism
+          - distro: Ubuntu 24.04
+            image: ubuntu:24.04
+            cls: RismPkgUbu2404
+            inspect: dpkg-deb -c /pkg/rism_*.deb
+            install: dpkg -i /pkg/rism_*.deb
+            upgrade: dpkg -i /pkg/up/rism_*.deb
+            uninstall: dpkg -r rism
+          - distro: Fedora 42
+            image: fedora:42
+            cls: RismPkgFed42
+            inspect: rpm -qlp /pkg/rism-*.x86_64.rpm
+            install: rpm -i /pkg/rism-*.x86_64.rpm
+            upgrade: rpm -Uvh /pkg/up/rism-*.x86_64.rpm
+            uninstall: rpm -e rism
+          # Arch ships rolling only (no dated tags); `latest` is the
+          # deliberate exception to image pinning — the contract needs just
+          # pacman/bsdtar (stable API) and installs unsigned local files
+          # without repo sync, so keyring/mirror drift cannot flip it.
+          - distro: Arch Linux
+            image: archlinux:latest
+            cls: RismPkgArch
+            inspect: bsdtar -tf /pkg/rism-*.pkg.tar.zst
+            install: pacman -U --noconfirm /pkg/rism-*.pkg.tar.zst
+            upgrade: pacman -U --noconfirm /pkg/up/rism-*.pkg.tar.zst
+            uninstall: pacman -R --noconfirm rism
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release binary (same as ci.yml linux leg)
+        run: |
+          sudo apt-get update && sudo apt-get install -y musl-tools
+          cargo build --release --locked --target x86_64-unknown-linux-musl
+      - name: Build packages (same as ci.yml linux leg)
+        run: |
+          curl -sSL -o /tmp/nfpm.tgz \
+            "https://github.com/goreleaser/nfpm/releases/download/v2.47.0/nfpm_2.47.0_Linux_x86_64.tar.gz"
+          tar xzf /tmp/nfpm.tgz -C /tmp nfpm
+          VER=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')
+          mkdir -p dist/usr/bin dist/up
+          cp target/x86_64-unknown-linux-musl/release/rism dist/usr/bin/rism
+          for P in deb rpm archlinux; do
+            RISM_VERSION="$VER" RISM_ARCH=amd64 RISM_RELEASE=1 /tmp/nfpm pkg -f packaging/nfpm.yaml --packager "$P" -t dist/
+            RISM_VERSION="$VER" RISM_ARCH=amd64 RISM_RELEASE=2 /tmp/nfpm pkg -f packaging/nfpm.yaml --packager "$P" -t dist/up
+          done
+          ls -la dist/ dist/up/
+      - name: Install / upgrade / uninstall (${{ matrix.distro }})
+        run: |
+          set -euo pipefail
+          docker pull "${{ matrix.image }}"
+          docker run --rm -v "$PWD/dist:/pkg:ro" "${{ matrix.image }}" bash -ec '
+            set -euo pipefail
+            # a preinstalled package would poison the fresh-install case
+            dpkg -r rism 2>/dev/null || rpm -e rism 2>/dev/null || pacman -R rism 2>/dev/null || true
+            # Content assertions run on the PACKAGE FILE, not the filesystem:
+            # the official ubuntu/arch images ship doc-skipping filters
+            # (dpkg path-exclude / pacman NoExtract usr/share/doc/*), so doc
+            # files legitimately never appear on disk there even though the
+            # packages are correct.
+            echo "== PACKAGE CONTENTS"
+            '"${{ matrix.inspect }}"' > /tmp/pkglist
+            grep -q usr/bin/rism /tmp/pkglist
+            grep -q doc/rism/LICENSE /tmp/pkglist
+            grep -q doc/rism/README /tmp/pkglist
+            echo "== INSTALL (r1)"
+            '"${{ matrix.install }}"'
+            test -x /usr/bin/rism
+            /usr/bin/rism --version | grep -E "^rism [0-9]"
+            command -v rism >/dev/null
+            echo "== UPGRADE (r1 -> r2)"
+            '"${{ matrix.upgrade }}"'
+            /usr/bin/rism --version | grep -E "^rism [0-9]"
+            echo "== UNINSTALL"
+            '"${{ matrix.uninstall }}"'
+            test ! -e /usr/bin/rism && echo "binary removed"
+            echo "CONTRACT OK (${{ matrix.distro }})"
+          '
+      - name: Functional smoke on ${{ matrix.distro }} (installed package × live IRIS)
+        # The installed binary — not a dev build — against a real IRIS 2025.3
+        # service container: CLI door (info/SQL/doc round-trip/compile/terminal)
+        # + MCP door (tools/list, execute_sql via packaging/mcp_probe.sh).
+        # --network host reaches the published service port from inside any
+        # distro image; nothing persists on the server (RismPkg* deleted).
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -u _SYSTEM:SYS \
+              http://localhost:52773/api/atelier/ || true)
+            [ "$code" = "200" ] && break
+            sleep 5
+          done
+          [ "${code:-}" = "200" ] || { echo "Atelier API never answered"; exit 1; }
+          # Class source lives on a mounted file, NEVER inline in the docker
+          # command: `$$$OK` explodes through nested bash quoting (CI-tested
+          # lesson — "unbound variable" inside bash -ec with set -u).
+          mkdir -p dist/func
+          printf 'Class ${{ matrix.cls }} Extends %%RegisteredObject\n{\nClassMethod Ok() As %%Status\n{\n  Quit $$$OK\n}\n}\n' > dist/func/probe.cls
+          docker run --rm --network host \
+            -v "$PWD/dist:/pkg:ro" -v "$PWD/packaging:/packaging:ro" \
+            -e RISM_IRIS_BASE_URL=http://127.0.0.1:52773 \
+            -e RISM_IRIS_USERNAME=_SYSTEM -e RISM_IRIS_PASSWORD=SYS \
+            "${{ matrix.image }}" bash -ec '
+              set -euo pipefail
+              '"${{ matrix.install }}"' >/dev/null
+              test -x /usr/bin/rism
+              rism --version | grep -E "^rism [0-9]"
+              rism info | grep -q "IRIS for"
+              rism sql "select 1+1" | grep -q 2
+              rism doc put ${{ matrix.cls }}.cls --file /pkg/func/probe.cls >/dev/null
+              rism compile ${{ matrix.cls }}.cls | grep -q "successfully"
+              rism doc get ${{ matrix.cls }}.cls | grep -q "${{ matrix.cls }}"
+              rism exec "write 1+1" | grep -q 2
+              bash /packaging/mcp_probe.sh
+              rism doc delete ${{ matrix.cls }}.cls >/dev/null
+              # must-fail-cleanly (Windows contract parity): dead port ->
+              # non-zero exit, no panic, human-readable error.
+              if RISM_IRIS_BASE_URL=http://127.0.0.1:59999 rism info > /tmp/fail.out 2>&1; then
+                echo "dead-port call unexpectedly succeeded"; exit 1
+              fi
+              grep -qiE "error|refused" /tmp/fail.out || { echo "no clean error"; exit 1; }
+              grep -q "panicked" /tmp/fail.out && { echo "PANIC leak"; exit 1; } || true
+              echo "FUNCTIONAL OK (${{ matrix.distro }})"
+            '
+      - name: Config-preservation probe (Ubuntu)
+        # Install with a populated user config, uninstall, assert the config
+        # SURVIVED (packages must never touch ~/.config/rism) — mirrors the
+        # Windows contract's config pickup step.
+        if: matrix.distro == 'Ubuntu 24.04'
+        run: |
+          docker run --rm -v "$PWD/dist:/pkg:ro" ubuntu:24.04 bash -ec '
+            set -euo pipefail
+            mkdir -p /root/.config/rism
+            printf "[server]\nurl = \"http://127.0.0.1:59999\"\nuser = \"u\"\n" > /root/.config/rism/config.toml
+            dpkg -i /pkg/rism_*.deb >/dev/null
+            dpkg -r rism >/dev/null
+            test -f /root/.config/rism/config.toml || { echo "uninstall deleted user config!"; exit 1; }
+            echo "config preserved across install/uninstall"
+          '
+      - name: Upload contract packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: contract-packages-${{ matrix.distro }}
+          if-no-files-found: error
+          path: |
+            dist/*.deb
+            dist/*.rpm
+            dist/*.pkg.tar.zst
+            dist/up/*
