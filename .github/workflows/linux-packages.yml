@@ -200,4 +200,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: contract-packages-${{ matrix.distro }}
-          path: dist/*
+          if-no-files-found: error
+          path: |
+            dist/*.deb
+            dist/*.rpm
+            dist/*.pkg.tar.zst
+            dist/up/*

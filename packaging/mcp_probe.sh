@@ -15,11 +15,13 @@ trap 'rm -f "$tmp"' EXIT
   printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"execute_sql","arguments":{"query":"select 1 as ok"}}}'
 } | timeout 60 rism mcp 2>/dev/null > "$tmp" || { echo "MCP probe: rism mcp failed"; exit 1; }
 
-# tools/list answer must list all 25 tools (count "name" fields)
+# tools/list answer must list exactly 25 tools. inputSchema is the exact
+# marker (one per tool); "name" appears 33x on the wire (extra mentions in
+# descriptions/schemas — never count those).
 tools_line=$(grep -E '"id"[[:space:]]*:[[:space:]]*2' "$tmp" | head -1)
-n=$(printf '%s' "$tools_line" | grep -o '"name"' | wc -l)
-if [ "${n:-0}" -lt 25 ]; then
-  echo "MCP probe: expected >=25 tools, counted $n"
+n=$(printf '%s' "$tools_line" | grep -o '"inputSchema"' | wc -l)
+if [ "${n:-0}" -ne 25 ]; then
+  echo "MCP probe: expected 25 tools, counted $n"
   exit 1
 fi
 
