@@ -21,14 +21,15 @@ PATH:
 
 | Platform | File |
 |---|---|
-| Linux (x86-64) | `rism-<version>-linux-x86_64.tar.gz` |
+| Linux (x86-64) | `rism_<version>_amd64.deb` · `rism-<version>-1.x86_64.rpm` · `rism-<version>-1-x86_64.pkg.tar.zst` · `rism-<version>-linux-x86_64.tar.gz` (see [Linux Packages](linux-packages.md)) |
 | Windows (x86-64) | `rism-<version>-windows-x86_64.zip` — or `rism-<version>-setup.exe` installer (PATH task, uninstall entry; see [Windows Store](windows-store.md)) |
 | Windows (ARM64 / 32-bit) | `rism-<version>-windows-arm64.zip` / `-windows-i686.zip` |
 
 Supported platforms: Linux (x86-64) and Windows (x64 / ARM64 / 32-bit).
 
-Every build is statically linked against `rustls` (no system OpenSSL/MSVC
-redistributable needed) and runs on any stock install of that OS.
+The Linux binary is fully static (`x86_64-unknown-linux-musl` + `rustls`):
+no glibc version floor, no OpenSSL, no runtime of any kind — it runs on any
+distro from the last decade. Windows builds need no MSVC redistributable.
 
 === From source ===
 
