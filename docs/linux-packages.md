@@ -59,9 +59,11 @@ kills or fails the transaction.
 `.github/workflows/linux-packages.yml` runs the full
 install → upgrade → uninstall contract inside real `debian:12`,
 `ubuntu:24.04`, `fedora:42`, and `archlinux:latest` containers, plus a
-config-preservation probe, on every change to `packaging/**` or the
-pipelines — the same gate philosophy as
-[Windows installer contract](windows-store.md). Package *contents* are
+**functional smoke** — the *installed* binary against a live IRIS 2025.3
+service container (`rism info` / SQL / doc put+compile+get / terminal / the
+MCP stdio door via `packaging/mcp_probe.sh`) — and a config-preservation
+probe, on every change to `packaging/**` or the pipelines — the same gate
+philosophy as [Windows installer contract](windows-store.md). Package *contents* are
 asserted against the package listing (`dpkg-deb -c` / `rpm -qlp` /
 `bsdtar -tf`), not the container filesystem: the official Debian/Ubuntu
 images ship a `path-exclude=/usr/share/doc/*` dpkg filter and the Arch image
