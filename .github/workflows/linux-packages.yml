@@ -9,6 +9,8 @@ name: Linux Packages
 #                    three managers (same-version reinstall is a no-op on
 #                    dpkg/pacman and a refusal on rpm)
 #   uninstall     -> binary AND docs gone; user config must never be touched
+#   functional    -> reinstalled binary against a LIVE IRIS service container:
+#                    info/SQL/doc-round-trip/terminal/MCP door all work
 #
 # Artifact naming and version handling follow packaging/nfpm.yaml; the build
 # step is byte-identical to ci.yml's linux release leg so the contract tests
@@ -39,30 +41,49 @@ jobs:
   contract:
     name: ${{ matrix.distro }}
     runs-on: ubuntu-latest
+    services:
+      iris:
+        image: intersystemsdc/iris-community:2025.3
+        ports:
+          - 52773:52773
+          - 1972:1972
+        env:
+          IRIS_USERNAME: _SYSTEM
+          IRIS_PASSWORD: SYS
+        options: >-
+          --health-cmd "/irisHealth.sh"
+          --health-interval 15s
+          --health-timeout 10s
+          --health-retries 20
+          --health-start-period 90s
     strategy:
       fail-fast: false
       matrix:
         include:
           - distro: Debian 12
             image: debian:12
+            cls: RismPkgDeb12
             inspect: dpkg-deb -c /pkg/rism_*.deb
             install: dpkg -i /pkg/rism_*.deb
             upgrade: dpkg -i /pkg/up/rism_*.deb
             uninstall: dpkg -r rism
           - distro: Ubuntu 24.04
             image: ubuntu:24.04
+            cls: RismPkgUbu2404
             inspect: dpkg-deb -c /pkg/rism_*.deb
             install: dpkg -i /pkg/rism_*.deb
             upgrade: dpkg -i /pkg/up/rism_*.deb
             uninstall: dpkg -r rism
           - distro: Fedora 42
             image: fedora:42
+            cls: RismPkgFed42
             inspect: rpm -qlp /pkg/rism-*.x86_64.rpm
             install: rpm -i /pkg/rism-*.x86_64.rpm
             upgrade: rpm -Uvh /pkg/up/rism-*.x86_64.rpm
             uninstall: rpm -e rism
           - distro: Arch Linux
             image: archlinux:latest
+            cls: RismPkgArch
             inspect: bsdtar -tf /pkg/rism-*.pkg.tar.zst
             install: pacman -U --noconfirm /pkg/rism-*.pkg.tar.zst
             upgrade: pacman -U --noconfirm /pkg/up/rism-*.pkg.tar.zst
@@ -121,6 +142,45 @@ jobs:
             test ! -e /usr/bin/rism && echo "binary removed"
             echo "CONTRACT OK (${{ matrix.distro }})"
           '
+      - name: Functional smoke on ${{ matrix.distro }} (installed package × live IRIS)
+        # The installed binary — not a dev build — against a real IRIS 2025.3
+        # service container: CLI door (info/SQL/doc round-trip/compile/terminal)
+        # + MCP door (tools/list, execute_sql via packaging/mcp_probe.sh).
+        # --network host reaches the published service port from inside any
+        # distro image; nothing persists on the server (RismPkg* deleted).
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -u _SYSTEM:SYS \
+              http://localhost:52773/api/atelier/ || true)
+            [ "$code" = "200" ] && break
+            sleep 5
+          done
+          [ "${code:-}" = "200" ] || { echo "Atelier API never answered"; exit 1; }
+          # Class source lives on a mounted file, NEVER inline in the docker
+          # command: `$$$OK` explodes through nested bash quoting (CI-tested
+          # lesson — "unbound variable" inside bash -ec with set -u).
+          mkdir -p dist/func
+          printf 'Class ${{ matrix.cls }} Extends %%RegisteredObject\n{\nClassMethod Ok() As %%Status\n{\n  Quit $$$OK\n}\n}\n' > dist/func/probe.cls
+          docker run --rm --network host \
+            -v "$PWD/dist:/pkg:ro" -v "$PWD/packaging:/packaging:ro" \
+            -e RISM_IRIS_BASE_URL=http://127.0.0.1:52773 \
+            -e RISM_IRIS_USERNAME=_SYSTEM -e RISM_IRIS_PASSWORD=SYS \
+            "${{ matrix.image }}" bash -ec '
+              set -euo pipefail
+              '"${{ matrix.install }}"' >/dev/null
+              test -x /usr/bin/rism
+              rism --version | grep -E "^rism [0-9]"
+              rism info | grep -q "IRIS for"
+              rism sql "select 1+1" | grep -q 2
+              rism doc put ${{ matrix.cls }}.cls --file /pkg/func/probe.cls >/dev/null
+              rism compile ${{ matrix.cls }}.cls | grep -q "successfully"
+              rism doc get ${{ matrix.cls }}.cls | grep -q "${{ matrix.cls }}"
+              rism exec "write 1+1" | grep -q 2
+              bash /packaging/mcp_probe.sh
+              rism doc delete ${{ matrix.cls }}.cls >/dev/null
+              echo "FUNCTIONAL OK (${{ matrix.distro }})"
+            '
       - name: Config-preservation probe (Ubuntu)
         # Install with a populated user config, uninstall, assert the config
         # SURVIVED (packages must never touch ~/.config/rism) — mirrors the
