@@ -25,9 +25,11 @@ if [ "${n:-0}" -ne 25 ]; then
   exit 1
 fi
 
-# execute_sql answer must contain a truthy row payload
-if ! grep -E '"id"[[:space:]]*:[[:space:]]*3' "$tmp" | grep -q 'ok'; then
-  echo "MCP probe: execute_sql did not answer"
+# execute_sql answer must be a successful result carrying the ok column.
+# isError is the authoritative flag — a substring like "ok" in an error
+# message ("could not open...") must never pass this gate.
+if ! grep -E '"id"[[:space:]]*:[[:space:]]*3' "$tmp" | grep -q '"isError":false'; then
+  echo "MCP probe: execute_sql did not answer cleanly"
   exit 1
 fi
 
