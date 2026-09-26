@@ -1,10 +1,16 @@
-# Rism
+<div align="center">
+  <img src="logo.svg" width="200" alt="Rism Logo" />
 
-![CI](https://github.com/AdriaERNI/Rism/actions/workflows/ci.yml/badge.svg)
-![Docs](https://github.com/AdriaERNI/Rism/actions/workflows/pages.yml/badge.svg)
-![MSRV](https://img.shields.io/badge/rust-1.85%2B-blue)
-![License](https://img.shields.io/badge/license-AGPL--3.0-blue)
-![IRIS](https://img.shields.io/badge/IRIS-2025.3-orange)
+  # Rism
+
+  **Rism is Prism with Rust.**
+
+  [![CI](https://github.com/AdriaERNI/Rism/actions/workflows/ci.yml/badge.svg)](https://github.com/AdriaERNI/Rism/actions/workflows/ci.yml)
+  [![Docs](https://github.com/AdriaERNI/Rism/actions/workflows/pages.yml/badge.svg)](https://adriaerni.github.io/Rism/)
+  ![MSRV](https://img.shields.io/badge/rust-1.85%2B-blue)
+  ![License](https://img.shields.io/badge/license-AGPL--3.0-blue)
+  ![IRIS](https://img.shields.io/badge/IRIS-2025.3-orange)
+</div>
 
 Rism is **Prism with Rust** — an MCP server and CLI for InterSystems IRIS
 with **25 tools** and zero server-side helper code.
