@@ -13,7 +13,6 @@ Location (per OS):
 | OS | Path |
 |---|---|
 | Linux | `~/.config/rism/config.toml` (honors `$XDG_CONFIG_HOME`) |
-| macOS | `~/Library/Application Support/rism/config.toml` |
 | Windows | `%APPDATA%\rism\config.toml` |
 
 Example:

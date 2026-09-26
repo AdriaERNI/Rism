@@ -120,44 +120,70 @@ jobs:
           $RISM_BIN doc delete RismCI.Smoke.cls
           echo "LIVE SMOKE OK"
 
-  # Tagged builds: three native release binaries, packaged by `release`.
+  # Tagged builds: Linux + Windows (x64/i686/arm64) binaries + installer,
+  # packaged by `release`.
   build:
-    name: Build ${{ matrix.os }}
+    name: Build ${{ matrix.label }}
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [lint, test]
     strategy:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact: rism-x86_64-unknown-linux-gnu
-            bin: target/release/rism
+            label: linux-x86_64
+            target: x86_64-unknown-linux-gnu
+            ext: tar.gz
           - os: windows-latest
-            artifact: rism-x86_64-pc-windows-msvc.exe
-            bin: target/release/rism.exe
-          - os: macos-latest
-            artifact: rism-aarch64-apple-darwin
-            bin: target/release/rism
+            label: windows-x86_64
+            target: x86_64-pc-windows-msvc
+            ext: zip
+          - os: windows-latest
+            label: windows-i686
+            target: i686-pc-windows-msvc
+            ext: zip
+          - os: windows-latest
+            label: windows-arm64
+            target: aarch64-pc-windows-msvc
+            ext: zip
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release --locked
-      - name: Build Inno Setup installer (Windows)
-        if: matrix.os == 'windows-latest'
+      # Hosted runners ship the full MSVC toolset (x64 host + x86/arm64 cross
+      # libs) — plain cargo cross-target builds, no linker overrides needed.
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Build Inno Setup installer (Windows x64 only)
+        if: matrix.label == 'windows-x86_64'
         shell: pwsh
         run: |
           choco install innosetup -y --no-progress
           $iscc = Get-ChildItem "C:\Program Files*\Inno Setup*\ISCC.exe" | Select-Object -First 1
           if (-not $iscc) { Write-Error "ISCC.exe not found"; exit 1 }
           $ver = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
-          & $iscc.FullName "/DAppVersion=$ver" installer/rism.iss
+          & $iscc.FullName "/DAppVersion=$ver" "/DAppSource=..\..\target\${{ matrix.target }}\release" installer/rism.iss
           if (-not (Test-Path "installer\Output\rism-$ver-setup.exe")) { Write-Error "installer missing"; exit 1 }
+      - name: Package archive
+        shell: bash
+        run: |
+          VER=${GITHUB_REF_NAME#v}
+          case "${{ matrix.os }}" in
+            windows*) BIN="target/${{ matrix.target }}/release/rism.exe" ;;
+            *)        BIN="target/${{ matrix.target }}/release/rism" ;;
+          esac
+          if [ "${{ matrix.ext }}" = "zip" ]; then
+            cp "$BIN" rism.exe && 7z a -tzip "rism-${VER}-${{ matrix.label }}.zip" rism.exe && rm rism.exe
+          else
+            tar -czf "rism-${VER}-${{ matrix.label }}.tar.gz" -C "$(dirname "$BIN")" "$(basename "$BIN")"
+          fi
       - uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.artifact }}
+          name: rism-${{ github.ref_name }}-${{ matrix.label }}${{ matrix.label == 'windows-x86_64' && '-installer' || '' }}
+          if-no-files-found: error
           path: |
-            ${{ matrix.bin }}
+            rism-*
             installer/Output/*.exe
 
   release:

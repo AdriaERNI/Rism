@@ -14,7 +14,7 @@ the documented REST + WebSocket endpoints your IRIS already exposes.
 
 | | Rism |
 |---|---|
-| **Distribution** | one static binary (Linux, Windows, macOS) — no Python, no runtime installs |
+| **Distribution** | one static binary (Linux + Windows) — no Python, no runtime installs |
 | **Two doors, one core** | `rism <command>` for humans and scripts; `rism mcp` for AI clients (Claude Desktop, Hermes, any MCP client) |
 | **Zero footprint on the server** | every tool rides the Atelier API (`/api/atelier/…`) and the terminal WebSocket — nothing is installed inside IRIS |
 | **Prism parity** | behavior-matched port of [Prism](https://github.com/AdriaERNI/Prism)'s 25 tools, log format, and debugger, in ~8k lines of Rust |

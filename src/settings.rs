@@ -93,9 +93,8 @@ impl Settings {
     }
 
     /// Config file location — one convention on every OS:
-    /// `<user config dir>/rism/config.toml`, where the config dir honours
-    /// `$XDG_CONFIG_HOME` on Linux, `%APPDATA%` on Windows and
-    /// `~/Library/Application Support` on macOS (`BaseDirs::config_dir`).
+    /// `<user config dir>/rism/config.toml` (`BaseDirs::config_dir`:
+    /// `$XDG_CONFIG_HOME` on Linux, `%APPDATA%` on Windows).
     /// `ProjectDirs` is deliberately NOT used: it nests the organization
     /// name and a `config` subfolder, which would make the Windows path
     /// `%APPDATA%\github\rism\config\config.toml`.
