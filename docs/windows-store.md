@@ -40,11 +40,15 @@ installer or the Rust sources:
    the `#[tool]` definitions in code; every tool name has a section in
    `docs/mcp-tools.md`; config paths match `settings.rs`; CHANGELOG top ==
    `Cargo.toml`.
-3. **Real install contract (windows-latest + live IRIS service)** — silent
-   install → `rism --version` → `rism info` + `rism sql` against the fresh
-   server → `%APPDATA%` config pickup → **in-place upgrade** → **uninstall** →
-   verify absence (exe, PATH entry, Start-menu). The artifact proven here is
-   byte-for-byte the artifact the release workflow ships.
+3. **Real install contract (windows-latest)** — silent install → machine PATH
+   + `Get-Command` resolution → VERSIONINFO `FileVersion` → dead-port probe
+   must fail cleanly → `%APPDATA%` config pickup → **in-place upgrade**
+   (exit code 0 **or 100** per [installer exit codes](installer-exit-codes.md))
+   → **uninstall** → verify absence (exe + PATH entry gone). Server-free by
+   design: hosted Windows runners cannot run Linux containers, so live-IRIS
+   correctness is proven on the Linux leg (`ci.yml` live-smoke) while this leg
+   proves the *installer*. The artifact tested here is byte-for-byte the one
+   the release workflow ships.
 
 Green here is a hard prerequisite for Store submission — the Store certification
 report repeats exactly these scenarios.
@@ -54,6 +58,8 @@ report repeats exactly these scenarios.
 | Item | Status |
 |---|---|
 | Installer passes silent install/upgrade/uninstall on real Windows | ✅ automated in CI |
+| Silent-mode switch provided for the Store (`/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-`) | ✅ documented in [installer exit codes](installer-exit-codes.md) |
+| Exit-code mapping (all 10 Store scenarios, unique values) | ✅ [installer exit codes](installer-exit-codes.md) + wired in `installer/rism.iss` |
 | App has a versioned, reproducible release build | ✅ `ci.yml` tag builds |
 | Publisher identity (Partner Center account, `Adria Sanchez`) | ⏳ one-time manual setup |
 | **Store signature** (EV cert, or Partner Center submission-time signing) | ⏳ decision pending |

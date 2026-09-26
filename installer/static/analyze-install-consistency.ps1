@@ -22,6 +22,14 @@ foreach ($k in 'AppId','AppName','AppVersion','DefaultDirName','UninstallDisplay
 # 2. AppId is a stable GUID form
 if ($iss -match 'AppId=\{\{[0-9A-F-]+\}') { Ok 'AppId GUID form' } else { Fail 'AppId not a {{GUID} literal' }
 
+# 2b. The 'Application already exists' detection keys on the AppId — a GUID
+#     edited only on one side silently breaks Store scenario 100.
+$guid = [regex]::Match($iss, 'AppId=\{\{([0-9A-F-]+)\}').Groups[1].Value
+$keys = [regex]::Matches($iss, 'Uninstall\\\{([0-9A-F-]+)\}_is1') | ForEach-Object { $_.Groups[1].Value }
+if ($keys.Count -eq 0) { Fail 'no uninstall-key detection in [Code]' }
+elseif ($keys | Where-Object { $_ -ne $guid }) { Fail "uninstall key GUID(s) drifted from AppId: $(($keys | Where-Object { $_ -ne $guid }) -join ',')" }
+else { Ok "uninstall-key GUID == AppId ($guid)" }
+
 # 3. Every referenced asset file exists (.iss paths are relative to installer/)
 $inst = Split-Path $PSScriptRoot -Parent
 foreach ($m in [regex]::Matches($iss, '(?m)^(?:SetupIconFile|LicenseFile|WizardImageFile|WizardSmallImageFile|Source)\s*=\s*([^;]+?)\s*(?:;|$)')) {

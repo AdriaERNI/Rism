@@ -138,7 +138,12 @@ jobs:
         run: |
           $p = Start-Process -FilePath "installer\Output\rism-$env:RISM_VERSION-setup.exe" `
             -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { Write-Error "upgrade exit $($p.ExitCode)"; exit 1 }
+          # contract (docs/installer-exit-codes.md): 0 = fresh run to completion,
+          # 100 = GetCustomSetupExitCode 'Application already exists' (this IS
+          # an upgrade over a registered copy) — both prove success
+          if (($p.ExitCode -ne 0) -and ($p.ExitCode -ne 100)) {
+            Write-Error "upgrade exit $($p.ExitCode) not in (0,100)"; exit 1 }
+          Write-Host "upgrade exit $($p.ExitCode) conforms"
           & "$env:ProgramFiles\Rism\rism.exe" --version
 
       - name: Uninstall (silent) + absence checks

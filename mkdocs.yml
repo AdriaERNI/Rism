@@ -51,4 +51,5 @@ nav:
   - Debugger: debugger.md
   - Development: development.md
   - Windows Store: windows-store.md
+  - Installer Exit Codes: installer-exit-codes.md
   - Changelog: CHANGELOG.md
