@@ -3,7 +3,7 @@
 All notable changes to Rism. Versioning follows
 [Git Flow](development.md): `release/vX.Y.Z` → `main` → tag.
 
-## [0.1.0] — unreleased
+## [0.1.0] — 2026-09-26
 
 ### Added
 - **Core**: MCP server (`rism mcp`, rmcp over stdio) + full CLI (`rism <cmd>`)

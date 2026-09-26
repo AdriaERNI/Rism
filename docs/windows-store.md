@@ -24,7 +24,8 @@ Layout:
 ```
 installer/
   rism.iss                      # the script
-  assets/                       # logo.ico + wizard bitmaps
+  assets/                       # logo.ico (Prism's shield, byte-identical —
+                                # deliberate sibling branding) + wizard bitmaps
   static/analyze-install-consistency.ps1
   static/analyze-docs-drift.ps1
 ```

@@ -8,6 +8,9 @@ fn main() {
     res.set("FileDescription", "Prism with Rust — IRIS CLI + MCP server");
     res.set("CompanyName", "Adria Sanchez");
     res.set("LegalCopyright", "AGPL-3.0-or-later");
+    // Same shield as Prism (installer/assets/logo.ico) on rism.exe itself,
+    // per "Rism is Prism with Rust" branding.
+    res.set_icon("installer/assets/logo.ico");
     // FileVersion/ProductVersion STRINGS (what VersionInfo.FileVersion reads
     // back in PowerShell) are NOT derived from FixedFileInfo — set explicitly.
     res.set("FileVersion", env!("CARGO_PKG_VERSION"));
