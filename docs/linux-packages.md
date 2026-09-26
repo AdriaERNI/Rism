@@ -61,7 +61,13 @@ install → upgrade → uninstall contract inside real `debian:12`,
 `ubuntu:24.04`, `fedora:42`, and `archlinux:latest` containers, plus a
 config-preservation probe, on every change to `packaging/**` or the
 pipelines — the same gate philosophy as
-[Windows installer contract](windows-store.md).
+[Windows installer contract](windows-store.md). Package *contents* are
+asserted against the package listing (`dpkg-deb -c` / `rpm -qlp` /
+`bsdtar -tf`), not the container filesystem: the official Debian/Ubuntu
+images ship a `path-exclude=/usr/share/doc/*` dpkg filter and the Arch image
+a pacman `NoExtract` for the same path — a doc-slimming choice of the image
+maintainers, so files the package provably owns legitimately never appear on
+disk there.
 
 ## Packaging internals
 
