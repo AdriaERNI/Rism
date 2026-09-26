@@ -111,6 +111,10 @@ service container (everything it creates is `RismCI.*` and deleted after).
 
 ## Releases
 
-Tags `v*` build Linux/Windows binaries and open a GitHub Release from
-CI. Stable releases follow Git Flow (`release/vX.Y.Z` from `development` →
-PR to `main` → tag); `-pre` tags publish as prereleases.
+Tags `v*` build Linux and Windows binaries and open a GitHub Release from
+CI. Linux ships native `.deb` / `.rpm` / pacman packages (static musl
+binary); Windows ships a zip per architecture plus a silent-capable
+`.exe` installer. Stable releases follow Git Flow (`release/vX.Y.Z` from
+`development` → PR to `main` → tag); `-pre` tags publish as prereleases.
+See [docs/linux-packages.md](docs/linux-packages.md) and
+[docs/windows-store.md](docs/windows-store.md).

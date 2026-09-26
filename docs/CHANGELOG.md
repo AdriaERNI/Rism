@@ -3,6 +3,18 @@
 All notable changes to Rism. Versioning follows
 [Git Flow](development.md): `release/vX.Y.Z` → `main` → tag.
 
+## [Unreleased]
+
+### Added
+- **Linux packages**: native `.deb`, `.rpm`, and pacman (`.pkg.tar.zst`)
+  artifacts built from one `packaging/nfpm.yaml` (nfpm) on the release tag,
+  installed from the GitHub Release. The Linux binary moved to the fully
+  static `x86_64-unknown-linux-musl` target — no glibc floor, runs on any
+  supported distro. A new `linux-packages.yml` contract proves
+  install → upgrade → uninstall + config preservation inside real
+  `debian:12`, `ubuntu:24.04`, `fedora:42`, and `archlinux:latest`
+  containers. See [Linux Packages](linux-packages.md).
+
 ## [0.1.0] — 2026-09-26
 
 ### Added
