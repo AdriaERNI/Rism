@@ -81,6 +81,10 @@ jobs:
             install: rpm -i /pkg/rism-*.x86_64.rpm
             upgrade: rpm -Uvh /pkg/up/rism-*.x86_64.rpm
             uninstall: rpm -e rism
+          # Arch ships rolling only (no dated tags); `latest` is the
+          # deliberate exception to image pinning — the contract needs just
+          # pacman/bsdtar (stable API) and installs unsigned local files
+          # without repo sync, so keyring/mirror drift cannot flip it.
           - distro: Arch Linux
             image: archlinux:latest
             cls: RismPkgArch
@@ -179,6 +183,13 @@ jobs:
               rism exec "write 1+1" | grep -q 2
               bash /packaging/mcp_probe.sh
               rism doc delete ${{ matrix.cls }}.cls >/dev/null
+              # must-fail-cleanly (Windows contract parity): dead port ->
+              # non-zero exit, no panic, human-readable error.
+              if RISM_IRIS_BASE_URL=http://127.0.0.1:59999 rism info > /tmp/fail.out 2>&1; then
+                echo "dead-port call unexpectedly succeeded"; exit 1
+              fi
+              grep -qiE "error|refused" /tmp/fail.out || { echo "no clean error"; exit 1; }
+              grep -q "panicked" /tmp/fail.out && { echo "PANIC leak"; exit 1; } || true
               echo "FUNCTIONAL OK (${{ matrix.distro }})"
             '
       - name: Config-preservation probe (Ubuntu)
