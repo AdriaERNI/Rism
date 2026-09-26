@@ -64,7 +64,13 @@ if ($settings -match 'BaseDirs::new\(\)[\s\S]{0,120}config_dir\(\)\.join\("rism"
 $cargoVer = (Select-String -Path (Join-Path $root 'Cargo.toml') -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
 $chlogPath = Join-Path $root 'docs\CHANGELOG.md'
 if (Test-Path $chlogPath) {
-    $head = (Get-Content $chlogPath -TotalCount 8 | Select-String '## \[?v?([0-9][^\] ]*)' | Select-Object -First 1)
+    # Keep-a-Changelog layout allowed: a single [Unreleased] heading may sit
+    # above the newest version heading; nothing else may. First version
+    # heading must still equal Cargo.toml (the drift this gate exists for).
+    $heads = @(Get-Content $chlogPath | Select-String '^## ')
+    $first = $heads | Select-Object -First 1
+    if ($first -and $first.Line -match '^## \[?Unreleased') { $heads = $heads | Select-Object -Skip 1 }
+    $head = $heads | Select-String '## \[?v?([0-9][^\] ]*)' | Select-Object -First 1
     if ($head) {
         $top = $head.Matches[0].Groups[1].Value
         if ($top -eq $cargoVer) { Ok "CHANGELOG top $top == Cargo.toml $cargoVer" }
