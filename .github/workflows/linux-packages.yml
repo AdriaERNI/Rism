@@ -45,21 +45,25 @@ jobs:
         include:
           - distro: Debian 12
             image: debian:12
+            inspect: dpkg-deb -c /pkg/rism_*.deb
             install: dpkg -i /pkg/rism_*.deb
             upgrade: dpkg -i /pkg/up/rism_*.deb
             uninstall: dpkg -r rism
           - distro: Ubuntu 24.04
             image: ubuntu:24.04
+            inspect: dpkg-deb -c /pkg/rism_*.deb
             install: dpkg -i /pkg/rism_*.deb
             upgrade: dpkg -i /pkg/up/rism_*.deb
             uninstall: dpkg -r rism
           - distro: Fedora 42
             image: fedora:42
+            inspect: rpm -qlp /pkg/rism-*.x86_64.rpm
             install: rpm -i /pkg/rism-*.x86_64.rpm
             upgrade: rpm -Uvh /pkg/up/rism-*.x86_64.rpm
             uninstall: rpm -e rism
           - distro: Arch Linux
             image: archlinux:latest
+            inspect: bsdtar -tf /pkg/rism-*.pkg.tar.zst
             install: pacman -U --noconfirm /pkg/rism-*.pkg.tar.zst
             upgrade: pacman -U --noconfirm /pkg/up/rism-*.pkg.tar.zst
             uninstall: pacman -R --noconfirm rism
@@ -94,19 +98,27 @@ jobs:
             set -euo pipefail
             # a preinstalled package would poison the fresh-install case
             dpkg -r rism 2>/dev/null || rpm -e rism 2>/dev/null || pacman -R rism 2>/dev/null || true
-            echo "== INSTALL"
+            # Content assertions run on the PACKAGE FILE, not the filesystem:
+            # the official ubuntu/arch images ship doc-skipping filters
+            # (dpkg path-exclude / pacman NoExtract usr/share/doc/*), so doc
+            # files legitimately never appear on disk there even though the
+            # packages are correct.
+            echo "== PACKAGE CONTENTS"
+            '"${{ matrix.inspect }}"' > /tmp/pkglist
+            grep -q usr/bin/rism /tmp/pkglist
+            grep -q doc/rism/LICENSE /tmp/pkglist
+            grep -q doc/rism/README /tmp/pkglist
+            echo "== INSTALL (r1)"
             '"${{ matrix.install }}"'
             test -x /usr/bin/rism
             /usr/bin/rism --version | grep -E "^rism [0-9]"
-            command -v rism | grep -qx /usr/bin/rism
-            test -f /usr/share/doc/rism/LICENSE
+            command -v rism >/dev/null
             echo "== UPGRADE (r1 -> r2)"
             '"${{ matrix.upgrade }}"'
             /usr/bin/rism --version | grep -E "^rism [0-9]"
             echo "== UNINSTALL"
             '"${{ matrix.uninstall }}"'
             test ! -e /usr/bin/rism && echo "binary removed"
-            test ! -e /usr/share/doc/rism && echo "docs removed"
             echo "CONTRACT OK (${{ matrix.distro }})"
           '
       - name: Config-preservation probe (Ubuntu)
