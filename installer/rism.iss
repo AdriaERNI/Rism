@@ -63,6 +63,61 @@ Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Name: "{group}\{#MyAppName} documentation"; Filename: "{#MyAppURL}"
 
 [Code]
+{ --------------------------------------------------------------------------- }
+{ Microsoft Store return-code mapping (EXE exit codes, all values unique).    }
+{                                                                             }
+{   Scenario                       EXE code   Basis                           }
+{   Installation successful            0      Inno documented (run to         }
+{                                             completion)                     }
+{   Installation already in progress   1      Inno documented (Setup fails to }
+{                                             initialize). Reserved: no       }
+{                                             SetupMutex is wired, so a       }
+{                                             second instance runs freely.    }
+{   Installation cancelled by user     2      Inno documented (Cancel before  }
+{                                             install started)                }
+{   Miscellaneous install failure      3,5,6  Inno documented (prepare-phase  }
+{                                             fatal error; user Abort during  }
+{                                             install; debugger terminate)    }
+{   Miscellaneous install failure      4      Inno documented (fatal error    }
+{                                             during the actual installation) }
+{   Disk space is full                 7      Inno documented                 }
+{   Reboot required                    8      Inno documented                 }
+{   Application already exists       100      custom (GetCustomSetupExitCode  }
+{                                             below)                          }
+{   Network failure                  101      reserved (installer fetches no  }
+{                                             remote payload)                 }
+{   Package rejected                 102      reserved (device security        }
+{                                             policy hook, none today)        }
+{                                                                             }
+{ Reference: https://jrsoftware.org/ishelp/topic_setupexitcodes.htm           }
+{ Full per-code contract: docs/installer-exit-codes.md                        }
+{ --------------------------------------------------------------------------- }
+var
+  WasPreviouslyInstalled: Boolean; { snapshot taken in InitializeSetup }
+
+{ Application already exists? The uninstall key Inno maintains for this      }
+{ AppId is present under either hive (per-machine or dialog-chose-per-user). }
+function DetectApplicationExists: Boolean;
+var
+  S: string;
+begin
+  Result :=
+    RegQueryStringValue(HKLM,
+      'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{D1C0A9E4-2B6F-4A3D-8E57-0C6B9F1A4E3D}_is1',
+      'DisplayName', S) or
+    RegQueryStringValue(HKCU,
+      'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{D1C0A9E4-2B6F-4A3D-8E57-0C6B9F1A4E3D}_is1',
+      'DisplayName', S);
+end;
+
+function InitializeSetup: Boolean;
+begin
+  { Snapshot BEFORE Setup writes anything — the uninstall key is created     }
+  { during the installation itself.                                          }
+  WasPreviouslyInstalled := DetectApplicationExists;
+  Result := True;
+end;
+
 { PATH via [Code], not [Registry]: Inno cannot safely restore a *Path* value }
 { on uninstall: olddata round-trips broke the CI absence check. Pattern       }
 { ported from Prism prism.iss EnvAddPath/EnvRemovePath (Store-tested).         }
@@ -124,6 +179,18 @@ procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usPostUninstall then
     EnvRemovePath(ExpandConstant('{app}'));
+end;
+
+{ Report the scenario once Setup has run to completion. Inno calls this      }
+{ only when the exit code would otherwise be 0, so this is how the custom    }
+{ codes reach the Microsoft Store mapping. Windows codes are unsigned, so    }
+{ never return a negative value here.                                        }
+function GetCustomSetupExitCode: Integer;
+begin
+  if WasPreviouslyInstalled then
+    Result := 100            { Application already exists on the device }
+  else
+    Result := 0;             { Installation successful }
 end;
 
 [Run]
