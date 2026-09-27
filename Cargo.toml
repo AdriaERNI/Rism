@@ -1,6 +1,6 @@
 [package]
 name = "rism"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Rust MCP server and CLI for InterSystems IRIS development"
 license = "AGPL-3.0"

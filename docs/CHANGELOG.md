@@ -5,6 +5,8 @@ All notable changes to Rism. Versioning follows
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-09-27
+
 ### Added
 - **Linux packages**: native `.deb`, `.rpm`, and pacman (`.pkg.tar.zst`)
   artifacts built from one `packaging/nfpm.yaml` (nfpm) on the release tag,
