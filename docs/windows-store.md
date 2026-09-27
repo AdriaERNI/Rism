@@ -39,8 +39,8 @@ installer or the Rust sources:
    PATH contract present, no stale vendor strings.
 2. **Docs drift (Linux, cheap)** — every tool-count claim in the docs matches
    the `#[tool]` definitions in code; every tool name has a section in
-   `docs/mcp-tools.md`; config paths match `settings.rs`; CHANGELOG top ==
-   `Cargo.toml`.
+   `docs/mcp-tools.md`; config paths match `settings.rs`; `Cargo.toml`
+   version is semver (release notes come from git-cliff, `cliff.toml`).
 3. **Real install contract (windows-latest)** — silent install → machine PATH
    + `Get-Command` resolution → VERSIONINFO `FileVersion` → dead-port probe
    must fail cleanly → `%APPDATA%` config pickup → **in-place upgrade**

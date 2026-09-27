@@ -43,7 +43,7 @@ Fresh-server lessons baked into the workflow (keep them):
 | `ci.yml` → Lint | PR / push | `cargo fmt --check`, `clippy -D warnings` |
 | `ci.yml` → Test | PR / push | `cargo test --locked` (Linux + Windows) |
 | `ci.yml` → Live smoke (fresh IRIS) | PR / push | end-to-end on clean 2025.3 |
-| `ci.yml` → Build + GitHub Release | tag `v*` | signed binaries, winx64/setup.exe, checksums |
+| `ci.yml` → Build + GitHub Release | tag `v*` | signed binaries, winx64/setup.exe, checksums, git-cliff release notes |
 | `pages.yml` | push `main` | `mkdocs build --strict` → GitHub Pages |
 
 Note: clippy on GitHub's current stable flags stricter lints than pinned
@@ -54,14 +54,34 @@ stable before pushing.
 ## Git Flow
 
 - `development` — daily work, always green.
-- `release/vX.Y.Z` — cut from `development`; version bump + `docs/CHANGELOG.md`
-  entry happen here.
+- `release/vX.Y.Z` — cut from `development`; the only commit here is the
+  version bump (`Cargo.toml` + `Cargo.lock`). There is no hand-maintained
+  changelog: release notes are generated from commit history (see below).
 - PR `release/vX.Y.Z` → `main`; merge (web UI) → tag `vX.Y.Z` → CI builds all
-  platforms and publishes the GitHub Release.
-- After release: `main` is hard-reset onto `development` (trees identical — not
-  a rebase), so `development` contains the release commits.
+  platforms and publishes the GitHub Release with git-cliff notes.
+- After release: sync `main` → `development` with a PR merged as a
+  **merge commit** ("Create a merge commit" — never rebase/squash: main's
+  commits are the pre-rebase twins of what `development` already holds, so
+  replaying them applies every change twice and conflicts). Skip it when
+  the trees are identical and force-push is off; the diff is normally just
+  the bump commit.
 
 Never `gh release create` — the workflow owns releases.
+
+### Release notes (git-cliff)
+
+`cliff.toml` drives note generation: on each `v*` tag, the release job runs
+`git-cliff --latest` and uploads the output as the release description.
+Notes come from conventional commits — `feat:` and `fix:` are listed
+(scope-annotated, deduplicated), everything else (`chore`, `ci`, `docs`,
+`test`, …) is filtered out. Two consequences:
+
+1. **Commit messages are user-facing.** Title every PR merge commit
+   `feat: …`/`fix: …` with a scope when useful (`fix(installer): …`); the
+   history is the changelog, so write it like one.
+2. **Version parity is a tag contract.** The release heading comes from the
+   tag; `Cargo.toml`'s `version` must equal it (the docs-drift gate checks
+   semver shape, CI derives artifacts from the tag).
 
 ## Adding a tool
 

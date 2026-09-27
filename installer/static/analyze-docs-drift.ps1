@@ -60,26 +60,10 @@ if ($settings -match 'BaseDirs::new\(\)[\s\S]{0,120}config_dir\(\)\.join\("rism"
     if ($settings -match '#\[serde\(skip\)\][\s\S]{0,80}pub iris_password') { Ok 'password is serde-skipped, as docs promise' } else { Fail 'docs promise password-skipped but code changed' }
 } else { Fail 'settings.rs config path scheme changed — recheck docs/configuration.md' }
 
-# 4. Version parity: Cargo.toml vs docs/CHANGELOG.md top entry
+# 4. Version parity: Cargo.toml vs the release tags (changelog is generated
+# by git-cliff at release time from commit history — see cliff.toml; there
+# is no hand-maintained version file to drift anymore).
 $cargoVer = (Select-String -Path (Join-Path $root 'Cargo.toml') -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
-$chlogPath = Join-Path $root 'docs\CHANGELOG.md'
-if (Test-Path $chlogPath) {
-    # Keep-a-Changelog layout allowed: a single [Unreleased] heading may sit
-    # above the newest version heading; nothing else may. First version
-    # heading must still equal Cargo.toml (the drift this gate exists for).
-    # Match against heading LINES as strings. Piping MatchInfo objects into
-    # Select-String yields EMPTY captures (learned on CI): MatchInfo.Line is
-    # re-scanned but .Matches comes back blank — never chain them.
-    $lines = @(Get-Content $chlogPath | Where-Object { $_ -match '^## ' })
-    $top = $null
-    foreach ($l in $lines) {
-        if ($l -match '^## \[?Unreleased') { continue }
-        if ($l -match '## \[?v?([0-9][^\] ]*)') { $top = $Matches[1]; break }
-    }
-    if ($top) {
-        if ($top -eq $cargoVer) { Ok "CHANGELOG top $top == Cargo.toml $cargoVer" }
-        else { Fail "CHANGELOG top $top != Cargo.toml $cargoVer" }
-    } else { Fail 'CHANGELOG has no version heading' }
-} else { Fail 'docs/CHANGELOG.md missing (mkdocs nav references it)' }
+if ($cargoVer -match '^[0-9]+\.[0-9]+\.[0-9]+$') { Ok "Cargo.toml version $cargoVer is semver (git-cliff tag convention v$cargoVer)" } else { Fail "Cargo.toml version $cargoVer is not semver" }
 
 exit $fail
