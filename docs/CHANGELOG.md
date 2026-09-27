@@ -3,7 +3,7 @@
 All notable changes to Rism. Versioning follows
 [Git Flow](development.md): `release/vX.Y.Z` → `main` → tag.
 
-## [Unreleased]
+## [0.2.0] — 2026-09-27
 
 ### Added
 - **Linux packages**: native `.deb`, `.rpm`, and pacman (`.pkg.tar.zst`)
