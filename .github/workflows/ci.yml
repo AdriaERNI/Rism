@@ -223,6 +223,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0  # tags needed: git-cliff derives the release range
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
@@ -236,9 +238,20 @@ jobs:
           else
             echo "prerelease=false" >> $GITHUB_OUTPUT
           fi
+      - name: Generate release notes (git-cliff, from commit history)
+        run: |
+          set -euo pipefail
+          curl -fsSL -o gc.tar.gz \
+            "https://github.com/orhun/git-cliff/releases/download/v2.14.2/git-cliff-2.14.2-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL -o gc.sha512 \
+            "https://github.com/orhun/git-cliff/releases/download/v2.14.2/git-cliff-2.14.2-x86_64-unknown-linux-gnu.tar.gz.sha512"
+          echo "$(awk '{print $1}' gc.sha512)  gc.tar.gz" | sha512sum -c -
+          tar xzf gc.tar.gz
+          ./git-cliff-2.14.2/git-cliff --latest -o NOTES.md
+          cat NOTES.md
       - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.version.outputs.tag }}
-          generate_release_notes: true
+          body_path: NOTES.md
           prerelease: ${{ steps.version.outputs.prerelease }}
           files: artifacts/**/*
