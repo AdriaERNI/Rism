@@ -24,6 +24,10 @@ use crate::tools::documents::{
 use crate::tools::host::{
     ListFilesArgs, ReadFileArgs, RunShellArgs, list_files, read_file, run_shell,
 };
+use crate::tools::jobs::{
+    BackgroundCommandArgs, CancelCommandArgs, CommandStatusArgs, command_cancel, command_status,
+    execute_command_background,
+};
 use crate::tools::monitor::{MonitorArgs, monitor_system};
 use crate::tools::serverinfo::{GetServerInfoArgs, get_server_info};
 use crate::tools::sql::{ExecuteSqlArgs, execute_sql};
@@ -137,6 +141,36 @@ impl RismMcp {
         Parameters(args): Parameters<ExecuteCommandArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         Ok(map_json(execute_command(&self.client, &args).await))
+    }
+
+    #[tool(
+        description = "Start an ObjectScript command as a BACKGROUND job (own terminal session) and return its job_id immediately — for long-running work (loops, imports, batch methods). Poll output/state with command_status; stop it with command_cancel (real server-side interrupt)."
+    )]
+    async fn execute_command_background(
+        &self,
+        Parameters(args): Parameters<BackgroundCommandArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        Ok(map_json(execute_command_background(&self.client, &args)))
+    }
+
+    #[tool(
+        description = "Check a background terminal job: pass job_id for state + streamed output tail, or omit to list all jobs (newest first). running=false means finished (see interrupted/error fields)."
+    )]
+    async fn command_status(
+        &self,
+        Parameters(args): Parameters<CommandStatusArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        Ok(map_json(command_status(&args)))
+    }
+
+    #[tool(
+        description = "Cancel (interrupt) a running background terminal job by job_id. Sends a server-side break; the command stops within milliseconds and its partial state stays as executed."
+    )]
+    async fn command_cancel(
+        &self,
+        Parameters(args): Parameters<CancelCommandArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        Ok(map_json(command_cancel(&args)))
     }
 
     #[tool(

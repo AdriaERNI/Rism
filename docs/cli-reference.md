@@ -83,9 +83,13 @@ rism exec 'do ##class(MyApp.Hello).Greet()'
 ### `rism exec` (no argument) — interactive terminal
 A persistent REPL over one terminal session: variables and `do` state carry
 between lines, exactly like the native IRIS terminal. Line editing is
-bash-like: **↑/↓ history**, **Ctrl+R reverse search**, **Ctrl+D exit**,
-**Ctrl+C** abandons a running command (the session survives, `exit`/`quit`
-also leave). History persists across runs in `<config dir>/rism/terminal_history.txt`
+bash-like: **↑/↓ history**, **Ctrl+R** reverse search, **Ctrl+D** exit,
+**Ctrl+C** interrupts the running command **server-side** (protocol
+interrupt — the ObjectScript child unwinds with `<INTERRUPT>` in
+milliseconds, exactly like a native terminal break; `exit`/`quit` also
+leave). A `read` inside a command prompts you interactively (like a real
+terminal); with piped stdin the answer is simply the next line. History
+persists across runs in `<config dir>/rism/terminal_history.txt`
 (`%APPDATA%\rism\` on Windows); duplicates and space-prefixed lines are not
 recorded, so ` command` hides a line from history, same as bash.
 
@@ -146,5 +150,5 @@ units included. `--raw` prints the raw metric vector instead of the scored table
 ## MCP server
 
 ### `rism mcp`
-Serve JSON-RPC 2.0 over stdio (all 25 tools). Used by MCP clients; no flags.
+Serve JSON-RPC 2.0 over stdio (all 28 tools). Used by MCP clients; no flags.
 `RISM_DEBUG_TOOLS=0` removes the 9 `debug_*` tools from discovery.
