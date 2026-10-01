@@ -23,6 +23,9 @@ pub trait TerminalOps {
 
     /// Swallow late frames after an abandoned command.
     fn drain_late(&mut self) -> impl std::future::Future<Output = Result<()>>;
+
+    /// The session's current prompt (before the first run).
+    fn current_prompt(&self) -> String;
 }
 
 impl TerminalOps for api::TerminalSession {
@@ -37,6 +40,10 @@ impl TerminalOps for api::TerminalSession {
 
     async fn drain_late(&mut self) -> Result<()> {
         self.drain().await
+    }
+
+    fn current_prompt(&self) -> String {
+        self.prompt().to_string()
     }
 }
 
@@ -100,7 +107,7 @@ pub async fn run_repl<S: TerminalOps + ?Sized, Io: ReplIo + ?Sized>(
     io: &mut Io,
 ) -> Result<ReplReport> {
     let mut commands = 0usize;
-    let mut prompt = String::new();
+    let mut prompt = session.current_prompt();
     let reason = loop {
         let input = match io.next_line(&prompt) {
             Ok(Some(line)) => line,
@@ -361,6 +368,11 @@ mod tests {
             self.drained += 1;
             Ok(())
         }
+
+        fn current_prompt(&self) -> String {
+            // before the first run, the session shows its launch prompt
+            self.prompts.first().cloned().unwrap_or_default()
+        }
     }
 
     struct FakeIo {
@@ -442,7 +454,7 @@ mod tests {
             lines: vec![Some("c1".into()), Some("c2".into()), None],
         };
         run_repl(&mut s, &mut io).await.unwrap();
-        assert_eq!(io.seen, vec!["", "A>", "B>"]);
+        assert_eq!(io.seen, vec!["A>", "A>", "B>"]);
     }
 
     #[tokio::test]
