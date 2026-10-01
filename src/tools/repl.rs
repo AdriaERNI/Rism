@@ -404,7 +404,12 @@ pub mod rusty {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::missing_panics_doc)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::missing_panics_doc,
+    // fakes resolve instantly; wrapping them in ready() is noise
+    clippy::unused_async_trait_impl
+)]
 mod tests {
     use super::*;
     use crate::error::Error;
@@ -561,7 +566,7 @@ mod tests {
         let r = run_repl(&mut s, &mut io).await.unwrap();
         assert_eq!(r.reason, ReplExit::Quit);
         assert_eq!(r.commands, 0);
-        assert!(s.lines_seen.is_empty());
+        assert!(s.lines_seen.is_empty(), "exit must never reach the server");
     }
 
     #[tokio::test]
