@@ -1,0 +1,597 @@
+//! Background terminal-job registry for the MCP door.
+//!
+//! A background job runs `ObjectScript` on its own terminal session inside
+//! the MCP server process: `execute_command_background` returns a `job_id`
+//! immediately, `command_status` polls state + streamed output, and
+//! `command_cancel` trips the cancel flag whose next frame poll sends the
+//! protocol `{"type":"interrupt"}` — a real server-side break (verified
+//! against the Atelier agent: the child unwinds with `<INTERRUPT>` in
+//! milliseconds). Jobs live only as long as the server process; finished
+//! jobs are garbage-collected after [`RETENTION`].
+
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+use crate::error::{Error, Result};
+use crate::iris::IrisClient;
+use crate::iris::terminal as api;
+
+/// Tail kept per job (ring buffer; total produced is reported separately).
+pub const OUTPUT_CAP: usize = 100_000;
+/// Finished jobs older than this are dropped from the registry.
+pub const RETENTION: Duration = Duration::from_secs(30 * 60);
+/// Upper bound on concurrently running jobs (leak guard).
+pub const MAX_RUNNING: usize = 16;
+
+/// One tracked background command (serializable view).
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct JobInfo {
+    /// Opaque handle to pass to `command_status` / `command_cancel`.
+    pub id: String,
+    /// The command as sent.
+    pub command: String,
+    /// Namespace the job runs in.
+    pub namespace: String,
+    /// Wall-clock start (unix seconds).
+    pub started_unix: u64,
+    /// Wall-clock finish (unix seconds), when done.
+    pub finished_unix: Option<u64>,
+    /// True while the command is still executing.
+    pub running: bool,
+    /// True when the job was cancelled via a protocol interrupt.
+    pub interrupted: bool,
+    /// Terminal error (transport/timeout), when the job failed.
+    pub error: Option<String>,
+    /// Prompt seen after completion.
+    pub prompt: Option<String>,
+    /// Total output chars produced so far (may exceed `output`).
+    pub output_chars: usize,
+    /// Tail of the output (up to [`OUTPUT_CAP`] chars). Empty in list view.
+    pub output: String,
+}
+
+/// Arguments for [`execute_command_background`].
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BackgroundCommandArgs {
+    /// `ObjectScript` command to run in the background.
+    pub command: String,
+    /// Target namespace (defaults to configured namespace)
+    pub namespace: Option<String>,
+    /// Max seconds the job may run before it is cancelled (default: the
+    /// configured `timeout_secs`)
+    pub timeout_secs: Option<u64>,
+}
+
+/// Arguments for [`command_status`]: omit `job_id` to list all jobs.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CommandStatusArgs {
+    /// Job id from `execute_command_background`; omit to list all jobs.
+    pub job_id: Option<String>,
+}
+
+/// Arguments for [`command_cancel`].
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CancelCommandArgs {
+    /// Job id to interrupt.
+    pub job_id: String,
+}
+
+/// Output sink shared between the task and readers.
+#[derive(Clone)]
+struct SharedBuf {
+    tail: Arc<Mutex<String>>,
+    total: Arc<AtomicUsize>,
+}
+
+impl SharedBuf {
+    fn new() -> Self {
+        Self {
+            tail: Arc::new(Mutex::new(String::new())),
+            total: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+    fn push(&self, text: &str) {
+        self.total.fetch_add(text.len(), Ordering::Relaxed);
+        let mut b = self
+            .tail
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        b.push_str(text);
+        if b.len() > OUTPUT_CAP {
+            let cut = b.len() - OUTPUT_CAP;
+            b.drain(..cut);
+        }
+    }
+    /// `(total_chars, tail_snapshot)`
+    fn snapshot(&self) -> (usize, String) {
+        let tail = self
+            .tail
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        (self.total.load(Ordering::Relaxed), tail)
+    }
+}
+
+struct JobSlot {
+    meta: Mutex<JobMeta>,
+    buf: SharedBuf,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[derive(Clone)]
+struct JobMeta {
+    command: String,
+    namespace: String,
+    started_unix: u64,
+    finished_unix: Option<u64>,
+    running: bool,
+    interrupted: bool,
+    error: Option<String>,
+    prompt: Option<String>,
+}
+
+type Registry = HashMap<String, Arc<JobSlot>>;
+
+static JOBS: OnceLock<Mutex<Registry>> = OnceLock::new();
+static SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn registry() -> &'static Mutex<Registry> {
+    JOBS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn lock_reg() -> RegGuard {
+    // OPLOCK serializes whole registry operations (clear/insert/list) so
+    // parallel tests on the shared static cannot interleave.
+    static OPLOCK: Mutex<()> = Mutex::new(());
+    RegGuard(
+        OPLOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        registry()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    )
+}
+
+/// Registry handle holding both mutexes for the operation's duration.
+struct RegGuard(
+    #[expect(dead_code, reason = "guard exists only for its Drop")]
+    std::sync::MutexGuard<'static, ()>,
+    std::sync::MutexGuard<'static, Registry>,
+);
+
+impl std::ops::Deref for RegGuard {
+    type Target = Registry;
+    fn deref(&self) -> &Registry {
+        &self.1
+    }
+}
+
+impl std::ops::DerefMut for RegGuard {
+    fn deref_mut(&mut self) -> &mut Registry {
+        &mut self.1
+    }
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn new_id() -> String {
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    format!("rism-{:x}-{:x}", std::process::id(), seq)
+}
+
+/// Start `command` on a dedicated terminal session; returns its job id
+/// immediately. Output streams into the registry as frames arrive.
+///
+/// # Errors
+/// [`Error::Config`] when [`MAX_RUNNING`] jobs are already active.
+pub fn start(
+    client: &IrisClient,
+    namespace: Option<String>,
+    command: String,
+    timeout: Duration,
+) -> Result<JobInfo> {
+    let ns = namespace.unwrap_or_else(|| client.settings().iris_namespace.clone());
+    let slot = Arc::new(JobSlot {
+        meta: Mutex::new(JobMeta {
+            command: command.clone(),
+            namespace: ns.clone(),
+            started_unix: unix_now(),
+            finished_unix: None,
+            running: true,
+            interrupted: false,
+            error: None,
+            prompt: None,
+        }),
+        buf: SharedBuf::new(),
+        cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    });
+    let id = new_id();
+    {
+        let mut reg = lock_reg();
+        gc(&mut reg);
+        if reg.values().filter(|s| s.meta().running).count() >= MAX_RUNNING {
+            return Err(Error::Config(format!(
+                "too many running background jobs ({MAX_RUNNING}); cancel one first"
+            )));
+        }
+        reg.insert(id.clone(), slot.clone());
+    }
+
+    let client = client.clone();
+    let task_slot = slot.clone();
+    tokio::spawn(async move {
+        let outcome = run_job(client, ns, command, timeout, task_slot.clone()).await;
+        finish(&task_slot, outcome);
+    });
+    Ok(snapshot(&id, &slot, true))
+}
+
+impl JobSlot {
+    fn meta(&self) -> JobMeta {
+        self.meta
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
+
+/// Task body: one private session, streaming into the slot's shared buffer.
+async fn run_job(
+    client: IrisClient,
+    namespace: String,
+    command: String,
+    timeout: Duration,
+    slot: Arc<JobSlot>,
+) -> std::result::Result<api::TerminalOutcome, String> {
+    let mut session = match api::open(&client, &namespace, timeout).await {
+        Ok(s) => s,
+        Err(e) => return Err(e.to_string()),
+    };
+    let mut hooks = JobHooks {
+        buf: slot.buf.clone(),
+        cancel: slot.cancel.clone(),
+    };
+    // run_with bounds total wall-clock by `timeout` (trip → protocol
+    // interrupt, error path also breaks the child), so a hung command can
+    // never outlive the job.
+    match session.run_with(&command, &mut hooks).await {
+        Ok(o) => Ok(o),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+struct JobHooks {
+    buf: SharedBuf,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl api::StreamHooks for JobHooks {
+    fn emit(&mut self, text: &str) -> crate::error::Result<()> {
+        self.buf.push(text);
+        Ok(())
+    }
+    fn read_prompt(&mut self) -> crate::error::Result<String> {
+        // no human is typing: answer server-side reads with an empty line
+        Ok(String::new())
+    }
+    fn cancel_flag(&self) -> Arc<std::sync::atomic::AtomicBool> {
+        self.cancel.clone()
+    }
+}
+
+fn finish(slot: &Arc<JobSlot>, outcome: std::result::Result<api::TerminalOutcome, String>) {
+    {
+        let mut m = slot
+            .meta
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        m.running = false;
+        m.finished_unix = Some(unix_now());
+        match outcome {
+            Ok(o) => {
+                m.interrupted = o.interrupted;
+                m.prompt = Some(o.prompt);
+            }
+            Err(e) => m.error = Some(e),
+        }
+    }
+}
+
+/// Snapshot one job (detail view: with output tail).
+///
+/// # Errors
+/// [`Error::Config`] when the id is unknown (GC'd or never existed).
+pub fn status(id: &str) -> Result<JobInfo> {
+    let mut reg = lock_reg();
+    gc(&mut reg);
+    let slot = reg
+        .get(id)
+        .cloned()
+        .ok_or_else(|| Error::Config(format!("unknown job id: {id}")))?;
+    Ok(snapshot(id, &slot, true))
+}
+
+fn snapshot(id: &str, slot: &Arc<JobSlot>, with_output: bool) -> JobInfo {
+    let m = slot.meta();
+    let (total, tail) = slot.buf.snapshot();
+    JobInfo {
+        id: id.to_string(),
+        command: m.command,
+        namespace: m.namespace,
+        started_unix: m.started_unix,
+        finished_unix: m.finished_unix,
+        running: m.running,
+        interrupted: m.interrupted,
+        error: m.error,
+        prompt: m.prompt,
+        // live buffer values — JobMeta carries no output fields
+        output_chars: total,
+        output: if with_output { tail } else { String::new() },
+    }
+}
+
+/// List view: all jobs, newest first, without output bodies.
+#[must_use]
+pub fn list() -> Vec<JobInfo> {
+    let mut reg = lock_reg();
+    gc(&mut reg);
+    let mut rows: Vec<(String, Arc<JobSlot>)> =
+        reg.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    rows.sort_by(|a, b| {
+        b.1.meta()
+            .started_unix
+            .cmp(&a.1.meta().started_unix)
+            // tie-break on id so same-second jobs keep a deterministic order
+            .then_with(|| b.0.cmp(&a.0))
+    });
+    rows.into_iter()
+        .map(|(id, s)| snapshot(&id, &s, false))
+        .collect()
+}
+
+/// Trip a running job's cancel flag (its next frame poll sends the protocol
+/// interrupt). Already-finished jobs are returned untouched.
+///
+/// # Errors
+/// [`Error::Config`] when the id is unknown.
+pub fn cancel(id: &str) -> Result<JobInfo> {
+    let mut reg = lock_reg();
+    gc(&mut reg);
+    let slot = reg
+        .get(id)
+        .cloned()
+        .ok_or_else(|| Error::Config(format!("unknown job id: {id}")))?;
+    if slot.meta().running {
+        slot.cancel.store(true, Ordering::Relaxed);
+    }
+    Ok(snapshot(id, &slot, false))
+}
+
+/// Drop finished jobs past retention. Caller holds the lock.
+fn gc(reg: &mut Registry) {
+    let now = unix_now();
+    reg.retain(|_, s| match s.meta().finished_unix {
+        None => true,
+        Some(t) => now.saturating_sub(t) < RETENTION.as_secs(),
+    });
+}
+
+// ── tool-facing API (one fn per MCP tool, tools/mod contract) ────────────
+
+/// Result of [`execute_command_background`].
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct BackgroundStartResult {
+    /// Pass to `command_status` / `command_cancel`.
+    pub job_id: String,
+    /// Always true at start.
+    pub running: bool,
+    /// The namespace the job runs in.
+    pub namespace: String,
+}
+
+/// Start an `ObjectScript` command as a background job (own terminal
+/// session, output streams to the registry).
+///
+/// # Errors
+/// [`Error::Config`] when [`MAX_RUNNING`] jobs are already active.
+pub fn execute_command_background(
+    client: &IrisClient,
+    args: &BackgroundCommandArgs,
+) -> Result<BackgroundStartResult> {
+    let timeout = Duration::from_secs(args.timeout_secs.unwrap_or(client.settings().timeout_secs));
+    let info = start(
+        client,
+        args.namespace.clone(),
+        args.command.clone(),
+        timeout,
+    )?;
+    Ok(BackgroundStartResult {
+        job_id: info.id,
+        running: info.running,
+        namespace: info.namespace,
+    })
+}
+
+/// Result of [`command_status`]: one job (`job`) or the roster (`jobs`).
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct StatusResult {
+    /// The job, when `job_id` was given.
+    pub job: Option<JobInfo>,
+    /// All jobs, newest first, when `job_id` was omitted.
+    pub jobs: Vec<JobInfo>,
+}
+
+/// Poll a background job (with streamed output tail) or list all jobs.
+///
+/// # Errors
+/// [`Error::Config`] when the job id is unknown or GC'd.
+pub fn command_status(args: &CommandStatusArgs) -> Result<StatusResult> {
+    match &args.job_id {
+        Some(id) => Ok(StatusResult {
+            job: Some(status(id)?),
+            jobs: Vec::new(),
+        }),
+        None => Ok(StatusResult {
+            job: None,
+            jobs: list(),
+        }),
+    }
+}
+
+/// Cancel a running background job (protocol interrupt, server-side break).
+///
+/// # Errors
+/// [`Error::Config`] when the job id is unknown.
+pub fn command_cancel(args: &CancelCommandArgs) -> Result<JobInfo> {
+    cancel(&args.job_id)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::missing_panics_doc)]
+mod tests {
+    use super::*;
+
+    fn clear() {
+        lock_reg().clear();
+    }
+
+    fn insert(id: &str, running: bool, finished: Option<u64>) -> Arc<JobSlot> {
+        let slot = Arc::new(JobSlot {
+            meta: Mutex::new(JobMeta {
+                command: "write 1".into(),
+                namespace: "USER".into(),
+                started_unix: unix_now(),
+                finished_unix: finished,
+                running,
+                interrupted: false,
+                error: None,
+                prompt: None,
+            }),
+            buf: SharedBuf::new(),
+            cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        });
+        lock_reg().insert(id.to_string(), slot.clone());
+        slot
+    }
+
+    #[test]
+    fn ids_unique_and_shaped() {
+        let a = new_id();
+        let b = new_id();
+        assert!(a.starts_with("rism-") && b.starts_with("rism-"));
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn gc_keeps_running_and_fresh_drops_stale() {
+        let mut reg = Registry::new();
+        let mk = |id: &str, running: bool, finished: Option<u64>| {
+            (
+                id.to_string(),
+                Arc::new(JobSlot {
+                    meta: Mutex::new(JobMeta {
+                        command: String::new(),
+                        namespace: "USER".into(),
+                        started_unix: 0,
+                        finished_unix: finished,
+                        running,
+                        interrupted: false,
+                        error: None,
+                        prompt: None,
+                    }),
+                    buf: SharedBuf::new(),
+                    cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                }),
+            )
+        };
+        reg.extend([
+            mk("a", true, None),
+            mk("b", false, Some(unix_now())),
+            mk("c", false, Some(unix_now().saturating_sub(40 * 60))),
+        ]);
+        gc(&mut reg);
+        assert!(reg.contains_key("a") && reg.contains_key("b"));
+        assert!(!reg.contains_key("c"), "stale finished job must be dropped");
+    }
+
+    #[test]
+    fn sharedbuf_keeps_tail_and_total() {
+        let buf = SharedBuf::new();
+        for _ in 0..(OUTPUT_CAP / 50 + 10) {
+            buf.push(&"x".repeat(50));
+        }
+        let (total, tail) = buf.snapshot();
+        assert_eq!(total, (OUTPUT_CAP / 50 + 10) * 50);
+        assert_eq!(tail.len(), OUTPUT_CAP, "tail capped exactly");
+    }
+
+    #[test]
+    fn cancel_trips_flag_and_status_reports() {
+        clear();
+        let slot = insert("job-x", true, None);
+        let info = cancel("job-x").unwrap();
+        assert!(info.running, "cancel returns the pre-finish snapshot");
+        assert!(slot.cancel.load(Ordering::Relaxed));
+        assert!(info.output.is_empty(), "cancel is a list-view snapshot");
+
+        // finish it, then status shows the tail
+        slot.buf.push("hello");
+        finish(
+            &slot,
+            Ok(api::TerminalOutcome {
+                output: String::new(),
+                prompt: "USER>".into(),
+                truncated: false,
+                omitted_chars: 0,
+                interrupted: true,
+            }),
+        );
+        let s = status("job-x").unwrap();
+        assert!(!s.running);
+        assert!(s.interrupted);
+        assert!(s.error.is_none());
+        assert_eq!(s.prompt.as_deref(), Some("USER>"));
+        assert_eq!(s.output, "hello");
+        assert_eq!(s.output_chars, 5);
+
+        assert!(status("nope").is_err());
+        assert!(cancel("nope").is_err());
+    }
+
+    #[test]
+    fn list_view_omits_bodies_and_sorts_newest_first() {
+        clear();
+        // fresh finish time: a stale one would be (correctly) GC'd
+        let a = insert("a-listed", false, Some(unix_now()));
+        a.buf.push("body-a");
+        let b = insert("b-listed", true, None);
+        b.buf.push("body-b");
+        let mut rows: Vec<_> = list()
+            .into_iter()
+            .filter(|r| r.id.ends_with("-listed"))
+            .collect();
+        rows.sort_by(|x, y| {
+            y.started_unix
+                .cmp(&x.started_unix)
+                .then_with(|| y.id.cmp(&x.id))
+        });
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|r| r.output.is_empty()));
+        assert!(rows.iter().all(|r| r.output_chars == 6));
+    }
+}

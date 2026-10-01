@@ -24,10 +24,64 @@ pub struct TerminalOutcome {
     pub truncated: bool,
     /// Chars omitted when truncated.
     pub omitted_chars: usize,
+    /// True when the command was aborted server-side via a protocol
+    /// `{"type":"interrupt"}` (real break; the child unwinds with
+    /// `<INTERRUPT>` in milliseconds instead of running to completion).
+    pub interrupted: bool,
 }
 
 type Ws =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// Streaming callbacks a [`TerminalSession::run_with`] caller can hook into.
+/// All three are synchronous by design (the REPL's editor/stdin reads block
+/// on purpose; the caller's cancel flag is polled, not awaited).
+pub trait StreamHooks {
+    /// One raw output frame, as it arrives.
+    ///
+    /// # Errors
+    /// Propagated to abort the command (e.g. broken stdout).
+    fn emit(&mut self, text: &str) -> Result<()>;
+    /// Program hit `read`/`readchar`: produce one input line (no newline).
+    ///
+    /// # Errors
+    /// Propagated to abort the command.
+    fn read_prompt(&mut self) -> Result<String>;
+    /// Shared cancel flag polled while waiting for frames; true aborts the
+    /// command server-side with a protocol interrupt.
+    fn cancel_flag(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool>;
+}
+
+/// Hooks that drop output and answer `read` with an empty line (one-shot
+/// `execute`/background: nobody is typing, never leave the child blocked).
+struct NullHooks;
+
+impl StreamHooks for NullHooks {
+    fn emit(&mut self, _text: &str) -> Result<()> {
+        Ok(())
+    }
+    fn read_prompt(&mut self) -> Result<String> {
+        Ok(String::new())
+    }
+    fn cancel_flag(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))
+    }
+}
+
+/// Back-compat adapter: closure sink, empty read replies, no cancel.
+struct SinkHooks<F>(F, std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl<F: FnMut(&str) -> Result<()>> StreamHooks for SinkHooks<F> {
+    fn emit(&mut self, text: &str) -> Result<()> {
+        (self.0)(text)
+    }
+    fn read_prompt(&mut self) -> Result<String> {
+        Ok(String::new())
+    }
+    fn cancel_flag(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+        self.1.clone()
+    }
+}
 
 /// A live terminal WebSocket: one authenticated session, many commands.
 ///
@@ -108,9 +162,84 @@ impl TerminalSession {
     /// # Errors
     /// [`Error::Terminal`] on protocol/timeout/server-error frames.
     pub async fn run(&mut self, command: &str) -> Result<TerminalOutcome> {
+        self.run_with(command, &mut NullHooks).await
+    }
+
+    /// Run one command with streaming/read/cancel hooks (the REPL and MCP
+    /// background paths). A cancel-flag trip sends the protocol
+    /// `{"type":"interrupt"}` — a real server-side break — and the outcome
+    /// marks `interrupted` once the prompt returns.
+    ///
+    /// # Errors
+    /// [`Error::Terminal`] on protocol/timeout/server-error frames; hook
+    /// errors abort immediately.
+    pub async fn run_with<H: StreamHooks + ?Sized>(
+        &mut self,
+        command: &str,
+        hooks: &mut H,
+    ) -> Result<TerminalOutcome> {
+        let r = self.run_with_inner(command, hooks).await;
+        if r.is_err() {
+            // The child may still be executing (timeout/socket error):
+            // break it and resync to a prompt so nothing mutates the
+            // namespace after we gave up on the command.
+            let _ = send(&mut self.ws, &json!({"type": "interrupt"})).await;
+            let _ = self.drain().await;
+        }
+        r
+    }
+
+    async fn run_with_inner<H: StreamHooks + ?Sized>(
+        &mut self,
+        command: &str,
+        hooks: &mut H,
+    ) -> Result<TerminalOutcome> {
         send(&mut self.ws, &json!({"type": "prompt", "input": command})).await?;
-        let (lines, prompt) = wait_prompt(&mut self.ws, self.timeout).await?;
-        let outcome = bound_outcome(&lines, &prompt, self.bound);
+        let deadline = tokio::time::Instant::now() + self.timeout;
+        let mut lines: Vec<String> = Vec::new();
+        let mut streamed = 0usize;
+        let mut interrupted = false;
+        let prompt = loop {
+            match self.next_or_cancel(deadline, hooks.cancel_flag()).await? {
+                Next::Frame(msg) => match classify(&msg)? {
+                    Frame::Output(text) => {
+                        if self.bound == 0 || streamed < self.bound {
+                            hooks.emit(&text)?;
+                            let take = if self.bound == 0 {
+                                text.len()
+                            } else {
+                                self.bound - streamed
+                            };
+                            streamed += text.len().min(take);
+                        }
+                        lines.push(text);
+                    }
+                    Frame::Prompt(p) => break p,
+                    Frame::Read => {
+                        // A running program hit read/readchar: answer it or
+                        // the child blocks until our timeout (Prism lesson:
+                        // NEVER drop this frame).
+                        let input = hooks.read_prompt()?;
+                        send(&mut self.ws, &json!({"type": "read", "input": input})).await?;
+                    }
+                    Frame::Ignored => {}
+                },
+                Next::Cancelled => {
+                    // Server-side break (interrupt child), then the agent
+                    // emits <INTERRUPT> and the prompt — wait for it so the
+                    // session is clean for the next command.
+                    interrupted = true;
+                    hooks.emit("\n")?;
+                    send(&mut self.ws, &json!({"type": "interrupt"})).await?;
+                    break self.await_prompt(deadline).await?;
+                }
+            }
+        };
+        if interrupted {
+            lines.push("<INTERRUPT>".to_string());
+        }
+        let mut outcome = bound_outcome(&lines, &prompt, self.bound);
+        outcome.interrupted = interrupted;
         self.prompt.clone_from(&outcome.prompt);
         Ok(outcome)
     }
@@ -123,45 +252,29 @@ impl TerminalSession {
 
     /// Run one command streaming: `sink` receives each output frame (raw,
     /// uncleaned) as it arrives; returns the outcome after the prompt frame.
-    /// Up to `bound` chars are forwarded; beyond that the stream keeps being
-    /// consumed (session stays sane) but is dropped, counted in the outcome.
+    /// Read frames get an empty reply (nothing is typing); use
+    /// [`TerminalSession::run_with`] for full REPL semantics.
     ///
     /// # Errors
     /// [`Error::Terminal`] on protocol/timeout/server-error frames; sink
     /// errors abort immediately.
-    pub async fn run_stream<F>(&mut self, command: &str, mut sink: F) -> Result<TerminalOutcome>
+    pub async fn run_stream<F>(&mut self, command: &str, sink: F) -> Result<TerminalOutcome>
     where
         F: FnMut(&str) -> Result<()>,
     {
-        send(&mut self.ws, &json!({"type": "prompt", "input": command})).await?;
-        let mut lines: Vec<String> = Vec::new();
-        let mut streamed = 0usize;
-        let prompt = loop {
-            let msg = next_msg(&mut self.ws, self.timeout).await?;
-            match classify(&msg)? {
-                Frame::Output(text) => {
-                    // outcome keeps the full text (same contract as run);
-                    // the bound here only caps what the sink receives.
-                    if self.bound == 0 || streamed < self.bound {
-                        sink(&text)?;
-                        let take = if self.bound == 0 {
-                            text.len()
-                        } else {
-                            self.bound - streamed
-                        };
-                        streamed += text.len().min(take);
-                    }
-                    lines.push(text);
-                }
-                Frame::Prompt(p) => break p,
-                Frame::Ignored => {}
-            }
-        };
-        Ok(bound_outcome(&lines, &prompt, self.bound))
+        self.run_with(
+            command,
+            &mut SinkHooks(
+                sink,
+                std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            ),
+        )
+        .await
     }
 
     /// After an abandoned command (Ctrl+C), swallow any late frames so the
     /// next `run` does not see stale output. Bounded wait, then give up.
+    /// A pending `read` gets an empty reply (nothing is typing).
     ///
     /// # Errors
     /// [`Error::Terminal`] if the socket dies during the drain.
@@ -174,12 +287,70 @@ impl TerminalSession {
                 }
                 Ok(Some(Ok(Message::Text(t)))) => {
                     if let Ok(msg) = serde_json::from_str::<Value>(&t) {
-                        if matches!(classify(&msg), Ok(Frame::Prompt(_))) {
-                            return Ok(());
+                        match classify(&msg) {
+                            Ok(Frame::Prompt(_)) => return Ok(()),
+                            Ok(Frame::Read) => {
+                                send(&mut self.ws, &json!({"type": "read", "input": ""})).await?;
+                            }
+                            _ => {}
                         }
                     }
                 }
                 Ok(Some(Ok(_))) => {}
+            }
+        }
+    }
+
+    /// Wait for frames honoring a cancel flag; `Ok(Next::Cancelled)` when
+    /// the flag trips first. Deadline applies to both. The flag is checked
+    /// at every iteration, so a flood of output frames cannot starve cancel.
+    async fn next_or_cancel(
+        &mut self,
+        deadline: tokio::time::Instant,
+        cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Result<Next> {
+        use std::sync::atomic::Ordering;
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                return Ok(Next::Cancelled);
+            }
+            let budget = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if budget.is_zero() {
+                return Err(Error::Terminal("terminal timed out".to_string()));
+            }
+            // 50ms tick keeps cancel latency low without busy-looping hard.
+            let tick = std::cmp::min(budget, Duration::from_millis(50));
+            match tokio::time::timeout(tick, self.ws.next()).await {
+                Err(_elapsed) => {} // re-loop: flag checked at top
+                Ok(Some(Ok(Message::Text(t)))) => {
+                    return serde_json::from_str(&t)
+                        .map(Next::Frame)
+                        .map_err(|e| Error::Terminal(format!("bad frame json: {e}")));
+                }
+                Ok(None) => return Err(Error::Terminal("websocket closed".to_string())),
+                Ok(Some(Err(_) | Ok(Message::Close(_)))) => {
+                    return Err(Error::Terminal("websocket closed".to_string()));
+                }
+                Ok(Some(Ok(_))) => {}
+            }
+        }
+    }
+
+    /// Pull frames until a prompt, replying to reads; used post-interrupt.
+    /// Ignores the caller's cancel flag (it is still tripped at this point —
+    /// honoring it here would spin); the deadline is the only escape.
+    async fn await_prompt(&mut self, deadline: tokio::time::Instant) -> Result<String> {
+        let settled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        loop {
+            match self.next_or_cancel(deadline, settled.clone()).await? {
+                Next::Frame(msg) => match classify(&msg)? {
+                    Frame::Prompt(p) => return Ok(p),
+                    Frame::Read => {
+                        send(&mut self.ws, &json!({"type": "read", "input": ""})).await?;
+                    }
+                    Frame::Output(_) | Frame::Ignored => {}
+                },
+                Next::Cancelled => unreachable!("flag is never set"),
             }
         }
     }
@@ -200,8 +371,17 @@ impl TerminalSession {
 enum Frame {
     Output(String),
     Prompt(String),
-    /// read/readchar/unknown: consume and continue (Prism parity).
+    /// The child hit `read`/`readchar`: the client must answer with a
+    /// `{"type":"read","input":…}` message or the program blocks.
+    Read,
+    /// readchar-style variants we do not react to.
     Ignored,
+}
+
+/// Outcome of a cancel-aware frame wait.
+enum Next {
+    Frame(Value),
+    Cancelled,
 }
 
 fn classify(msg: &Value) -> Result<Frame> {
@@ -218,6 +398,7 @@ fn classify(msg: &Value) -> Result<Frame> {
                 .unwrap_or_default()
                 .to_string(),
         )),
+        Some("read") => Ok(Frame::Read),
         Some("error") => Err(Error::Terminal(format!(
             "server error: {}",
             msg.get("text").and_then(Value::as_str).unwrap_or("unknown")
@@ -240,6 +421,7 @@ fn bound_outcome(lines: &[String], prompt: &str, bound: usize) -> TerminalOutcom
         prompt: clean_text(prompt),
         truncated,
         omitted_chars,
+        interrupted: false,
     }
 }
 
@@ -290,6 +472,7 @@ async fn next_msg(ws: &mut Ws, timeout: Duration) -> Result<Value> {
 }
 
 /// Consume frames until a prompt arrives; returns (output chunks, prompt).
+/// A pending `read` gets an empty reply (one-shot path: nothing is typing).
 async fn wait_prompt(ws: &mut Ws, timeout: Duration) -> Result<(Vec<String>, String)> {
     let mut lines = Vec::new();
     loop {
@@ -297,6 +480,7 @@ async fn wait_prompt(ws: &mut Ws, timeout: Duration) -> Result<(Vec<String>, Str
         match classify(&msg)? {
             Frame::Output(text) => lines.push(text),
             Frame::Prompt(prompt) => return Ok((lines, prompt)),
+            Frame::Read => send(ws, &json!({"type": "read", "input": ""})).await?,
             Frame::Ignored => {}
         }
     }
@@ -368,9 +552,13 @@ mod tests {
             classify(&json!({"type": "prompt", "text": "USER>"})),
             Ok(Frame::Prompt(t)) if t == "USER>"
         ));
-        // read/readchar/unknown ignored (Prism parity)
+        // read frames now demand a reply (Frame::Read), not silence
         assert!(matches!(
-            classify(&json!({"type": "read"})),
+            classify(&json!({ "type": "read" })),
+            Ok(Frame::Read)
+        ));
+        assert!(matches!(
+            classify(&json!({ "type": "readchar" })),
             Ok(Frame::Ignored)
         ));
         assert!(classify(&json!({"type": "error", "text": "boom"})).is_err());

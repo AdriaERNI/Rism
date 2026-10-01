@@ -1,6 +1,6 @@
 # MCP Tools
 
-Rism serves **25 tools** over JSON-RPC 2.0 / stdio (`rism mcp`). Parameters marked
+Rism serves **28 tools** over JSON-RPC 2.0 / stdio (`rism mcp`). Parameters marked
 `*` are required. All tools accept an optional `namespace` (override the configured
 default) unless noted. Every tool's behavior is identical to the CLI path — same
 core, two doors.
@@ -46,7 +46,30 @@ Optional `max_rows`.
 
 ### `execute_command` — `command`*
 ObjectScript command in a terminal session over the WebSocket. Optional
-`timeout_secs`.
+`timeout_secs`. Commands containing `read` are answered with an empty line
+(nothing is typing); Ctrl+C semantics do not apply — use `timeout_secs`.
+
+### `execute_command_background` — `command`*
+Starts an ObjectScript command on its **own terminal session in the
+background** and returns a `job_id` immediately — the tool for long-running
+work (loops, batch methods, imports) that would blow a request timeout.
+Output streams into the job as it is produced. Optional `namespace`,
+`timeout_secs` (wall-clock cap after which the job is interrupted; default:
+configured timeout). Poll with `command_status`, stop with `command_cancel`.
+Up to 16 concurrent jobs; finished jobs are retained 30 min.
+
+### `command_status` — `job_id`
+With `job_id`: full state + streamed output tail (tail capped at 100k chars;
+`output_chars` is the true total). Fields: `running`, `interrupted`,
+`error`, `prompt`, `started_unix`, `finished_unix`. Omit `job_id`: list of
+all jobs, newest first (no output bodies).
+
+### `command_cancel` — `job_id`
+Interrupts a running job with the terminal protocol's `interrupt` message —
+a real server-side break: the ObjectScript child unwinds with
+`<INTERRUPT>` within milliseconds (same mechanism as the VS Code lite
+terminal's Ctrl+C). The job stays readable afterwards via `command_status`
+(`interrupted: true`).
 
 ## Unit tests
 

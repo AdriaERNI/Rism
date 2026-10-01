@@ -7,19 +7,44 @@
 //! (editing; real impls [`rusty::EditorIo`] / [`rusty::PipeIo`]).
 //! [`run_repl`] is the pure state machine between them.
 
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+
 use crate::error::Result;
 use crate::iris::terminal as api;
+
+/// Streaming context for one REPL command (built by [`run_repl`]).
+pub struct ReplHooks<'a, Io: ReplIo + ?Sized> {
+    io: &'a mut Io,
+    cancel: Arc<AtomicBool>,
+    pub(crate) streamed: bool,
+    pub(crate) ends_nl: bool,
+}
+
+impl<Io: ReplIo + ?Sized> api::StreamHooks for ReplHooks<'_, Io> {
+    fn emit(&mut self, text: &str) -> Result<()> {
+        self.streamed = !text.is_empty();
+        self.ends_nl = text.ends_with('\n');
+        self.io.emit(text)
+    }
+    fn read_prompt(&mut self) -> Result<String> {
+        self.io.read_answer()
+    }
+    fn cancel_flag(&self) -> Arc<AtomicBool> {
+        self.cancel.clone()
+    }
+}
 
 /// Everything the REPL needs from the transport side (real impl:
 /// `api::TerminalSession`; tests script a fake).
 pub trait TerminalOps {
-    /// Run one command, streaming output frames through `sink`; returns the
-    /// post-command prompt.
+    /// Run one command with hooks; returns the post-command prompt and
+    /// whether the command was interrupted (Ctrl+C break sent server-side).
     fn run_line(
         &mut self,
         command: &str,
-        sink: &mut dyn FnMut(&str) -> Result<()>,
-    ) -> impl std::future::Future<Output = Result<String>>;
+        hooks: &mut dyn api::StreamHooks,
+    ) -> impl std::future::Future<Output = Result<(String, bool)>>;
 
     /// Swallow late frames after an abandoned command.
     fn drain_late(&mut self) -> impl std::future::Future<Output = Result<()>>;
@@ -32,10 +57,10 @@ impl TerminalOps for api::TerminalSession {
     async fn run_line(
         &mut self,
         command: &str,
-        sink: &mut dyn FnMut(&str) -> Result<()>,
-    ) -> Result<String> {
-        let out = self.run_stream(command, sink).await?;
-        Ok(out.prompt)
+        hooks: &mut dyn api::StreamHooks,
+    ) -> Result<(String, bool)> {
+        let out = self.run_with(command, hooks).await?;
+        Ok((out.prompt, out.interrupted))
     }
 
     async fn drain_late(&mut self) -> Result<()> {
@@ -67,6 +92,19 @@ pub trait ReplIo {
     fn cancelled(&self) -> bool;
     /// Re-arm after handling a cancel.
     fn reset_cancel(&mut self);
+    /// The live cancel flag, shared with the transport's frame wait.
+    /// Default hands out a dead flag (nothing ever cancels this io).
+    fn cancel_handle(&self) -> Arc<AtomicBool> {
+        Arc::new(AtomicBool::new(false))
+    }
+    /// A running program hit `read`: ask the user (or stdin) one line.
+    /// Default refuses politely (empty reply) so nothing hangs.
+    ///
+    /// # Errors
+    /// [`Error::Terminal`] on editor/IO failure.
+    fn read_answer(&mut self) -> Result<String> {
+        Ok(String::new())
+    }
     /// Arm OS-level cancel detection just before a command runs
     /// (default: nothing).
     fn arm_cancel(&mut self) {}
@@ -122,31 +160,44 @@ pub async fn run_repl<S: TerminalOps + ?Sized, Io: ReplIo + ?Sized>(
             break ReplExit::Quit;
         }
         io.arm_cancel();
-        let mut streamed = false;
-        let mut ends_nl = true;
-        let ran = session
-            .run_line(&input, &mut |t| {
-                streamed = !t.is_empty();
-                ends_nl = t.ends_with('\n');
-                io.emit(t)
-            })
-            .await;
+        let io_cancel = io.cancel_handle();
+        let mut hooks = ReplHooks {
+            io,
+            cancel: io_cancel,
+            streamed: false,
+            ends_nl: true,
+        };
+        let ran = session.run_line(&input, &mut hooks).await;
+        // destructure to end the borrow of io held by the hooks
+        let ReplHooks {
+            io,
+            streamed,
+            ends_nl,
+            cancel,
+            ..
+        } = hooks;
+        drop(cancel);
         io.disarm_cancel();
-        if streamed && !ends_nl {
-            // IRIS frames carry no trailing newline; without this the next
-            // command's output glues onto this one's last frame.
-            io.emit("\n")?;
-        }
         match ran {
-            Ok(p) => {
+            Ok((p, interrupted)) => {
+                if streamed && !ends_nl && !interrupted {
+                    // IRIS frames carry no trailing newline; without this the
+                    // next command's output glues onto this one's last frame.
+                    io.emit("\n")?;
+                }
+                if interrupted {
+                    io.reset_cancel();
+                    io.notice("<INTERRUPT> abandoned; session clean");
+                }
                 commands += 1;
                 prompt = p;
             }
             Err(e) => {
                 commands += 1;
-                // Timeout or cancel: the server may still emit late frames —
-                // drain to the next prompt before touching the session again,
-                // or the next command would read this one's leftovers.
+                // Timeout or transport error: the server may still emit late
+                // frames — drain to the next prompt before touching the
+                // session again, or the next command reads this one's
+                // leftovers.
                 if io.cancelled() {
                     io.reset_cancel();
                     io.notice("^C abandoned; session state may be partial");
@@ -257,6 +308,21 @@ pub mod rusty {
             self.cancel.store(false, Ordering::Relaxed);
         }
 
+        fn cancel_handle(&self) -> Arc<AtomicBool> {
+            self.cancel.clone()
+        }
+
+        fn read_answer(&mut self) -> Result<String> {
+            // A program hit `read`: reuse the editor (no prompt echo needed —
+            // the program already printed its own). rustyline re-arms the
+            // SIGINT handler for us, so Ctrl+C still cancels during a read.
+            match self.ed.readline("") {
+                Ok(line) => Ok(line),
+                Err(ReadlineError::Eof | ReadlineError::Interrupted) => Ok(String::new()),
+                Err(e) => Err(Error::Terminal(format!("readline: {e}"))),
+            }
+        }
+
         fn arm_cancel(&mut self) {
             // rustyline releases SIGINT once readline returns; without this
             // a Ctrl+C during command execution would kill the process.
@@ -321,6 +387,19 @@ pub mod rusty {
         }
 
         fn reset_cancel(&mut self) {}
+
+        fn read_answer(&mut self) -> Result<String> {
+            use std::io::BufRead as _;
+            // A server-side read consumes the next piped line (script mode);
+            // EOF answers empty so nothing ever hangs a stream.
+            let stdin = std::io::stdin();
+            let mut lock = stdin.lock();
+            let mut line = String::new();
+            match lock.read_line(&mut line) {
+                Ok(0) | Err(_) => Ok(String::new()),
+                Ok(_) => Ok(line.trim_end_matches(['\r', '\n']).to_string()),
+            }
+        }
     }
 }
 
@@ -352,16 +431,26 @@ mod tests {
         async fn run_line(
             &mut self,
             command: &str,
-            sink: &mut dyn FnMut(&str) -> Result<()>,
-        ) -> Result<String> {
+            hooks: &mut dyn api::StreamHooks,
+        ) -> Result<(String, bool)> {
             self.lines_seen.push(command.to_string());
             if self.fail_on.as_deref() == Some(command) {
                 return Err(Error::Terminal("boom".into()));
             }
-            sink("out:")?;
-            sink(command)?;
-            sink("\n")?;
-            Ok(self.prompts.remove(0))
+            // the real transport polls the cancel flag while waiting for
+            // frames; the fake honors it the same way, checked at entry
+            if hooks
+                .cancel_flag()
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                hooks.emit("\n")?;
+                let prompt = self.prompts.remove(0);
+                return Ok((prompt, true));
+            }
+            hooks.emit("out:")?;
+            hooks.emit(command)?;
+            hooks.emit("\n")?;
+            Ok((self.prompts.remove(0), false))
         }
 
         async fn drain_late(&mut self) -> Result<()> {
@@ -380,7 +469,7 @@ mod tests {
         idx: usize,
         emitted: String,
         notices: Vec<String>,
-        cancel_pending: bool,
+        cancel: std::sync::Arc<AtomicBool>,
     }
 
     impl FakeIo {
@@ -390,8 +479,12 @@ mod tests {
                 idx: 0,
                 emitted: String::new(),
                 notices: Vec::new(),
-                cancel_pending: false,
+                cancel: std::sync::Arc::new(AtomicBool::new(false)),
             }
+        }
+        fn arm(&mut self) {
+            self.cancel
+                .store(true, std::sync::atomic::Ordering::Relaxed);
         }
     }
 
@@ -409,10 +502,14 @@ mod tests {
             Ok(())
         }
         fn cancelled(&self) -> bool {
-            self.cancel_pending
+            self.cancel.load(std::sync::atomic::Ordering::Relaxed)
         }
         fn reset_cancel(&mut self) {
-            self.cancel_pending = false;
+            self.cancel
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+        }
+        fn cancel_handle(&self) -> std::sync::Arc<AtomicBool> {
+            self.cancel.clone()
         }
     }
 
@@ -483,11 +580,27 @@ mod tests {
         let mut s = FakeSession::ok(&["SET>", "USER>"]);
         s.fail_on = Some("hang".into());
         let mut io = FakeIo::new(vec![Some("hang".into()), Some("recover".into()), None]);
-        io.cancel_pending = true;
+        io.arm();
         let r = run_repl(&mut s, &mut io).await.unwrap();
         assert_eq!(r.reason, ReplExit::Eof);
         assert_eq!(s.drained, 1);
         assert!(io.notices.iter().any(|n| n.starts_with("^C")));
+    }
+
+    #[tokio::test]
+    async fn interrupted_outcome_resyncs_without_drain() {
+        let mut s = FakeSession::ok(&["SET>", "USER>"]);
+        let mut io = FakeIo::new(vec![Some("slow".into()), Some("next".into()), None]);
+        io.arm(); // first command comes back interrupted; loop resets the flag
+        let r = run_repl(&mut s, &mut io).await.unwrap();
+        assert_eq!(r.reason, ReplExit::Eof);
+        assert_eq!(r.commands, 2);
+        assert_eq!(s.drained, 0, "interrupt path resyncs via prompt, no drain");
+        assert!(
+            io.notices.iter().any(|n| n.contains("<INTERRUPT>")),
+            "user must see the break happened: {:?}",
+            io.notices
+        );
     }
 
     #[tokio::test]

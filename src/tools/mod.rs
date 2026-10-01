@@ -7,6 +7,7 @@ pub mod compile;
 pub mod debugger;
 pub mod documents;
 pub mod host;
+pub mod jobs;
 pub mod monitor;
 pub mod repl;
 pub mod scoring;
