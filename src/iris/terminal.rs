@@ -39,6 +39,7 @@ pub struct TerminalSession {
     ws: Ws,
     bound: usize,
     timeout: Duration,
+    prompt: String,
 }
 
 /// Open a terminal session in `namespace`, authenticating via a dedicated
@@ -89,13 +90,14 @@ pub async fn open(
         &json!({"type": "config", "namespace": namespace, "rawMode": false}),
     )
     .await?;
-    // initial prompt echo, discarded
-    wait_prompt(&mut ws, command_timeout).await?;
+    // initial prompt echo, captured so the REPL can show it before any run
+    let (_echo, initial_prompt) = wait_prompt(&mut ws, command_timeout).await?;
 
     Ok(TerminalSession {
         ws,
         bound,
         timeout: command_timeout,
+        prompt: clean_text(&initial_prompt),
     })
 }
 
@@ -108,7 +110,15 @@ impl TerminalSession {
     pub async fn run(&mut self, command: &str) -> Result<TerminalOutcome> {
         send(&mut self.ws, &json!({"type": "prompt", "input": command})).await?;
         let (lines, prompt) = wait_prompt(&mut self.ws, self.timeout).await?;
-        Ok(bound_outcome(&lines, &prompt, self.bound))
+        let outcome = bound_outcome(&lines, &prompt, self.bound);
+        self.prompt.clone_from(&outcome.prompt);
+        Ok(outcome)
+    }
+
+    /// Current prompt string (e.g. `USER>`), updated after every run.
+    #[must_use]
+    pub fn prompt(&self) -> &str {
+        &self.prompt
     }
 
     /// Run one command streaming: `sink` receives each output frame (raw,
