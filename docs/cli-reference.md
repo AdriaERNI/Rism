@@ -80,7 +80,19 @@ rism exec 'write "1+1=", 1+1'
 rism exec 'do ##class(MyApp.Hello).Greet()'
 ```
 
-Flags: `--format`.
+### `rism exec` (no argument) — interactive terminal
+A persistent REPL over one terminal session: variables and `do` state carry
+between lines, exactly like the native IRIS terminal. Line editing is
+bash-like: **↑/↓ history**, **Ctrl+R reverse search**, **Ctrl+D exit**,
+**Ctrl+C** abandons a running command (the session survives, `exit`/`quit`
+also leave). History persists across runs in `<config dir>/rism/terminal_history.txt`
+(`%APPDATA%\rism\` on Windows); duplicates and space-prefixed lines are not
+recorded, so ` command` hides a line from history, same as bash.
+
+Piped stdin (`echo 'write 1' | rism exec`) runs the same loop non-interactively:
+streaming output, no editing/history — CI-safe.
+
+Flags: `--timeout <SECS>` (per command), `--namespace`, `--format`.
 
 ## Unit tests
 

@@ -93,6 +93,14 @@ jobs:
           $RISM_BIN sql "select Name from %Dictionary.ClassDefinition where Name='RismCI.Smoke'" | grep -q "RismCI.Smoke"
           $RISM_BIN exec 'write "smoke-ok"' | grep -q "smoke-ok"
 
+          # interactive REPL contract (piped stdin = same loop, no TTY):
+          # one session must carry state across lines — set, read back, kill.
+          printf 'set ^rismCiTmp="kept"\nwrite "state:",$g(^rismCiTmp),!\nkill ^rismCiTmp\n' \
+            | $RISM_BIN exec > /tmp/repl.out 2>/tmp/repl.err
+          grep -q "state:kept" /tmp/repl.out || { cat /tmp/repl.err; exit 1; }
+          # global really gone (cleanup verified through the same door)
+          $RISM_BIN exec 'write "gone:",$data(^rismCiTmp),!' | grep -q "gone:0"
+
           # unit-testing trio (tests our own uploaded class)
           cat > /tmp/ci/test.cls <<'EOF'
           Class RismCI.SmokeTest Extends %UnitTest.TestCase

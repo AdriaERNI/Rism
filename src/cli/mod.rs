@@ -53,9 +53,10 @@ pub enum Commands {
     #[command(subcommand)]
     Doc(DocCommands),
     /// Execute an `ObjectScript` command via the terminal WebSocket
+    /// (no argument: interactive REPL with history)
     Exec {
-        /// `ObjectScript` command
-        command: String,
+        /// `ObjectScript` command (omit for interactive mode)
+        command: Option<String>,
         /// Timeout seconds
         #[arg(long)]
         timeout: Option<u64>,

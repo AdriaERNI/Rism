@@ -8,6 +8,7 @@ pub mod debugger;
 pub mod documents;
 pub mod host;
 pub mod monitor;
+pub mod repl;
 pub mod scoring;
 pub mod serverinfo;
 pub mod sql;

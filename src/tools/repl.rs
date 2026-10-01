@@ -1,0 +1,501 @@
+//! Interactive `rism exec` REPL: persistent terminal session + rustyline
+//! line editing (history, Ctrl+R reverse search, Ctrl+D exit) over the
+//! [`crate::iris::terminal`] WebSocket.
+//!
+//! Two traits split the problem so each half is testable alone:
+//! [`TerminalOps`] (transport; real impl `TerminalSession`) and [`ReplIo`]
+//! (editing; real impls [`rusty::EditorIo`] / [`rusty::PipeIo`]).
+//! [`run_repl`] is the pure state machine between them.
+
+use crate::error::Result;
+use crate::iris::terminal as api;
+
+/// Everything the REPL needs from the transport side (real impl:
+/// `api::TerminalSession`; tests script a fake).
+pub trait TerminalOps {
+    /// Run one command, streaming output frames through `sink`; returns the
+    /// post-command prompt.
+    fn run_line(
+        &mut self,
+        command: &str,
+        sink: &mut dyn FnMut(&str) -> Result<()>,
+    ) -> impl std::future::Future<Output = Result<String>>;
+
+    /// Swallow late frames after an abandoned command.
+    fn drain_late(&mut self) -> impl std::future::Future<Output = Result<()>>;
+}
+
+impl TerminalOps for api::TerminalSession {
+    async fn run_line(
+        &mut self,
+        command: &str,
+        sink: &mut dyn FnMut(&str) -> Result<()>,
+    ) -> Result<String> {
+        let out = self.run_stream(command, sink).await?;
+        Ok(out.prompt)
+    }
+
+    async fn drain_late(&mut self) -> Result<()> {
+        self.drain().await
+    }
+}
+
+/// Line editor abstraction: lets the loop be tested without a TTY or a
+/// server.
+pub trait ReplIo {
+    /// Next user line (after history/editing). `Ok(None)` on EOF — Ctrl+D,
+    /// end of piped stdin, or Ctrl+C at the prompt.
+    ///
+    /// # Errors
+    /// [`Error::Terminal`] on editor/TTY failure (not EOF/cancel paths).
+    fn next_line(&mut self, prompt: &str) -> Result<Option<String>>;
+    /// Echo a line of session status (stderr; stdout is command data).
+    fn notice(&mut self, line: &str);
+    /// One output frame from the server, streamed as it arrives.
+    ///
+    /// # Errors
+    /// Any write error aborts the command's streaming (reported to the loop).
+    fn emit(&mut self, text: &str) -> Result<()>;
+    /// Cancel requested during a running command (Ctrl+C mid-run).
+    fn cancelled(&self) -> bool;
+    /// Re-arm after handling a cancel.
+    fn reset_cancel(&mut self);
+    /// Arm OS-level cancel detection just before a command runs
+    /// (default: nothing).
+    fn arm_cancel(&mut self) {}
+    /// Disarm after the command returns (default: nothing).
+    fn disarm_cancel(&mut self) {}
+}
+
+/// Session outcome.
+#[derive(Debug, Clone)]
+pub struct ReplReport {
+    /// Commands actually run.
+    pub commands: usize,
+    /// Why the loop stopped.
+    pub reason: ReplExit,
+}
+
+/// Why the REPL loop stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplExit {
+    /// EOF (Ctrl+D / Ctrl+C at prompt / piped-stdin end).
+    Eof,
+    /// `exit` / `quit`.
+    Quit,
+    /// Transport or input died mid-loop.
+    Fatal,
+}
+
+/// Run the REPL state machine over any transport/editor pair.
+///
+/// Empty lines pass straight to IRIS (harmless echo, native terminal
+/// behavior) so ↑ history navigation always has content.
+///
+/// # Errors
+/// Only on irrecoverable session loss; per-command errors are reported via
+/// [`ReplIo::notice`] and the loop continues.
+pub async fn run_repl<S: TerminalOps + ?Sized, Io: ReplIo + ?Sized>(
+    session: &mut S,
+    io: &mut Io,
+) -> Result<ReplReport> {
+    let mut commands = 0usize;
+    let mut prompt = String::new();
+    let reason = loop {
+        let input = match io.next_line(&prompt) {
+            Ok(Some(line)) => line,
+            Ok(None) => break ReplExit::Eof,
+            Err(e) => {
+                io.notice(&format!("input error: {e}"));
+                break ReplExit::Fatal;
+            }
+        };
+        let trimmed = input.trim();
+        if trimmed.eq_ignore_ascii_case("exit") || trimmed.eq_ignore_ascii_case("quit") {
+            break ReplExit::Quit;
+        }
+        io.arm_cancel();
+        let mut streamed = false;
+        let mut ends_nl = true;
+        let ran = session
+            .run_line(&input, &mut |t| {
+                streamed = !t.is_empty();
+                ends_nl = t.ends_with('\n');
+                io.emit(t)
+            })
+            .await;
+        io.disarm_cancel();
+        if streamed && !ends_nl {
+            // IRIS frames carry no trailing newline; without this the next
+            // command's output glues onto this one's last frame.
+            io.emit("\n")?;
+        }
+        match ran {
+            Ok(p) => {
+                commands += 1;
+                prompt = p;
+            }
+            Err(e) => {
+                commands += 1;
+                // Timeout or cancel: the server may still emit late frames —
+                // drain to the next prompt before touching the session again,
+                // or the next command would read this one's leftovers.
+                if io.cancelled() {
+                    io.reset_cancel();
+                    io.notice("^C abandoned; session state may be partial");
+                } else {
+                    io.notice(&format!("error: {e}"));
+                }
+                if let Err(e) = session.drain_late().await {
+                    io.notice(&format!("session lost: {e}"));
+                    break ReplExit::Fatal;
+                }
+            }
+        }
+    };
+    Ok(ReplReport { commands, reason })
+}
+
+/// Production [`ReplIo`] implementations.
+pub mod rusty {
+    use std::io::Write as _;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use rustyline::error::ReadlineError;
+    use rustyline::history::FileHistory;
+    use rustyline::{CompletionType, Config, Editor};
+
+    use super::ReplIo;
+    use crate::error::{Error, Result};
+
+    /// Persistent history file: `<config dir>/rism/terminal_history.txt`.
+    #[must_use]
+    pub fn history_path() -> Option<PathBuf> {
+        directories::BaseDirs::new()
+            .map(|d| d.config_dir().join("rism").join("terminal_history.txt"))
+    }
+
+    fn config() -> Config {
+        // history_ignore_dups is ON by default (dedup = what we want).
+        Config::builder()
+            .auto_add_history(true)
+            .history_ignore_space(true)
+            .completion_type(CompletionType::List)
+            .bell_style(rustyline::config::BellStyle::None)
+            .build()
+    }
+
+    /// TTY editor: history ↑/↓, Ctrl+R reverse search, Ctrl+D exit.
+    pub struct EditorIo {
+        ed: Editor<(), FileHistory>,
+        cancel: Arc<AtomicBool>,
+        watcher: Option<tokio::task::JoinHandle<()>>,
+    }
+
+    impl EditorIo {
+        /// Build with persistent history; unreadable history degrades to
+        /// empty (never blocks the REPL from starting).
+        ///
+        /// # Errors
+        /// [`Error::Terminal`] if the editor cannot take over the TTY.
+        pub fn new() -> Result<Self> {
+            let cancel = Arc::new(AtomicBool::new(false));
+            let mut ed = Editor::with_config(config())
+                .map_err(|e| Error::Terminal(format!("editor: {e}")))?;
+            if let Some(p) = history_path() {
+                let _ = ed.load_history(&p);
+            }
+            Ok(Self {
+                ed,
+                cancel,
+                watcher: None,
+            })
+        }
+    }
+
+    impl ReplIo for EditorIo {
+        fn next_line(&mut self, prompt: &str) -> Result<Option<String>> {
+            match self.ed.readline(prompt) {
+                Ok(line) => Ok(Some(line)),
+                // Ctrl+D exits; Ctrl+C at the prompt just discards the line
+                // (bash semantics) — empty input is a harmless server echo.
+                Err(ReadlineError::Eof) => Ok(None),
+                Err(ReadlineError::Interrupted) => Ok(Some(String::new())),
+                Err(e) => Err(Error::Terminal(format!("readline: {e}"))),
+            }
+        }
+
+        fn notice(&mut self, line: &str) {
+            eprintln!("{line}");
+        }
+
+        fn emit(&mut self, text: &str) -> Result<()> {
+            // After Ctrl+C: suppress late output, bash-style.
+            if self.cancel.load(Ordering::Relaxed) {
+                return Ok(());
+            }
+            let mut out = std::io::stdout();
+            let _ = out.write_all(text.as_bytes());
+            let _ = out.flush();
+            Ok(())
+        }
+
+        fn cancelled(&self) -> bool {
+            self.cancel.load(Ordering::Relaxed)
+        }
+
+        fn reset_cancel(&mut self) {
+            self.cancel.store(false, Ordering::Relaxed);
+        }
+
+        fn arm_cancel(&mut self) {
+            // rustyline releases SIGINT once readline returns; without this
+            // a Ctrl+C during command execution would kill the process.
+            if self.watcher.is_none() {
+                let flag = self.cancel.clone();
+                self.watcher = Some(tokio::spawn(async move {
+                    while tokio::signal::ctrl_c().await.is_ok() {
+                        flag.store(true, Ordering::Relaxed);
+                    }
+                }));
+            }
+        }
+
+        fn disarm_cancel(&mut self) {
+            if let Some(w) = self.watcher.take() {
+                w.abort();
+            }
+        }
+    }
+
+    impl Drop for EditorIo {
+        fn drop(&mut self) {
+            if let Some(p) = history_path() {
+                if let Some(dir) = p.parent() {
+                    let _ = std::fs::create_dir_all(dir);
+                }
+                let _ = self.ed.save_history(&p);
+            }
+        }
+    }
+
+    /// Piped-stdin mode: same loop, no TTY — editing/history skipped,
+    /// which is correct for CI and `echo … | rism exec`.
+    pub struct PipeIo;
+
+    impl ReplIo for PipeIo {
+        fn next_line(&mut self, _prompt: &str) -> Result<Option<String>> {
+            use std::io::BufRead as _;
+            let stdin = std::io::stdin();
+            let mut lock = stdin.lock();
+            let mut line = String::new();
+            match lock.read_line(&mut line) {
+                Ok(0) => Ok(None),
+                Ok(_) => Ok(Some(line.trim_end_matches(['\r', '\n']).to_string())),
+                Err(e) => Err(Error::Terminal(format!("stdin: {e}"))),
+            }
+        }
+
+        fn notice(&mut self, line: &str) {
+            eprintln!("{line}");
+        }
+
+        fn emit(&mut self, text: &str) -> Result<()> {
+            let mut out = std::io::stdout();
+            let _ = out.write_all(text.as_bytes());
+            let _ = out.flush();
+            Ok(())
+        }
+
+        fn cancelled(&self) -> bool {
+            false
+        }
+
+        fn reset_cancel(&mut self) {}
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::missing_panics_doc)]
+mod tests {
+    use super::*;
+    use crate::error::Error;
+
+    struct FakeSession {
+        lines_seen: Vec<String>,
+        prompts: Vec<String>,
+        fail_on: Option<String>,
+        drained: usize,
+    }
+
+    impl FakeSession {
+        fn ok(prompts: &[&str]) -> Self {
+            Self {
+                lines_seen: Vec::new(),
+                prompts: prompts.iter().map(|s| (*s).to_string()).collect(),
+                fail_on: None,
+                drained: 0,
+            }
+        }
+    }
+
+    impl TerminalOps for FakeSession {
+        async fn run_line(
+            &mut self,
+            command: &str,
+            sink: &mut dyn FnMut(&str) -> Result<()>,
+        ) -> Result<String> {
+            self.lines_seen.push(command.to_string());
+            if self.fail_on.as_deref() == Some(command) {
+                return Err(Error::Terminal("boom".into()));
+            }
+            sink("out:")?;
+            sink(command)?;
+            sink("\n")?;
+            Ok(self.prompts.remove(0))
+        }
+
+        async fn drain_late(&mut self) -> Result<()> {
+            self.drained += 1;
+            Ok(())
+        }
+    }
+
+    struct FakeIo {
+        lines: Vec<Option<String>>,
+        idx: usize,
+        emitted: String,
+        notices: Vec<String>,
+        cancel_pending: bool,
+    }
+
+    impl FakeIo {
+        fn new(lines: Vec<Option<String>>) -> Self {
+            Self {
+                lines,
+                idx: 0,
+                emitted: String::new(),
+                notices: Vec::new(),
+                cancel_pending: false,
+            }
+        }
+    }
+
+    impl ReplIo for FakeIo {
+        fn next_line(&mut self, _prompt: &str) -> Result<Option<String>> {
+            let v = self.lines.get(self.idx).cloned().unwrap_or(None);
+            self.idx += 1;
+            Ok(v)
+        }
+        fn notice(&mut self, line: &str) {
+            self.notices.push(line.to_string());
+        }
+        fn emit(&mut self, text: &str) -> Result<()> {
+            self.emitted.push_str(text);
+            Ok(())
+        }
+        fn cancelled(&self) -> bool {
+            self.cancel_pending
+        }
+        fn reset_cancel(&mut self) {
+            self.cancel_pending = false;
+        }
+    }
+
+    #[tokio::test]
+    async fn repl_streams_and_exits_on_eof() {
+        let mut s = FakeSession::ok(&["USER>", "SET>"]);
+        let mut io = FakeIo::new(vec![Some("write 1".into()), Some("set x=1".into()), None]);
+        let r = run_repl(&mut s, &mut io).await.unwrap();
+        assert_eq!(r.reason, ReplExit::Eof);
+        assert_eq!(r.commands, 2);
+        assert_eq!(s.lines_seen, vec!["write 1", "set x=1"]);
+        assert!(io.emitted.contains("out:write 1"));
+    }
+
+    #[tokio::test]
+    async fn prompt_threads_to_editor() {
+        struct PromptCatcher {
+            seen: Vec<String>,
+            lines: Vec<Option<String>>,
+        }
+        impl ReplIo for PromptCatcher {
+            fn next_line(&mut self, prompt: &str) -> Result<Option<String>> {
+                self.seen.push(prompt.to_string());
+                let i = self.seen.len() - 1;
+                Ok(self.lines.get(i).cloned().unwrap_or(None))
+            }
+            fn notice(&mut self, _: &str) {}
+            fn emit(&mut self, _: &str) -> Result<()> {
+                Ok(())
+            }
+            fn cancelled(&self) -> bool {
+                false
+            }
+            fn reset_cancel(&mut self) {}
+        }
+        let mut s = FakeSession::ok(&["A>", "B>"]);
+        let mut io = PromptCatcher {
+            seen: Vec::new(),
+            lines: vec![Some("c1".into()), Some("c2".into()), None],
+        };
+        run_repl(&mut s, &mut io).await.unwrap();
+        assert_eq!(io.seen, vec!["", "A>", "B>"]);
+    }
+
+    #[tokio::test]
+    async fn exit_command_stops_without_sending() {
+        let mut s = FakeSession::ok(&["USER>"]);
+        let mut io = FakeIo::new(vec![Some("  exit  ".into())]);
+        let r = run_repl(&mut s, &mut io).await.unwrap();
+        assert_eq!(r.reason, ReplExit::Quit);
+        assert_eq!(r.commands, 0);
+        assert!(s.lines_seen.is_empty());
+    }
+
+    #[tokio::test]
+    async fn error_notices_do_not_stop_the_loop() {
+        let mut s = FakeSession::ok(&["USER>", "SET>"]);
+        s.fail_on = Some("bad".into());
+        let mut io = FakeIo::new(vec![Some("bad".into()), Some("ok".into()), None]);
+        let r = run_repl(&mut s, &mut io).await.unwrap();
+        assert_eq!(r.reason, ReplExit::Eof);
+        assert_eq!(r.commands, 2, "failed command still counted");
+        assert!(io.notices.iter().any(|n| n.contains("boom")));
+    }
+
+    #[tokio::test]
+    async fn cancel_drains_and_continues() {
+        let mut s = FakeSession::ok(&["SET>", "USER>"]);
+        s.fail_on = Some("hang".into());
+        let mut io = FakeIo::new(vec![Some("hang".into()), Some("recover".into()), None]);
+        io.cancel_pending = true;
+        let r = run_repl(&mut s, &mut io).await.unwrap();
+        assert_eq!(r.reason, ReplExit::Eof);
+        assert_eq!(s.drained, 1);
+        assert!(io.notices.iter().any(|n| n.starts_with("^C")));
+    }
+
+    #[tokio::test]
+    async fn fatal_on_input_error() {
+        struct BrokenIo;
+        impl ReplIo for BrokenIo {
+            fn next_line(&mut self, _: &str) -> Result<Option<String>> {
+                Err(Error::Terminal("tty gone".into()))
+            }
+            fn notice(&mut self, _: &str) {}
+            fn emit(&mut self, _: &str) -> Result<()> {
+                Ok(())
+            }
+            fn cancelled(&self) -> bool {
+                false
+            }
+            fn reset_cancel(&mut self) {}
+        }
+        let mut s = FakeSession::ok(&[]);
+        let r = run_repl(&mut s, &mut BrokenIo).await.unwrap();
+        assert_eq!(r.reason, ReplExit::Fatal);
+    }
+}

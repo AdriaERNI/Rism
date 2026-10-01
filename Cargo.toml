@@ -12,6 +12,7 @@ name = "rism"
 path = "src/lib.rs"
 
 [dependencies]
+rustyline = { version = "18", default-features = false, features = ["with-dirs", "with-file-history", "custom-bindings"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "process", "time", "io-util", "io-std", "fs", "signal"] }
 clap = { version = "4", features = ["derive", "env"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "cookies"] }
