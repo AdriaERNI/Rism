@@ -1,6 +1,8 @@
 //! `rism` binary — thin dispatch shell. No logic lives here: parse, call
 //! `rism::tools::*`, render. (rust-bestpractices.md §1/§3)
 
+use std::time::Duration;
+
 use anyhow::{Context, Result};
 use clap::Parser;
 
@@ -54,12 +56,16 @@ async fn main() -> Result<()> {
         let Commands::Exec { command, timeout } = &cli.command else {
             unreachable!("matched above")
         };
-        let args = ExecuteCommandArgs {
-            command: command.clone(),
-            namespace: cli.namespace.clone(),
-            timeout_secs: *timeout,
-        };
-        render::render_command(&execute_command(&client, &args).await?, cli.format);
+        if let Some(cmd) = command {
+            let args = ExecuteCommandArgs {
+                command: cmd.clone(),
+                namespace: cli.namespace.clone(),
+                timeout_secs: *timeout,
+            };
+            render::render_command(&execute_command(&client, &args).await?, cli.format);
+        } else {
+            dispatch_repl(&client, &cli, *timeout).await?;
+        }
     } else if let Commands::Test(t) = &cli.command {
         match t {
             TestCommands::Run {
@@ -127,6 +133,30 @@ async fn main() -> Result<()> {
         // Commands::Mcp handled above; clap guarantees we can't reach here.
         debug_assert!(false, "unhandled command");
     }
+    Ok(())
+}
+
+/// Interactive `rism exec`: one persistent session, rustyline editing
+/// (history, Ctrl+R, Ctrl+D) on a TTY; plain line stream when piped.
+async fn dispatch_repl(client: &IrisClient, cli: &Cli, timeout: Option<u64>) -> Result<()> {
+    let ns = cli
+        .namespace
+        .clone()
+        .unwrap_or_else(|| client.settings().iris_namespace.clone());
+    let per_cmd = Duration::from_secs(timeout.unwrap_or(client.settings().timeout_secs));
+    let mut session = rism::iris::terminal::open(client, &ns, per_cmd).await?;
+    let mut io: Box<dyn rism::tools::repl::ReplIo> =
+        if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+            Box::new(
+                rism::tools::repl::rusty::EditorIo::new()
+                    .map_err(|e| anyhow::anyhow!("interactive terminal: {e}"))?,
+            )
+        } else {
+            Box::new(rism::tools::repl::rusty::PipeIo)
+        };
+    eprintln!("rism terminal — {ns} — Ctrl+R history search, Ctrl+D exit");
+    rism::tools::repl::run_repl(&mut session, io.as_mut()).await?;
+    session.close().await.ok();
     Ok(())
 }
 

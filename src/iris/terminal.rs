@@ -29,21 +29,32 @@ pub struct TerminalOutcome {
 type Ws =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
-/// Run `command` in `namespace` on a fresh one-shot terminal session.
+/// A live terminal WebSocket: one authenticated session, many commands.
 ///
-/// A dedicated authenticated GET supplies session cookies: sharing an HTTP
-/// session across concurrent WS terminals loses output (verified Prism lesson).
+/// State set by a command (`set`/`do`) persists across [`TerminalSession::run`]
+/// calls — the same server object the one-shot path creates per command, kept
+/// open. This is what makes the interactive REPL possible; the one-shot
+/// [`execute`] is exactly `open` + one `run` + `close`.
+pub struct TerminalSession {
+    ws: Ws,
+    bound: usize,
+    timeout: Duration,
+}
+
+/// Open a terminal session in `namespace`, authenticating via a dedicated
+/// GET for session cookies: sharing an HTTP session across concurrent WS
+/// terminals loses output (verified Prism lesson).
 ///
 /// # Errors
-/// [`Error::Terminal`] on protocol/timeout/server-error frames; transport
-/// errors from the cookie handshake otherwise.
-pub async fn execute(
+/// [`Error::Terminal`] on protocol/timeout failures; transport errors from
+/// the cookie handshake otherwise.
+pub async fn open(
     client: &IrisClient,
     namespace: &str,
-    command: &str,
-    timeout: Duration,
-) -> Result<TerminalOutcome> {
+    command_timeout: Duration,
+) -> Result<TerminalSession> {
     let st = client.settings();
+    let bound = st.terminal_max_output_chars;
     let url = ws_url(st.iris_base_url.trim_end_matches('/'), &client.api_prefix());
 
     let cookies = client.auth_cookies().await?;
@@ -63,54 +74,179 @@ pub async fn execute(
             .map_err(|_| Error::Terminal("cookie header unparsable".to_string()))?,
     );
 
-    let (mut ws, _resp) = tokio::time::timeout(timeout, tokio_tungstenite::connect_async(request))
-        .await
-        .map_err(|_| Error::Terminal("ws connect timed out".to_string()))?
-        .map_err(|e| Error::Terminal(format!("ws connect: {e}")))?;
+    let (mut ws, _resp) =
+        tokio::time::timeout(command_timeout, tokio_tungstenite::connect_async(request))
+            .await
+            .map_err(|_| Error::Terminal("ws connect timed out".to_string()))?
+            .map_err(|e| Error::Terminal(format!("ws connect: {e}")))?;
 
-    let finish = async {
-        // 1. init
-        let init = next_msg(&mut ws, timeout).await?;
-        if init.get("type").and_then(Value::as_str) != Some("init") {
-            return Err(Error::Terminal(format!("expected init, got {init}")));
-        }
-
-        // 2. config
-        send(
-            &mut ws,
-            &json!({"type": "config", "namespace": namespace, "rawMode": false}),
-        )
-        .await?;
-
-        // 3. initial prompt (discard echo)
-        wait_prompt(&mut ws, timeout).await?;
-
-        // 4. the command
-        send(&mut ws, &json!({"type": "prompt", "input": command})).await?;
-
-        // 5. collect until next prompt
-        let (lines, prompt) = wait_prompt(&mut ws, timeout).await?;
-        Ok::<_, Error>((lines, prompt))
+    let init = next_msg(&mut ws, command_timeout).await?;
+    if init.get("type").and_then(Value::as_str) != Some("init") {
+        return Err(Error::Terminal(format!("expected init, got {init}")));
     }
-    .await;
+    send(
+        &mut ws,
+        &json!({"type": "config", "namespace": namespace, "rawMode": false}),
+    )
+    .await?;
+    // initial prompt echo, discarded
+    wait_prompt(&mut ws, command_timeout).await?;
 
-    let _ = ws.close(None).await;
-    let (lines, prompt) = finish?;
+    Ok(TerminalSession {
+        ws,
+        bound,
+        timeout: command_timeout,
+    })
+}
 
+impl TerminalSession {
+    /// Run one command to completion: send, then collect every output frame
+    /// until the next prompt. Bound applied; full output is returned.
+    ///
+    /// # Errors
+    /// [`Error::Terminal`] on protocol/timeout/server-error frames.
+    pub async fn run(&mut self, command: &str) -> Result<TerminalOutcome> {
+        send(&mut self.ws, &json!({"type": "prompt", "input": command})).await?;
+        let (lines, prompt) = wait_prompt(&mut self.ws, self.timeout).await?;
+        Ok(bound_outcome(&lines, &prompt, self.bound))
+    }
+
+    /// Run one command streaming: `sink` receives each output frame (raw,
+    /// uncleaned) as it arrives; returns the outcome after the prompt frame.
+    /// Up to `bound` chars are forwarded; beyond that the stream keeps being
+    /// consumed (session stays sane) but is dropped, counted in the outcome.
+    ///
+    /// # Errors
+    /// [`Error::Terminal`] on protocol/timeout/server-error frames; sink
+    /// errors abort immediately.
+    pub async fn run_stream<F>(&mut self, command: &str, mut sink: F) -> Result<TerminalOutcome>
+    where
+        F: FnMut(&str) -> Result<()>,
+    {
+        send(&mut self.ws, &json!({"type": "prompt", "input": command})).await?;
+        let mut lines: Vec<String> = Vec::new();
+        let mut streamed = 0usize;
+        let prompt = loop {
+            let msg = next_msg(&mut self.ws, self.timeout).await?;
+            match classify(&msg)? {
+                Frame::Output(text) => {
+                    // outcome keeps the full text (same contract as run);
+                    // the bound here only caps what the sink receives.
+                    if self.bound == 0 || streamed < self.bound {
+                        sink(&text)?;
+                        let take = if self.bound == 0 {
+                            text.len()
+                        } else {
+                            self.bound - streamed
+                        };
+                        streamed += text.len().min(take);
+                    }
+                    lines.push(text);
+                }
+                Frame::Prompt(p) => break p,
+                Frame::Ignored => {}
+            }
+        };
+        Ok(bound_outcome(&lines, &prompt, self.bound))
+    }
+
+    /// After an abandoned command (Ctrl+C), swallow any late frames so the
+    /// next `run` does not see stale output. Bounded wait, then give up.
+    ///
+    /// # Errors
+    /// [`Error::Terminal`] if the socket dies during the drain.
+    pub async fn drain(&mut self) -> Result<()> {
+        loop {
+            match tokio::time::timeout(Duration::from_secs(2), self.ws.next()).await {
+                Err(_elapsed) => return Ok(()), // quiet: session idle again
+                Ok(None | Some(Err(_))) => {
+                    return Err(Error::Terminal("websocket closed".to_string()));
+                }
+                Ok(Some(Ok(Message::Text(t)))) => {
+                    if let Ok(msg) = serde_json::from_str::<Value>(&t) {
+                        if matches!(classify(&msg), Ok(Frame::Prompt(_))) {
+                            return Ok(());
+                        }
+                    }
+                }
+                Ok(Some(Ok(_))) => {}
+            }
+        }
+    }
+
+    /// Close the session politely.
+    ///
+    /// # Errors
+    /// Transport errors from the close frame exchange.
+    pub async fn close(mut self) -> Result<()> {
+        self.ws
+            .close(None)
+            .await
+            .map_err(|e| Error::Terminal(format!("ws close: {e}")))
+    }
+}
+
+/// Classify one protocol frame (pure decision, unit-tested without a socket).
+enum Frame {
+    Output(String),
+    Prompt(String),
+    /// read/readchar/unknown: consume and continue (Prism parity).
+    Ignored,
+}
+
+fn classify(msg: &Value) -> Result<Frame> {
+    match msg.get("type").and_then(Value::as_str) {
+        Some("output") => Ok(Frame::Output(
+            msg.get("text")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        )),
+        Some("prompt") => Ok(Frame::Prompt(
+            msg.get("text")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        )),
+        Some("error") => Err(Error::Terminal(format!(
+            "server error: {}",
+            msg.get("text").and_then(Value::as_str).unwrap_or("unknown")
+        ))),
+        Some("init") => Err(Error::Terminal("unexpected init mid-session".into())),
+        _ => Ok(Frame::Ignored),
+    }
+}
+
+/// Join + clean + bound-apply frames into one outcome (shared by run paths).
+fn bound_outcome(lines: &[String], prompt: &str, bound: usize) -> TerminalOutcome {
     let joined = clean_text(&lines.join("\n"));
-    let bound = client.settings().terminal_max_output_chars;
     let (output, truncated, omitted_chars) = if bound > 0 && joined.len() > bound {
         (joined[..bound].to_string(), true, joined.len() - bound)
     } else {
         (joined, false, 0)
     };
-
-    Ok(TerminalOutcome {
+    TerminalOutcome {
         output,
-        prompt: clean_text(&prompt),
+        prompt: clean_text(prompt),
         truncated,
         omitted_chars,
-    })
+    }
+}
+
+/// Run `command` in `namespace` on a fresh one-shot terminal session
+/// (open → run → close). The scripting/MCP contract: no state persists
+/// between calls.
+///
+/// # Errors
+/// [`Error::Terminal`] on protocol/timeout/server-error frames; transport
+/// errors from the cookie handshake otherwise.
+pub async fn execute(
+    client: &IrisClient,
+    namespace: &str,
+    command: &str,
+    timeout: Duration,
+) -> Result<TerminalOutcome> {
+    open(client, namespace, timeout).await?.run(command).await
 }
 
 fn ws_url(base: &str, prefix: &str) -> String {
@@ -148,28 +284,10 @@ async fn wait_prompt(ws: &mut Ws, timeout: Duration) -> Result<(Vec<String>, Str
     let mut lines = Vec::new();
     loop {
         let msg = next_msg(ws, timeout).await?;
-        match msg.get("type").and_then(Value::as_str) {
-            Some("output") => {
-                let text = msg.get("text").and_then(Value::as_str).unwrap_or_default();
-                lines.push(text.to_string());
-            }
-            Some("prompt") => {
-                return Ok((
-                    lines,
-                    msg.get("text")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string(),
-                ));
-            }
-            Some("error") => {
-                return Err(Error::Terminal(format!(
-                    "server error: {}",
-                    msg.get("text").and_then(Value::as_str).unwrap_or("unknown")
-                )));
-            }
-            Some("init") => return Err(Error::Terminal("unexpected init mid-session".into())),
-            _ => {} // read/readchar/unknown: ignore (Prism parity)
+        match classify(&msg)? {
+            Frame::Output(text) => lines.push(text),
+            Frame::Prompt(prompt) => return Ok((lines, prompt)),
+            Frame::Ignored => {}
         }
     }
 }
@@ -228,5 +346,38 @@ mod tests {
             "<NOROUTINE> *Foo"
         );
         assert_eq!(clean_text("a\x00b\nc"), "ab\nc");
+    }
+
+    #[test]
+    fn classify_maps_frame_types() {
+        assert!(matches!(
+            classify(&json!({"type": "output", "text": "hi"})),
+            Ok(Frame::Output(t)) if t == "hi"
+        ));
+        assert!(matches!(
+            classify(&json!({"type": "prompt", "text": "USER>"})),
+            Ok(Frame::Prompt(t)) if t == "USER>"
+        ));
+        // read/readchar/unknown ignored (Prism parity)
+        assert!(matches!(
+            classify(&json!({"type": "read"})),
+            Ok(Frame::Ignored)
+        ));
+        assert!(classify(&json!({"type": "error", "text": "boom"})).is_err());
+        assert!(classify(&json!({"type": "init"})).is_err());
+    }
+
+    #[test]
+    fn bound_outcome_applies_cap_once() {
+        // frames join with \n: "aaa\nbbb" capped at 4 chars
+        let lines = vec!["aaa".to_string(), "bbb".to_string()];
+        let o = bound_outcome(&lines, "USER>", 4);
+        assert_eq!(o.output, "aaa\n");
+        assert!(o.truncated);
+        assert_eq!(o.omitted_chars, 3);
+        let o = bound_outcome(&lines, "USER>", 0);
+        assert_eq!(o.output, "aaa\nbbb");
+        assert!(!o.truncated);
+        assert_eq!(o.prompt, "USER>");
     }
 }
