@@ -177,16 +177,19 @@ pub async fn run_repl<S: TerminalOps + ?Sized, Io: ReplIo + ?Sized>(
             ..
         } = hooks;
         drop(cancel);
+        let was_cancelled = io.cancelled();
         io.disarm_cancel();
+        // Always clear: a Ctrl+C that raced the prompt (set after the last
+        // poll, before disarm) must not leak into command N+1.
+        io.reset_cancel();
         match ran {
             Ok((p, interrupted)) => {
                 if streamed && !ends_nl && !interrupted {
                     // IRIS frames carry no trailing newline; without this the
                     // next command's output glues onto this one's last frame.
-                    io.emit("\n")?;
+                    let _ = io.emit("\n"); // a broken pipe surfaces next line anyway
                 }
                 if interrupted {
-                    io.reset_cancel();
                     io.notice("<INTERRUPT> abandoned; session clean");
                 }
                 commands += 1;
@@ -198,8 +201,7 @@ pub async fn run_repl<S: TerminalOps + ?Sized, Io: ReplIo + ?Sized>(
                 // frames — drain to the next prompt before touching the
                 // session again, or the next command reads this one's
                 // leftovers.
-                if io.cancelled() {
-                    io.reset_cancel();
+                if was_cancelled {
                     io.notice("^C abandoned; session state may be partial");
                 } else {
                     io.notice(&format!("error: {e}"));

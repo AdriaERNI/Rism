@@ -106,7 +106,11 @@ impl SharedBuf {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         b.push_str(text);
         if b.len() > OUTPUT_CAP {
-            let cut = b.len() - OUTPUT_CAP;
+            // floor to a char boundary: drain() panics mid-char
+            let mut cut = b.len() - OUTPUT_CAP;
+            while cut > 0 && !b.is_char_boundary(cut) {
+                cut -= 1;
+            }
             b.drain(..cut);
         }
     }
@@ -538,6 +542,22 @@ mod tests {
         let (total, tail) = buf.snapshot();
         assert_eq!(total, (OUTPUT_CAP / 50 + 10) * 50);
         assert_eq!(tail.len(), OUTPUT_CAP, "tail capped exactly");
+    }
+
+    #[test]
+    fn ring_buffer_multibyte_straddle_no_panic() {
+        let buf = SharedBuf::new();
+        // 2-byte chars around the cap boundary: the trim must floor to a
+        // char boundary, never panic the job task (which would leave
+        // running=true forever in meta)
+        for _ in 0..(OUTPUT_CAP / 4 + 2) {
+            buf.push("éééé");
+        }
+        let (total, tail) = buf.snapshot();
+        assert_eq!(total, (OUTPUT_CAP / 4 + 2) * 8);
+        assert!(tail.len() <= OUTPUT_CAP + 1); // floor: at most 1 straddle byte
+        assert!(tail.is_char_boundary(0) && tail.is_char_boundary(tail.len()));
+        assert!(tail.chars().all(|c| c == 'é')); // still valid UTF-8
     }
 
     #[test]
