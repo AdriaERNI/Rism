@@ -198,11 +198,16 @@ impl TerminalSession {
         let deadline = tokio::time::Instant::now() + self.timeout;
         let mut lines: Vec<String> = Vec::new();
         let mut streamed = 0usize;
+        let mut dropped_chars = 0usize;
         let mut interrupted = false;
         let prompt = loop {
             match self.next_or_cancel(deadline, hooks.cancel_flag()).await? {
                 Next::Frame(msg) => match classify(&msg)? {
                     Frame::Output(text) => {
+                        // under-bound only: once the cap is reached, keep
+                        // consuming frames (protocol sync) but neither emit
+                        // nor RETAIN them — unbounded lines would defeat
+                        // terminal_max_output_chars on chatty commands
                         if self.bound == 0 || streamed < self.bound {
                             hooks.emit(&text)?;
                             let take = if self.bound == 0 {
@@ -211,8 +216,10 @@ impl TerminalSession {
                                 self.bound - streamed
                             };
                             streamed += text.len().min(take);
+                            lines.push(text);
+                        } else {
+                            dropped_chars += text.len();
                         }
-                        lines.push(text);
                     }
                     Frame::Prompt(p) => break p,
                     Frame::Read => {
@@ -243,6 +250,11 @@ impl TerminalSession {
             lines.push("<INTERRUPT>".to_string());
         }
         let mut outcome = bound_outcome(&lines, &prompt, self.bound);
+        if dropped_chars > 0 {
+            // frames past the cap were consumed but never retained
+            outcome.truncated = true;
+            outcome.omitted_chars += dropped_chars;
+        }
         outcome.interrupted = interrupted;
         self.prompt.clone_from(&outcome.prompt);
         Ok(outcome)
@@ -292,7 +304,10 @@ impl TerminalSession {
                 Ok(Some(Ok(Message::Text(t)))) => {
                     if let Ok(msg) = serde_json::from_str::<Value>(&t) {
                         match classify(&msg) {
-                            Ok(Frame::Prompt(_)) => return Ok(()),
+                            Ok(Frame::Prompt(p)) => {
+                                self.prompt = clean_text(&p);
+                                return Ok(());
+                            }
                             Ok(Frame::Read) => {
                                 send(&mut self.ws, &json!({"type": "read", "input": ""})).await?;
                             }
@@ -520,11 +535,16 @@ fn clean_text(value: &str) -> String {
         if chars[i] == '\x1b' {
             // try full CSI ... m (SGR) skip
             if i + 1 < chars.len() && chars[i + 1] == '[' {
+                // CSI: parameter bytes, then a final byte @..~  (SGR 'm' and
+                // erase-line 'K', cursor moves, etc. — all must vanish whole)
                 let mut j = i + 2;
-                while j < chars.len() && (chars[j].is_ascii_digit() || chars[j] == ';') {
+                while j < chars.len()
+                    && (chars[j].is_ascii_digit()
+                        || matches!(chars[j], ';' | '<' | '=' | '>' | '?'))
+                {
                     j += 1;
                 }
-                if j < chars.len() && chars[j] == 'm' {
+                if j < chars.len() && ('@'..='~').contains(&chars[j]) {
                     i = j + 1;
                     continue;
                 }

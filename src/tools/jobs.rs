@@ -27,6 +27,9 @@ pub const OUTPUT_CAP: usize = 100_000;
 pub const RETENTION: Duration = Duration::from_secs(30 * 60);
 /// Upper bound on concurrently running jobs (leak guard).
 pub const MAX_RUNNING: usize = 16;
+/// Upper bound on registry entries (finished or not); oldest finished jobs
+/// are evicted first. Bounds the `list()` payload and idle memory within retention.
+pub const MAX_ENTRIES: usize = 256;
 
 /// One tracked background command (serializable view).
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -49,9 +52,9 @@ pub struct JobInfo {
     pub error: Option<String>,
     /// Prompt seen after completion.
     pub prompt: Option<String>,
-    /// Total output chars produced so far (may exceed `output`).
+    /// Total output produced so far, in bytes (may exceed `output`).
     pub output_chars: usize,
-    /// Tail of the output (up to [`OUTPUT_CAP`] chars). Empty in list view.
+    /// Tail of the output (up to [`OUTPUT_CAP`] bytes). Empty in list view.
     pub output: String,
 }
 
@@ -239,8 +242,16 @@ pub fn start(
     let client = client.clone();
     let task_slot = slot.clone();
     tokio::spawn(async move {
-        let outcome = run_job(client, ns, command, timeout, task_slot.clone()).await;
-        finish(&task_slot, outcome);
+        // Panic-safe finalize: a task panic (e.g. allocation in a wild frame)
+        // would otherwise leave running=true forever — a GC-proof zombie
+        // burning one of the 16 slots. Drop runs even on unwind.
+        let mut guard = FinishOnDrop {
+            slot: task_slot,
+            done: false,
+        };
+        let outcome = run_job(client, ns, command, timeout, guard.slot.clone()).await;
+        finish(&guard.slot, outcome);
+        guard.done = true;
     });
     Ok(snapshot(&id, &slot, true))
 }
@@ -270,9 +281,9 @@ async fn run_job(
         buf: slot.buf.clone(),
         cancel: slot.cancel.clone(),
     };
-    // run_with bounds total wall-clock by `timeout` (trip → protocol
-    // interrupt, error path also breaks the child), so a hung command can
-    // never outlive the job.
+    // open and run_with are EACH bounded by `timeout` (worst case ~2x
+    // wall-clock); a trip → protocol interrupt, and the error path also
+    // breaks the child, so a hung command can never outlive the job.
     match session.run_with(&command, &mut hooks).await {
         Ok(o) => Ok(o),
         Err(e) => Err(e.to_string()),
@@ -295,6 +306,19 @@ impl api::StreamHooks for JobHooks {
     }
     fn cancel_flag(&self) -> Arc<std::sync::atomic::AtomicBool> {
         self.cancel.clone()
+    }
+}
+
+struct FinishOnDrop {
+    slot: Arc<JobSlot>,
+    done: bool,
+}
+
+impl Drop for FinishOnDrop {
+    fn drop(&mut self) {
+        if !self.done {
+            finish(&self.slot, Err("job task panicked".to_string()));
+        }
     }
 }
 
@@ -393,6 +417,16 @@ fn gc(reg: &mut Registry) {
         None => true,
         Some(t) => now.saturating_sub(t) < RETENTION.as_secs(),
     });
+    if reg.len() > MAX_ENTRIES {
+        let mut finished: Vec<(u64, String)> = reg
+            .iter()
+            .filter_map(|(k, s)| s.meta().finished_unix.map(|t| (t, k.clone())))
+            .collect();
+        finished.sort();
+        for (_, id) in finished.into_iter().take(reg.len() - MAX_ENTRIES) {
+            reg.remove(&id);
+        }
+    }
 }
 
 // ── tool-facing API (one fn per MCP tool, tools/mod contract) ────────────

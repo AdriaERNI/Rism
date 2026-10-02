@@ -59,7 +59,7 @@ configured timeout). Poll with `command_status`, stop with `command_cancel`.
 Up to 16 concurrent jobs; finished jobs are retained 30 min.
 
 ### `command_status` — `job_id`
-With `job_id`: full state + streamed output tail (tail capped at 100k chars;
+With `job_id`: full state + streamed output tail (tail capped at 100 KB;
 `output_chars` is the true total). Fields: `running`, `interrupted`,
 `error`, `prompt`, `started_unix`, `finished_unix`. Omit `job_id`: list of
 all jobs, newest first (no output bodies).
