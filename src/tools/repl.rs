@@ -23,7 +23,7 @@ pub struct ReplHooks<'a, Io: ReplIo + ?Sized> {
 
 impl<Io: ReplIo + ?Sized> api::StreamHooks for ReplHooks<'_, Io> {
     fn emit(&mut self, text: &str) -> Result<()> {
-        self.streamed = !text.is_empty();
+        self.streamed |= !text.is_empty();
         self.ends_nl = text.ends_with('\n');
         self.io.emit(text)
     }
@@ -159,6 +159,7 @@ pub async fn run_repl<S: TerminalOps + ?Sized, Io: ReplIo + ?Sized>(
         if trimmed.eq_ignore_ascii_case("exit") || trimmed.eq_ignore_ascii_case("quit") {
             break ReplExit::Quit;
         }
+        io.reset_cancel(); // fresh start: watcher is not yet running
         io.arm_cancel();
         let io_cancel = io.cancel_handle();
         let mut hooks = ReplHooks {
@@ -206,9 +207,19 @@ pub async fn run_repl<S: TerminalOps + ?Sized, Io: ReplIo + ?Sized>(
                 } else {
                     io.notice(&format!("error: {e}"));
                 }
-                if let Err(e) = session.drain_late().await {
-                    io.notice(&format!("session lost: {e}"));
-                    break ReplExit::Fatal;
+                // keep cancel detection alive during the drain: this is
+                // exactly when the user wants to bail, and the watcher is
+                // otherwise down until the next arm (default SIGINT would
+                // kill us before session.close() runs)
+                io.arm_cancel();
+                let drained = session.drain_late().await;
+                io.disarm_cancel();
+                match drained {
+                    Ok(()) => prompt = session.current_prompt(),
+                    Err(e) => {
+                        io.notice(&format!("session lost: {e}"));
+                        break ReplExit::Fatal;
+                    }
                 }
             }
         }
@@ -297,9 +308,9 @@ pub mod rusty {
                 return Ok(());
             }
             let mut out = std::io::stdout();
-            let _ = out.write_all(text.as_bytes());
-            let _ = out.flush();
-            Ok(())
+            out.write_all(text.as_bytes())
+                .and_then(|()| out.flush())
+                .map_err(|e| Error::Terminal(format!("stdout: {e}")))
         }
 
         fn cancelled(&self) -> bool {
@@ -328,7 +339,11 @@ pub mod rusty {
         fn arm_cancel(&mut self) {
             // rustyline releases SIGINT once readline returns; without this
             // a Ctrl+C during command execution would kill the process.
-            if self.watcher.is_none() {
+            if self
+                .watcher
+                .as_ref()
+                .is_none_or(tokio::task::JoinHandle::is_finished)
+            {
                 let flag = self.cancel.clone();
                 self.watcher = Some(tokio::spawn(async move {
                     while tokio::signal::ctrl_c().await.is_ok() {
@@ -379,9 +394,9 @@ pub mod rusty {
 
         fn emit(&mut self, text: &str) -> Result<()> {
             let mut out = std::io::stdout();
-            let _ = out.write_all(text.as_bytes());
-            let _ = out.flush();
-            Ok(())
+            out.write_all(text.as_bytes())
+                .and_then(|()| out.flush())
+                .map_err(|e| Error::Terminal(format!("stdout: {e}")))
         }
 
         fn cancelled(&self) -> bool {
@@ -420,6 +435,9 @@ mod tests {
         lines_seen: Vec<String>,
         prompts: Vec<String>,
         fail_on: Option<String>,
+        /// command during which a Ctrl+C "arrives" (flag set mid-run, like
+        /// the real watcher racing the transport's last poll)
+        cancel_during: Option<String>,
         drained: usize,
     }
 
@@ -429,6 +447,7 @@ mod tests {
                 lines_seen: Vec::new(),
                 prompts: prompts.iter().map(|s| (*s).to_string()).collect(),
                 fail_on: None,
+                cancel_during: None,
                 drained: 0,
             }
         }
@@ -441,6 +460,11 @@ mod tests {
             hooks: &mut dyn api::StreamHooks,
         ) -> Result<(String, bool)> {
             self.lines_seen.push(command.to_string());
+            if self.cancel_during.as_deref() == Some(command) {
+                hooks
+                    .cancel_flag()
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
             if self.fail_on.as_deref() == Some(command) {
                 return Err(Error::Terminal("boom".into()));
             }
@@ -488,10 +512,6 @@ mod tests {
                 notices: Vec::new(),
                 cancel: std::sync::Arc::new(AtomicBool::new(false)),
             }
-        }
-        fn arm(&mut self) {
-            self.cancel
-                .store(true, std::sync::atomic::Ordering::Relaxed);
         }
     }
 
@@ -586,8 +606,8 @@ mod tests {
     async fn cancel_drains_and_continues() {
         let mut s = FakeSession::ok(&["SET>", "USER>"]);
         s.fail_on = Some("hang".into());
+        s.cancel_during = Some("hang".into());
         let mut io = FakeIo::new(vec![Some("hang".into()), Some("recover".into()), None]);
-        io.arm();
         let r = run_repl(&mut s, &mut io).await.unwrap();
         assert_eq!(r.reason, ReplExit::Eof);
         assert_eq!(s.drained, 1);
@@ -597,8 +617,8 @@ mod tests {
     #[tokio::test]
     async fn interrupted_outcome_resyncs_without_drain() {
         let mut s = FakeSession::ok(&["SET>", "USER>"]);
+        s.cancel_during = Some("slow".into());
         let mut io = FakeIo::new(vec![Some("slow".into()), Some("next".into()), None]);
-        io.arm(); // first command comes back interrupted; loop resets the flag
         let r = run_repl(&mut s, &mut io).await.unwrap();
         assert_eq!(r.reason, ReplExit::Eof);
         assert_eq!(r.commands, 2);
@@ -606,6 +626,30 @@ mod tests {
         assert!(
             io.notices.iter().any(|n| n.contains("<INTERRUPT>")),
             "user must see the break happened: {:?}",
+            io.notices
+        );
+    }
+
+    #[tokio::test]
+    async fn raced_cancel_does_not_abort_next_command() {
+        // flag set during command 1 (which completes Ok and unprompted —
+        // the disarm race), command 2 must still run clean
+        let mut s = FakeSession::ok(&["SET>", "USER>"]);
+        s.cancel_during = Some("first".into());
+        let mut io = FakeIo::new(vec![Some("first".into()), Some("second".into()), None]);
+        let r = run_repl(&mut s, &mut io).await.unwrap();
+        assert_eq!(r.commands, 2);
+        assert_eq!(r.reason, ReplExit::Eof);
+        // command 1 came back interrupted; command 2 must NOT be falsely
+        // aborted by the stale flag: it reaches the server and streams
+        assert_eq!(s.lines_seen, vec!["first", "second"]);
+        assert_eq!(
+            io.notices
+                .iter()
+                .filter(|n| n.contains("<INTERRUPT>"))
+                .count(),
+            1,
+            "exactly one real interrupt: {:?}",
             io.notices
         );
     }
