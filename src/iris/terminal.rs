@@ -231,7 +231,11 @@ impl TerminalSession {
                     interrupted = true;
                     hooks.emit("\n")?;
                     send(&mut self.ws, &json!({"type": "interrupt"})).await?;
-                    break self.await_prompt(deadline).await?;
+                    // Fresh bounded window for the break to settle: a cancel
+                    // landing at 99% of the command deadline must still
+                    // interrupt (not time out mid-interrupt).
+                    let settle = tokio::time::Instant::now() + Duration::from_secs(5);
+                    break self.await_prompt(settle).await?;
                 }
             }
         };
@@ -408,11 +412,26 @@ fn classify(msg: &Value) -> Result<Frame> {
     }
 }
 
+/// Largest char boundary at or below `want` (MSRV-safe `floor_char_boundary`,
+/// the std method needs 1.91).
+fn floor_char_boundary(s: &str, want: usize) -> usize {
+    if want >= s.len() {
+        return s.len();
+    }
+    let mut i = want;
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
 /// Join + clean + bound-apply frames into one outcome (shared by run paths).
 fn bound_outcome(lines: &[String], prompt: &str, bound: usize) -> TerminalOutcome {
     let joined = clean_text(&lines.join("\n"));
     let (output, truncated, omitted_chars) = if bound > 0 && joined.len() > bound {
-        (joined[..bound].to_string(), true, joined.len() - bound)
+        // floor to a char boundary: a multibyte char may straddle `bound`
+        let cut = floor_char_boundary(&joined, bound);
+        (joined[..cut].to_string(), true, joined.len() - cut)
     } else {
         (joined, false, 0)
     };
@@ -451,9 +470,15 @@ fn ws_url(base: &str, prefix: &str) -> String {
 }
 
 async fn send(ws: &mut Ws, msg: &Value) -> Result<()> {
-    ws.send(Message::Text(msg.to_string().into()))
-        .await
-        .map_err(|e| Error::Terminal(format!("ws send: {e}")))
+    // timeout caps a TCP write stall (peer zero window) that would otherwise
+    // hang the run loop past its deadline; 10s is generous for prompt frames.
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        ws.send(Message::Text(msg.to_string().into())),
+    )
+    .await
+    .map_err(|_| Error::Terminal("ws send stalled".to_string()))?
+    .map_err(|e| Error::Terminal(format!("ws send: {e}")))
 }
 
 async fn next_msg(ws: &mut Ws, timeout: Duration) -> Result<Value> {
@@ -577,5 +602,15 @@ mod tests {
         assert_eq!(o.output, "aaa\nbbb");
         assert!(!o.truncated);
         assert_eq!(o.prompt, "USER>");
+    }
+
+    #[test]
+    fn bound_outcome_multibyte_straddle_no_panic() {
+        // 2-byte chars straddling the byte bound must floor, not panic
+        let lines = vec!["ééé".to_string()]; // 6 bytes, bound 3 lands mid-char
+        let o = bound_outcome(&lines, "USER>", 3);
+        assert!(o.truncated);
+        assert_eq!(o.output, "é");
+        assert_eq!(o.omitted_chars, 4);
     }
 }
