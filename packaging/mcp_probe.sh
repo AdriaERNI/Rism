@@ -25,6 +25,18 @@ if [ "${n:-0}" -ne 28 ]; then
   exit 1
 fi
 
+# MCP best-practice contract: the 4 terminal tools must ship annotations
+# (rmcp renders them camelCase on the wire). title alone is not enough:
+# at least one of the behavior hints must be present.
+if ! printf '%s' "$tools_line" | grep -q '"readOnlyHint":true'; then
+  echo "MCP probe: command_status missing readOnlyHint annotation"
+  exit 1
+fi
+if ! printf '%s' "$tools_line" | grep -q '"destructiveHint"'; then
+  echo "MCP probe: execute_command* missing destructiveHint annotation"
+  exit 1
+fi
+
 # execute_sql answer must be a successful result carrying the ok column.
 # isError is the authoritative flag — a substring like "ok" in an error
 # message ("could not open...") must never pass this gate.

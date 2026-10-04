@@ -134,7 +134,12 @@ impl RismMcp {
     }
 
     #[tool(
-        description = "Execute an ObjectScript command in the IRIS terminal (WebSocket). For method calls, globals, system utilities — anything ObjectScript."
+        description = "Execute an ObjectScript command in the IRIS terminal (WebSocket). For method calls, globals, system utilities — anything ObjectScript.",
+        annotations(
+            title = "Run ObjectScript",
+            destructive_hint = true,
+            idempotent_hint = false
+        )
     )]
     async fn execute_command(
         &self,
@@ -144,7 +149,12 @@ impl RismMcp {
     }
 
     #[tool(
-        description = "Start an ObjectScript command as a BACKGROUND job (own terminal session) and return its job_id immediately — for long-running work (loops, imports, batch methods). Poll output/state with command_status; stop it with command_cancel (real server-side interrupt)."
+        description = "Start an ObjectScript command as a BACKGROUND job (own terminal session) and return its job_id immediately — for long-running work (loops, imports, batch methods). Poll output/state with command_status; stop it with command_cancel (real server-side interrupt).",
+        annotations(
+            title = "Run ObjectScript in background",
+            destructive_hint = true,
+            idempotent_hint = false
+        )
     )]
     async fn execute_command_background(
         &self,
@@ -154,7 +164,8 @@ impl RismMcp {
     }
 
     #[tool(
-        description = "Check a background terminal job: pass job_id for state + streamed output tail, or omit to list all jobs (newest first). running=false means finished (see interrupted/error fields)."
+        description = "Check a background terminal job: pass job_id for state + streamed output tail, or omit to list all jobs (newest first). running=false means finished (see interrupted/error fields).",
+        annotations(title = "Poll background job", read_only_hint = true)
     )]
     async fn command_status(
         &self,
@@ -164,7 +175,12 @@ impl RismMcp {
     }
 
     #[tool(
-        description = "Cancel (interrupt) a running background terminal job by job_id. Sends a server-side break; the command stops within milliseconds and its partial state stays as executed."
+        description = "Cancel (interrupt) a running background terminal job by job_id. Sends a server-side break; the command stops within milliseconds and its partial state stays as executed.",
+        annotations(
+            title = "Interrupt background job",
+            destructive_hint = false,
+            idempotent_hint = true
+        )
     )]
     async fn command_cancel(
         &self,

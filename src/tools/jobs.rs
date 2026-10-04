@@ -504,6 +504,17 @@ pub fn command_cancel(args: &CancelCommandArgs) -> Result<JobInfo> {
 mod tests {
     use super::*;
 
+    /// Registry-touching tests are multi-operation sequences (clear,
+    /// insert, act); OPLOCK only serializes single ops. This outer lock
+    /// makes each test's whole body atomic against other tests sharing
+    /// the process-global registry.
+    static TESTLOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        TESTLOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     fn clear() {
         lock_reg().clear();
     }
@@ -528,7 +539,93 @@ mod tests {
     }
 
     #[test]
+    fn finish_on_drop_guard_finalizes_panicking_task() {
+        let _s = serial();
+        // A job task that unwinds before finish() must still land on a
+        // terminal state, or the slot is a running=true zombie forever
+        // (GC keeps it, the 16-cap counts it, cancel has no poller).
+        clear();
+        let slot = insert("zombie-x", true, None);
+        let guard_slot = slot.clone();
+        let _ = std::panic::catch_unwind(move || {
+            let mut guard = FinishOnDrop {
+                slot: guard_slot,
+                done: false,
+            };
+            // simulate the panic BEFORE finish() runs:
+            let _ = &mut guard;
+            panic!("boom");
+        });
+        let m = slot.meta();
+        assert!(!m.running, "guard must finalize the slot on unwind");
+        assert!(m.finished_unix.is_some());
+        assert!(m.error.as_deref().unwrap_or_default().contains("panicked"));
+    }
+
+    #[test]
+    fn gc_evicts_oldest_beyond_entry_cap() {
+        let _s = serial();
+        clear();
+        let mut reg = lock_reg();
+        for i in 0..(MAX_ENTRIES + 40) {
+            let slot = Arc::new(JobSlot {
+                meta: Mutex::new(JobMeta {
+                    command: "w 1".into(),
+                    namespace: "USER".into(),
+                    // i=0 oldest, i=N newest — inside RETENTION for all
+                    started_unix: unix_now() - u64::try_from(MAX_ENTRIES + 40 - i).unwrap_or(0) - 2,
+                    finished_unix: Some(
+                        unix_now() - u64::try_from(MAX_ENTRIES + 39 - i).unwrap_or(0),
+                    ),
+                    running: false,
+                    interrupted: false,
+                    error: None,
+                    prompt: None,
+                }),
+                buf: SharedBuf::new(),
+                cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            });
+            reg.insert(format!("cap-{i:05}"), slot);
+        }
+        // one running job must never be evicted by the cap
+        reg.insert(
+            "keep-running".to_string(),
+            Arc::new(JobSlot {
+                meta: Mutex::new(JobMeta {
+                    command: "w 1".into(),
+                    namespace: "USER".into(),
+                    started_unix: unix_now(),
+                    finished_unix: None,
+                    running: true,
+                    interrupted: false,
+                    error: None,
+                    prompt: None,
+                }),
+                buf: SharedBuf::new(),
+                cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            }),
+        );
+        gc(&mut reg);
+        assert!(reg.len() <= MAX_ENTRIES, "cap enforced: {}", reg.len());
+        assert!(
+            reg.contains_key("keep-running"),
+            "running job never evicted"
+        );
+        assert!(
+            reg.contains_key(&format!("cap-{:05}", MAX_ENTRIES + 39)),
+            "newest finished survives"
+        );
+        assert!(
+            reg.len() >= MAX_ENTRIES - 1,
+            "eviction is bounded: {}",
+            reg.len()
+        );
+        assert!(!reg.contains_key("cap-00000"), "oldest finished evicted");
+    }
+
+    #[test]
     fn ids_unique_and_shaped() {
+        let _s = serial();
         let a = new_id();
         let b = new_id();
         assert!(a.starts_with("rism-") && b.starts_with("rism-"));
@@ -537,6 +634,7 @@ mod tests {
 
     #[test]
     fn gc_keeps_running_and_fresh_drops_stale() {
+        let _s = serial();
         let mut reg = Registry::new();
         let mk = |id: &str, running: bool, finished: Option<u64>| {
             (
@@ -569,6 +667,7 @@ mod tests {
 
     #[test]
     fn sharedbuf_keeps_tail_and_total() {
+        let _s = serial();
         let buf = SharedBuf::new();
         for _ in 0..(OUTPUT_CAP / 50 + 10) {
             buf.push(&"x".repeat(50));
@@ -580,6 +679,7 @@ mod tests {
 
     #[test]
     fn ring_buffer_multibyte_straddle_no_panic() {
+        let _s = serial();
         let buf = SharedBuf::new();
         // 2-byte chars around the cap boundary: the trim must floor to a
         // char boundary, never panic the job task (which would leave
@@ -596,6 +696,7 @@ mod tests {
 
     #[test]
     fn cancel_trips_flag_and_status_reports() {
+        let _s = serial();
         clear();
         let slot = insert("job-x", true, None);
         let info = cancel("job-x").unwrap();
@@ -629,6 +730,7 @@ mod tests {
 
     #[test]
     fn list_view_omits_bodies_and_sorts_newest_first() {
+        let _s = serial();
         clear();
         // fresh finish time: a stale one would be (correctly) GC'd
         let a = insert("a-listed", false, Some(unix_now()));
