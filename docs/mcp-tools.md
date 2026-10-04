@@ -41,6 +41,15 @@ CI-clean servers). Optional `flags`.
 
 ## SQL & terminal
 
+Every terminal tool ships MCP **annotations** (`title`, behavior hints),
+so clients can show names and decide confirmation policy without guessing:
+`command_status` is `readOnlyHint` (free to call), `command_cancel` is
+non-destructive and idempotent (repeat-cancel is a no-op), and both
+`execute_command*` are `destructiveHint` — ObjectScript can mutate data.
+Program/runtime errors (`<SYNTAX>`, `<NOROUTINE>`, `<INTERRUPT>`) come back
+as terminal **output** with a successful call, exactly as a real terminal
+echoes them — read `output`, not just `isError`.
+
 ### `execute_sql` — `query`*
 Optional `max_rows`.
 

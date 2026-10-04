@@ -128,6 +128,14 @@ jobs:
           $RISM_BIN doc delete RismCI.Smoke.cls
           echo "LIVE SMOKE OK"
 
+      # MCP-surface contracts (annotations, background lifecycle, cap,
+      # error hygiene) against the same fresh IRIS. #[ignore]d so local
+      # `cargo test` stays server-free; the binary under test is the one
+      # cargo builds for integration tests.
+      - name: Live MCP contracts
+        timeout-minutes: 5
+        run: cargo test --test background_jobs -- --ignored
+
   # Tagged builds: Linux + Windows (x64/i686/arm64) binaries + installer,
   # packaged by `release`.
   build:
