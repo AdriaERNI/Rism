@@ -1,6 +1,6 @@
 # MCP Tools
 
-Rism serves **28 tools** over JSON-RPC 2.0 / stdio (`rism mcp`). Parameters marked
+Rism serves **25 tools** over JSON-RPC 2.0 / stdio (`rism mcp`). Parameters marked
 `*` are required. All tools accept an optional `namespace` (override the configured
 default) unless noted. Every tool's behavior is identical to the CLI path — same
 core, two doors.
@@ -41,11 +41,9 @@ CI-clean servers). Optional `flags`.
 
 ## SQL & terminal
 
-Every terminal tool ships MCP **annotations** (`title`, behavior hints),
-so clients can show names and decide confirmation policy without guessing:
-`command_status` is `readOnlyHint` (free to call), `command_cancel` is
-non-destructive and idempotent (repeat-cancel is a no-op), and both
-`execute_command*` are `destructiveHint` — ObjectScript can mutate data.
+Terminal tools ship MCP **annotations** (`title`, behavior hints), so clients
+can show names and decide confirmation policy without guessing:
+`execute_command` is `destructiveHint` — ObjectScript can mutate data.
 Program/runtime errors (`<SYNTAX>`, `<NOROUTINE>`, `<INTERRUPT>`) come back
 as terminal **output** with a successful call, exactly as a real terminal
 echoes them — read `output`, not just `isError`.
@@ -58,27 +56,30 @@ ObjectScript command in a terminal session over the WebSocket. Optional
 `timeout_secs`. Commands containing `read` are answered with an empty line
 (nothing is typing); Ctrl+C semantics do not apply — use `timeout_secs`.
 
-### `execute_command_background` — `command`*
-Starts an ObjectScript command on its **own terminal session in the
-background** and returns a `job_id` immediately — the tool for long-running
-work (loops, batch methods, imports) that would blow a request timeout.
-Output streams into the job as it is produced. Optional `namespace`,
-`timeout_secs` (wall-clock cap after which the job is interrupted; default:
-configured timeout). Poll with `command_status`, stop with `command_cancel`.
-Up to 16 concurrent jobs; finished jobs are retained 30 min.
+#### Background execution (MCP Tasks)
 
-### `command_status` — `job_id`
-With `job_id`: full state + streamed output tail (tail capped at 100 KB;
-`output_chars` is the true total). Fields: `running`, `interrupted`,
-`error`, `prompt`, `started_unix`, `finished_unix`. Omit `job_id`: list of
-all jobs, newest first (no output bodies).
+For long-running work (loops, batch methods, imports) that would blow a
+request timeout, pass `background: true`: instead of blocking, the call
+answers immediately with a **task handle** (`resultType: "task"`, a
+`taskId`, status `working`). This is the MCP Tasks extension
+(SEP-2663) — a protocol mechanism, not extra tools:
 
-### `command_cancel` — `job_id`
-Interrupts a running job with the terminal protocol's `interrupt` message —
-a real server-side break: the ObjectScript child unwinds with
-`<INTERRUPT>` within milliseconds (same mechanism as the VS Code lite
-terminal's Ctrl+C). The job stays readable afterwards via `command_status`
-(`interrupted: true`).
+- **Poll** with `tasks/get` (`taskId`): status (`working` → `completed` /
+  `cancelled` / `failed`) plus a `statusMessage` with the streamed
+  character count while running. Finished output is served in the
+  `result` of a `completed` task — byte-identical to what the synchronous
+  call would have returned.
+- **Stop** with `tasks/cancel` (`taskId`): sends the terminal protocol's
+  `interrupt` — a real server-side break: the ObjectScript child unwinds
+  with `<INTERRUPT>` within milliseconds and the partial state stays as
+  executed (same mechanism as the VS Code lite terminal's Ctrl+C).
+  Cancelling a finished task is a safe no-op.
+- A task's output lives 30 minutes (advertised as `ttlMs`); after that the
+  id is expired and `tasks/get` answers with a clean error. Up to 16
+  concurrent background tasks; the 17th start is refused actionably.
+- `background=true` requires a client that declared the Tasks extension in
+  `initialize`. Non-declaring clients get an honest tool-level error
+  telling them to run synchronously — never a silent timeout.
 
 ## Unit tests
 

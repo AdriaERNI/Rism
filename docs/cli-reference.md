@@ -150,5 +150,5 @@ units included. `--raw` prints the raw metric vector instead of the scored table
 ## MCP server
 
 ### `rism mcp`
-Serve JSON-RPC 2.0 over stdio (all 28 tools). Used by MCP clients; no flags.
+Serve JSON-RPC 2.0 over stdio (all 25 tools). Used by MCP clients; no flags.
 `RISM_DEBUG_TOOLS=0` removes the 9 `debug_*` tools from discovery.

@@ -61,6 +61,7 @@ async fn main() -> Result<()> {
                 command: cmd.clone(),
                 namespace: cli.namespace.clone(),
                 timeout_secs: *timeout,
+                background: None,
             };
             render::render_command(&execute_command(&client, &args).await?, cli.format);
         } else {

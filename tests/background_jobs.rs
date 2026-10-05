@@ -1,11 +1,14 @@
-//! Live MCP-surface contract for the background terminal jobs.
+//! Live MCP-surface contract for background terminal work via MCP Tasks
+//! (SEP-2663).
 //!
 //! Talks JSON-RPC over stdio to the built `rism mcp` binary — the exact
-//! contract an MCP client sees: schemas + annotations, non-blocking start,
-//! streamed output growth between polls, real server-side cancel with a
-//! frozen final state, roster/cap/unknown-id errors. Gated `#[ignore]`:
-//! CI runs it in the live-smoke job against a fresh IRIS; locally,
-//! `cargo test -- --ignored` with a dev container up.
+//! contract a Tasks-capable MCP client sees: schemas + annotations,
+//! task-mode start (non-blocking), streamed growth between polls via
+//! `tasks/get`, real server-side cancel via `tasks/cancel` with a frozen
+//! final state, the sync-result equivalence of completed tasks, the
+//! Rail-A refusal for non-declaring clients, cap/unknown-id errors.
+//! Gated `#[ignore]`: CI runs it in the live-smoke job against a fresh
+//! IRIS; locally, `cargo test -- --ignored` with a dev container up.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -26,10 +29,24 @@ struct Mcp {
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
     next_id: u64,
+    /// The `initialize` response — what the server advertised.
+    init: Value,
 }
 
 impl Mcp {
+    /// Client that declares the SEP-2663 Tasks extension.
     fn spawn() -> Self {
+        Self::spawn_with(serde_json::json!({
+            "extensions": {"io.modelcontextprotocol/tasks": {}}
+        }))
+    }
+
+    /// Client that does NOT declare Tasks (Rail-A path).
+    fn spawn_plain() -> Self {
+        Self::spawn_with(serde_json::json!({}))
+    }
+
+    fn spawn_with(capabilities: Value) -> Self {
         // locate the real binary: cargo sets CARGO_BIN_EXE_rism for tests
         let exe = env!("CARGO_BIN_EXE_rism");
         let mut child = Command::new(exe)
@@ -46,13 +63,14 @@ impl Mcp {
             stdin,
             stdout,
             next_id: 0,
+            init: Value::Null,
         };
-        m.rpc(
+        m.init = m.rpc(
             "initialize",
             serde_json::json!({
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": "2025-06-18",
                 "clientInfo": {"name": "integration", "version": "0"},
-                "capabilities": {}
+                "capabilities": capabilities
             }),
         );
         m.notify("notifications/initialized", serde_json::json!({}));
@@ -68,7 +86,7 @@ impl Mcp {
         self.send(serde_json::json!({"jsonrpc":"2.0","method":method,"params":params}));
     }
 
-    /// One request; returns the result/error payload of the matching id,
+    /// One request; returns the full response message of the matching id,
     /// skipping interleaved responses (rmcp may answer out of order).
     fn rpc(&mut self, method: &str, params: Value) -> Value {
         self.next_id += 1;
@@ -88,14 +106,19 @@ impl Mcp {
         panic!("no response for id {id}")
     }
 
-    /// `tools/call` → (`is_error`, payload). The payload is the text content
-    /// block, JSON-parsed when possible (`map_json`'s Err branch is plain
-    /// text — callers assert on `is_error` + the raw string in that case).
+    /// `tools/call` → (`is_error`, payload, text). `is_error` covers BOTH
+    /// failure channels: the tool-level `result.isError` and a JSON-RPC
+    /// `error` object (which task-creation refusals use — no task exists
+    /// to carry the failure). Text is the content block or error message.
     fn call(&mut self, tool: &str, args: Value) -> (bool, Value, String) {
         let msg = self.rpc(
             "tools/call",
             serde_json::json!({"name": tool, "arguments": args}),
         );
+        if let Some(err) = msg.get("error") {
+            let text = err["message"].as_str().unwrap_or_default().to_string();
+            return (true, Value::Null, text);
+        }
         let res = msg.get("result").cloned().unwrap_or(Value::Null);
         let is_err = res.get("isError").and_then(Value::as_bool).unwrap_or(false);
         let text = res["content"][0]["text"]
@@ -106,30 +129,94 @@ impl Mcp {
         (is_err, parsed, text)
     }
 
-    fn job(&mut self, id: &str) -> Value {
-        let (_, p, _) = self.call("command_status", serde_json::json!({"job_id": id}));
-        p.get("job").cloned().unwrap_or(Value::Null)
+    /// `execute_command(background=true)` as a Tasks client: must answer
+    /// with a task handle (resultType "task", status "working"), and
+    /// returns the full `CreateTaskResult` payload.
+    fn task_start(&mut self, args: Value) -> Value {
+        let msg = self.rpc(
+            "tools/call",
+            serde_json::json!({
+                "name": "execute_command",
+                "arguments": {
+                    "background": true,
+                    "command": args["command"],
+                    "timeout_secs": args["timeout_secs"],
+                }
+            }),
+        );
+        let res = msg.get("result").cloned().unwrap_or(Value::Null);
+        assert_eq!(res["resultType"], "task", "expected task handle: {res}");
+        res
     }
 
-    fn wait_done(&mut self, id: &str, budget: Duration) -> Value {
+    fn task_id(res: &Value) -> String {
+        res["taskId"].as_str().unwrap().to_string()
+    }
+
+    /// `tasks/get` → the `DetailedTask` result (flattened wire shape:
+    /// taskId/status/statusMessage/... + result/error per status).
+    fn task(&mut self, id: &str) -> Value {
+        self.rpc("tasks/get", serde_json::json!({"taskId": id}))
+            .get("result")
+            .cloned()
+            .unwrap_or(Value::Null)
+    }
+
+    fn task_cancel(&mut self, id: &str) -> Value {
+        self.rpc("tasks/cancel", serde_json::json!({"taskId": id}))
+    }
+
+    /// Poll `tasks/get` until the status leaves `working` (budgeted).
+    fn wait_terminal(&mut self, id: &str, budget: Duration) -> Value {
         let t0 = Instant::now();
         loop {
-            let j = self.job(id);
-            if j.get("running").and_then(Value::as_bool) == Some(false) {
-                return j;
+            let t = self.task(id);
+            if t["status"] != "working" {
+                return t;
             }
-            assert!(t0.elapsed() < budget, "job {id} never finished");
+            assert!(t0.elapsed() < budget, "task {id} never finished");
             std::thread::sleep(Duration::from_millis(150));
         }
+    }
+
+    /// Character count carried by a statusMessage ("streamed N characters").
+    fn streamed_count(task: &Value) -> u64 {
+        task["statusMessage"]
+            .as_str()
+            .unwrap_or_default()
+            .split_whitespace()
+            .nth(1)
+            .and_then(|s| s.trim_end_matches(',').parse().ok())
+            .unwrap_or(0)
     }
 }
 
 impl Drop for Mcp {
     fn drop(&mut self) {
-        let _ = self.stdin.write_all(b""); // no-op; closing happens below
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+/// `YYYY-MM-DDTHH:MM:SSZ` check without pulling in a date crate. The year
+/// floor catches the iso8601 off-by-days bug live (it drifted to 1969).
+fn is_iso8601(s: &str) -> bool {
+    let b = s.as_bytes();
+    let digits = |mut r: std::ops::Range<usize>| r.all(|i| b[i].is_ascii_digit());
+    b.len() == 20
+        && digits(0..4)
+        && b[4] == b'-'
+        && digits(5..7)
+        && b[7] == b'-'
+        && digits(8..10)
+        && b[10] == b'T'
+        && digits(11..13)
+        && b[13] == b':'
+        && digits(14..16)
+        && b[16] == b':'
+        && digits(17..19)
+        && b[19] == b'Z'
+        && s[0..4].parse::<u32>().unwrap_or(0) >= 2024
 }
 
 /// ~20 s of server-side work: 400 ticks, 50 ms apart (braces keep `h`
@@ -138,11 +225,20 @@ const LONG: &str = "for i=1:1:400 { write \"bg:\",i,!  h .05 }";
 
 #[test]
 #[ignore = "requires live IRIS (RISM_IRIS_BASE_URL + config.toml)"]
-fn annotations_exposed_on_the_wire() {
+fn annotations_and_task_surface_on_the_wire() {
     let mut m = Mcp::spawn();
     let msg = m.rpc("tools/list", serde_json::json!({}));
     let tools = msg["result"]["tools"].as_array().unwrap().clone();
-    assert_eq!(tools.len(), 28, "tool count contract");
+    assert_eq!(tools.len(), 25, "tool count contract (Tasks migration)");
+    let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+    // The three custom poll-tools are GONE (full removal, no fallbacks).
+    for removed in [
+        "execute_command_background",
+        "command_status",
+        "command_cancel",
+    ] {
+        assert!(!names.contains(&removed), "{removed} must be removed");
+    }
     let find = |name: &str| {
         tools
             .iter()
@@ -150,157 +246,192 @@ fn annotations_exposed_on_the_wire() {
             .unwrap_or_else(|| panic!("missing tool {name}"))
             .clone()
     };
-    let ann = |name: &str| find(name)["annotations"].clone();
+    let ec = find("execute_command");
     assert_eq!(
-        ann("command_status")["readOnlyHint"],
-        serde_json::json!(true)
+        ec["annotations"]["destructiveHint"],
+        serde_json::json!(true),
+        "ObjectScript can mutate data"
     );
-    assert_eq!(
-        ann("command_cancel")["destructiveHint"],
-        serde_json::json!(false)
+    assert!(
+        ec["annotations"]["title"]
+            .as_str()
+            .is_some_and(|s| !s.is_empty()),
+        "execute_command needs a title"
     );
-    assert_eq!(
-        ann("command_cancel")["idempotentHint"],
-        serde_json::json!(true)
+    assert!(
+        ec["inputSchema"]["properties"]["background"].is_object(),
+        "background param must be in the schema"
     );
-    assert_eq!(
-        ann("execute_command")["destructiveHint"],
-        serde_json::json!(true)
-    );
-    assert_eq!(
-        ann("execute_command_background")["destructiveHint"],
-        serde_json::json!(true)
-    );
-    // titles present for human-readable UIs
-    for n in [
-        "execute_command",
-        "execute_command_background",
-        "command_status",
-        "command_cancel",
-    ] {
-        assert!(
-            find(n)["annotations"]["title"]
-                .as_str()
-                .is_some_and(|s| !s.is_empty()),
-            "{n} needs a title"
-        );
-    }
+    // Tasks extension advertised on initialize (checked by every spawn())
 }
 
 #[test]
 #[ignore = "requires live IRIS (RISM_IRIS_BASE_URL + config.toml)"]
-fn background_lifecycle_start_stream_cancel_frozen() {
+fn server_advertises_tasks_extension() {
+    // A fresh handshake (spawn already did it) is the proof: the server's
+    // initialize response must carry the extension + correct serverInfo.
+    let m = Mcp::spawn();
+    let caps = &m.init["result"]["capabilities"];
+    assert!(
+        caps["extensions"]["io.modelcontextprotocol/tasks"].is_object(),
+        "server must advertise the Tasks extension: {caps}"
+    );
+    assert!(
+        caps["tools"].is_object(),
+        "tools capability survives the manual get_info(): {caps}"
+    );
+    assert_eq!(m.init["result"]["serverInfo"]["name"], "rism");
+    // version = env!("CARGO_PKG_VERSION"), not the old hard-coded 0.1.0
+    let want = env!("CARGO_PKG_VERSION");
+    assert_eq!(
+        m.init["result"]["serverInfo"]["version"].as_str(),
+        Some(want),
+        "serverInfo.version must track the crate version"
+    );
+}
+
+#[test]
+#[ignore = "requires live IRIS (RISM_IRIS_BASE_URL + config.toml)"]
+fn task_lifecycle_start_stream_cancel_frozen() {
     let mut m = Mcp::spawn();
     // start is non-blocking even for a ~20 s workload
     let t0 = Instant::now();
-    let (is_err, p, _) = m.call(
-        "execute_command_background",
-        serde_json::json!({"command": LONG, "timeout_secs": 120}),
-    );
-    assert!(!is_err, "start must succeed: {p}");
+    let res = m.task_start(serde_json::json!({"command": LONG, "timeout_secs": 120}));
     assert!(t0.elapsed() < Duration::from_secs(2), "start blocked");
-    assert_eq!(p["running"], serde_json::json!(true));
-    let id = p["job_id"].as_str().unwrap().to_string();
-    assert!(
-        !p["namespace"].as_str().unwrap().is_empty(),
-        "namespace reported"
+    assert_eq!(res["status"], "working");
+    let id = Mcp::task_id(&res);
+    assert_eq!(
+        res["ttlMs"],
+        serde_json::json!(1_800_000),
+        "retention as ttlMs"
     );
+    assert!(res["pollIntervalMs"].is_number(), "poll cadence advertised");
+    assert!(is_iso8601(res["createdAt"].as_str().unwrap()));
 
-    // streaming: strictly more output between two polls while running
+    // streaming: strictly more output between two polls while working
     std::thread::sleep(Duration::from_secs(2));
-    let a = m.job(&id);
-    assert_eq!(a["running"], serde_json::json!(true), "still running");
-    assert!(a["output"].as_str().unwrap().contains("bg:"), "live tail");
+    let a = m.task(&id);
+    assert_eq!(a["status"], "working", "still running");
+    let ca = Mcp::streamed_count(&a);
+    assert!(ca > 0, "output did not stream: {a}");
     std::thread::sleep(Duration::from_secs(2));
-    let b = m.job(&id);
-    assert!(
-        b["output_chars"].as_u64().unwrap() > a["output_chars"].as_u64().unwrap(),
-        "output did not grow between polls: {} -> {}",
-        a["output_chars"],
-        b["output_chars"]
-    );
+    let b = m.task(&id);
+    let cb = Mcp::streamed_count(&b);
+    assert!(cb > ca, "output did not grow between polls: {ca} -> {cb}");
 
     // cancel: real server-side interrupt, well before natural end
     let t0 = Instant::now();
-    let (is_err, _, _) = m.call("command_cancel", serde_json::json!({"job_id": &id}));
-    assert!(!is_err);
-    let done = m.wait_done(&id, Duration::from_secs(15));
+    let c = m.task_cancel(&id);
+    assert!(c.get("error").is_none(), "tasks/cancel failed: {c}");
+    let done = m.wait_terminal(&id, Duration::from_secs(15));
     assert!(t0.elapsed() < Duration::from_secs(10), "cancel too slow");
-    assert_eq!(done["interrupted"], serde_json::json!(true));
-    assert_eq!(done["running"], serde_json::json!(false));
-    assert!(done["error"].is_null(), "cancel is not an error: {done}");
-    assert!(done["finished_unix"].is_number());
+    assert_eq!(done["status"], "cancelled");
+    assert!(
+        done.get("result").is_none() && done.get("error").is_none(),
+        "cancelled payload carries neither result nor error: {done}"
+    );
+    assert!(done["lastUpdatedAt"].as_str().is_some_and(is_iso8601));
 
     // frozen state: output stops growing (loop truly dead server-side)
-    let chars = done["output_chars"].as_u64().unwrap();
+    let chars = Mcp::streamed_count(&done);
     std::thread::sleep(Duration::from_secs(2));
-    let later = m.job(&id);
+    let later = m.task(&id);
     assert_eq!(
-        later["output_chars"].as_u64().unwrap(),
+        Mcp::streamed_count(&later),
         chars,
         "server-side loop still ticking after cancel"
     );
-    // cancel on a finished job: safe no-op
-    let (is_err, p, _) = m.call("command_cancel", serde_json::json!({"job_id": &id}));
-    assert!(!is_err, "re-cancel must not error: {p}");
-    assert_eq!(p["running"], serde_json::json!(false));
+    // cancel on a terminal task: safe no-op
+    let c2 = m.task_cancel(&id);
+    assert!(c2.get("error").is_none(), "re-cancel must not error: {c2}");
 }
 
 #[test]
 #[ignore = "requires live IRIS (RISM_IRIS_BASE_URL + config.toml)"]
-fn quick_job_completes_clean_and_listable() {
+fn quick_task_completes_with_the_sync_result() {
     let mut m = Mcp::spawn();
-    let (_, p, _) = m.call(
-        "execute_command_background",
-        serde_json::json!({"command": "write \"quick\",!"}),
+    let cmd = "write \"quick\",!";
+    let res = m.task_start(serde_json::json!({"command": cmd}));
+    let id = Mcp::task_id(&res);
+    let done = m.wait_terminal(&id, Duration::from_secs(15));
+    assert_eq!(done["status"], "completed");
+    assert_eq!(done["resultType"], "complete");
+    // Spec MUST: the completed payload is the EXACT CallToolResult the
+    // synchronous call would have returned — prove it by running the sync
+    // command and diffing the two CallToolResults.
+    let payload = &done["result"];
+    assert_eq!(payload["isError"], serde_json::json!(false));
+    let task_out: Value =
+        serde_json::from_str(payload["content"][0]["text"].as_str().unwrap()).unwrap();
+    let (is_err, sync_out, _) = m.call("execute_command", serde_json::json!({"command": cmd}));
+    assert!(!is_err);
+    assert_eq!(
+        task_out["output"], sync_out["output"],
+        "task result must equal the sync result"
     );
-    let id = p["job_id"].as_str().unwrap().to_string();
-    let done = m.wait_done(&id, Duration::from_secs(15));
-    assert_eq!(done["running"], serde_json::json!(false));
-    assert_eq!(done["interrupted"], serde_json::json!(false));
-    assert!(done["error"].is_null());
-    assert!(done["output"].as_str().unwrap().contains("quick"));
-    assert!(done["prompt"].as_str().unwrap_or_default().contains('>'));
-    // roster: present, no bodies, newest-first timestamps
-    let (_, lst, _) = m.call("command_status", serde_json::json!({}));
-    let jobs = lst["jobs"].as_array().unwrap();
-    assert!(jobs.iter().any(|j| j["id"].as_str() == Some(&id)));
+    assert_eq!(task_out["namespace"], sync_out["namespace"]);
+    assert!(task_out["output"].as_str().unwrap().contains("quick"));
     assert!(
-        jobs.iter()
-            .all(|j| j["output"].as_str().unwrap_or_default().is_empty()),
-        "list view must omit output bodies"
+        task_out["prompt"]
+            .as_str()
+            .unwrap_or_default()
+            .contains('>')
     );
-    let ts: Vec<u64> = jobs
-        .iter()
-        .map(|j| j["started_unix"].as_u64().unwrap())
-        .collect();
-    assert!(
-        ts.windows(2).all(|w| w[0] >= w[1]),
-        "not newest-first: {ts:?}"
-    );
+    // task bookkeeping survives completion
+    assert!(done["createdAt"].as_str().is_some_and(is_iso8601));
+    assert!(is_iso8601(done["lastUpdatedAt"].as_str().unwrap()));
 }
 
 #[test]
 #[ignore = "requires live IRIS (RISM_IRIS_BASE_URL + config.toml)"]
-fn unknown_job_and_bad_input_are_tool_errors_not_crashes() {
-    let mut m = Mcp::spawn();
-    let (is_err, _, text) = m.call("command_status", serde_json::json!({"job_id": "bogus"}));
-    assert!(is_err);
-    assert!(
-        text.lowercase_contains("unknown job"),
-        "hint missing: {text}"
+fn rail_a_and_bad_task_ids_are_errors_not_crashes() {
+    // Rail A: non-declaring client asking for background gets an honest
+    // tool-level error (never a silent 60-s timeout).
+    let mut plain = Mcp::spawn_plain();
+    let (is_err, _, text) = plain.call(
+        "execute_command",
+        serde_json::json!({"command": "write 1", "background": true}),
     );
-    let (is_err, _, text) = m.call("command_cancel", serde_json::json!({"job_id": "bogus"}));
-    assert!(is_err);
-    assert!(text.lowercase_contains("unknown job"));
+    assert!(is_err, "background must refuse for non-declaring clients");
+    assert!(
+        text.lowercase_contains("tasks extension"),
+        "refusal must name the Tasks extension: {text}"
+    );
+    // tasks/* methods from a non-declaring client: protocol error (rmcp
+    // validates the capability before the handler runs).
+    let msg = plain.rpc("tasks/get", serde_json::json!({"taskId": "whatever"}));
+    assert!(msg.get("error").is_some(), "must reject: {msg}");
+    drop(plain);
+
+    // Declared client: unknown ids get a clean JSON-RPC error with the
+    // task-facing phrasing.
+    let mut m = Mcp::spawn();
+    let msg = m.rpc("tasks/get", serde_json::json!({"taskId": "bogus"}));
+    assert!(msg.get("error").is_some());
+    let get_err = msg["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        get_err.lowercase_contains("unknown or expired"),
+        "hint missing: {msg}"
+    );
+    let msg = m.rpc("tasks/cancel", serde_json::json!({"taskId": "bogus"}));
+    assert!(msg.get("error").is_some());
+    // tasks/update: never offers input — honest refusal, not a hang.
+    let msg = m.rpc(
+        "tasks/update",
+        serde_json::json!({"taskId": "bogus", "requestId": "r", "input": {}}),
+    );
+    assert!(msg.get("error").is_some(), "update_task must refuse: {msg}");
     // unknown field rejected (deny_unknown_fields)
     let (is_err, _, _) = m.call(
-        "command_cancel",
-        serde_json::json!({"job_id": "x", "force": true}),
+        "execute_command",
+        serde_json::json!({"command": "write 1", "force": true}),
     );
     assert!(is_err, "deny_unknown_fields must reject");
     // missing required command rejected
-    let (is_err, _, _) = m.call("execute_command_background", serde_json::json!({}));
+    let (is_err, _, _) = m.call("execute_command", serde_json::json!({}));
     assert!(is_err);
     // server still healthy
     let (is_err, p, _) = m.call(
@@ -318,39 +449,52 @@ fn running_cap_enforced_then_releasable() {
     let mut live = Vec::new();
     // ~15 s jobs so they outlive the start loop itself
     for _ in 0..16 {
-        let (is_err, p, _) = m.call(
-            "execute_command_background",
-            serde_json::json!({
-                "command": "for j=1:1:300 { write \"cap:\",j,!  h .05 }",
-                "timeout_secs": 60
-            }),
-        );
-        assert!(!is_err, "start {}/16 failed: {p}", live.len() + 1);
-        live.push(p["job_id"].as_str().unwrap().to_string());
+        let res = m.task_start(serde_json::json!({
+            "command": "for j=1:1:300 { write \"cap:\",j,!  h .05 }",
+            "timeout_secs": 60
+        }));
+        live.push(Mcp::task_id(&res));
     }
-    // the 17th must be refused, actionably
-    let (is_err, _, text) = m.call(
-        "execute_command_background",
-        serde_json::json!({"command": "write 1", "timeout_secs": 60}),
+    // the 17th must be refused, actionably (task-creation refusal is a
+    // JSON-RPC error — there is no task to carry it)
+    let msg = m.rpc(
+        "tools/call",
+        serde_json::json!({
+            "name": "execute_command",
+            "arguments": {"command": "write 1", "timeout_secs": 60, "background": true}
+        }),
     );
-    assert!(is_err, "cap not enforced (17th started)");
+    let err_text = msg
+        .get("error")
+        .map(|e| e["message"].as_str().unwrap_or_default().to_lowercase())
+        .unwrap_or_default();
     assert!(
-        text.lowercase_contains("too many"),
-        "cap error must say too many: {text}"
+        !err_text.is_empty(),
+        "cap not enforced (17th started): {msg}"
     );
-    // releases: cancelling frees slots (cancel-all, verify none left running)
+    assert!(
+        err_text.contains("too many"),
+        "cap error must say too many: {err_text}"
+    );
+    // releases: cancelling frees slots (cancel-all, verify all terminal)
     for id in &live {
-        let (is_err, _, _) = m.call("command_cancel", serde_json::json!({"job_id": id}));
-        assert!(!is_err, "cancel {id} failed");
+        let c = m.task_cancel(id);
+        assert!(c.get("error").is_none(), "cancel {id} failed: {c}");
     }
     for id in &live {
-        m.wait_done(id, Duration::from_secs(20));
+        let t = m.wait_terminal(id, Duration::from_secs(20));
+        assert_eq!(t["status"], "cancelled", "task {id} must land cancelled");
     }
-    let (is_err, p, _) = m.call(
-        "execute_command_background",
-        serde_json::json!({"command": "write \"slot-free\",!", "timeout_secs": 30}),
+    let res = m.task_start(serde_json::json!({
+        "command": "write \"slot-free\",!",
+        "timeout_secs": 30
+    }));
+    let id = Mcp::task_id(&res);
+    let done = m.wait_terminal(&id, Duration::from_secs(15));
+    assert_eq!(
+        done["status"], "completed",
+        "slot not reclaimed after cancels"
     );
-    assert!(!is_err, "slot not reclaimed after cancels: {p}");
 }
 
 /// Small helper so error-text asserts read naturally.
