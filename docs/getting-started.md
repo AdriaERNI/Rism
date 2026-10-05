@@ -106,7 +106,7 @@ Run `rism mcp` as a stdio server in any MCP client:
 }
 ```
 
-The agent then sees all 28 tools ([MCP Tools](mcp-tools.md)). Secrets travel via the
+The agent then sees all 25 tools ([MCP Tools](mcp-tools.md)). Secrets travel via the
 client's `env` block — never paste passwords into the chat with your agent.
 
 ## Where to go next

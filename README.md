@@ -13,7 +13,7 @@
 </div>
 
 Rism is **Prism with Rust** — an MCP server and CLI for InterSystems IRIS
-with **28 tools** and zero server-side helper code.
+with **25 tools** and zero server-side helper code.
 
 Prism is an MCP server and CLI for InterSystems IRIS development (SQL, documents,
 compilation, debugging, testing, and ObjectScript execution via the Atelier REST
@@ -22,7 +22,7 @@ API). Rism is its Rust rewrite.
 ## Documentation
 
 Full docs live on **GitHub Pages**: <https://adriaerni.github.io/Rism/> —
-getting started, configuration, CLI reference, all 28 MCP tools, debugger,
+getting started, configuration, CLI reference, all 25 MCP tools, debugger,
 and the [Windows Store guide](https://adriaerni.github.io/Rism/windows-store/).
 Sources in [`docs/`](docs/), built with mkdocs-material (CI-enforced, `--strict`).
 

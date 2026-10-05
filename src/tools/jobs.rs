@@ -1,13 +1,14 @@
-//! Background terminal-job registry for the MCP door.
+//! Background terminal-job registry for MCP Tasks (SEP-2663).
 //!
 //! A background job runs `ObjectScript` on its own terminal session inside
-//! the MCP server process: `execute_command_background` returns a `job_id`
-//! immediately, `command_status` polls state + streamed output, and
-//! `command_cancel` trips the cancel flag whose next frame poll sends the
+//! the MCP server process: `execute_command(background=true)` returns a
+//! `taskId` immediately (this module's `start`), `tasks/get` polls state +
+//! streamed output (via `status` + the projection in `crate::mcp::tasks`),
+//! and `tasks/cancel` trips the cancel flag whose next frame poll sends the
 //! protocol `{"type":"interrupt"}` — a real server-side break (verified
 //! against the Atelier agent: the child unwinds with `<INTERRUPT>` in
 //! milliseconds). Jobs live only as long as the server process; finished
-//! jobs are garbage-collected after [`RETENTION`].
+//! jobs are garbage-collected after [`RETENTION`] (advertised as `ttlMs`).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -15,7 +16,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::error::{Error, Result};
 use crate::iris::IrisClient;
@@ -28,13 +29,13 @@ pub const RETENTION: Duration = Duration::from_secs(30 * 60);
 /// Upper bound on concurrently running jobs (leak guard).
 pub const MAX_RUNNING: usize = 16;
 /// Upper bound on registry entries (finished or not); oldest finished jobs
-/// are evicted first. Bounds the `list()` payload and idle memory within retention.
+/// are evicted first. Bounds idle memory within retention.
 pub const MAX_ENTRIES: usize = 256;
 
 /// One tracked background command (serializable view).
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct JobInfo {
-    /// Opaque handle to pass to `command_status` / `command_cancel`.
+    /// Opaque handle — the MCP `taskId` for polling / cancellation.
     pub id: String,
     /// The command as sent.
     pub command: String,
@@ -56,35 +57,6 @@ pub struct JobInfo {
     pub output_chars: usize,
     /// Tail of the output (up to [`OUTPUT_CAP`] bytes). Empty in list view.
     pub output: String,
-}
-
-/// Arguments for [`execute_command_background`].
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct BackgroundCommandArgs {
-    /// `ObjectScript` command to run in the background.
-    pub command: String,
-    /// Target namespace (defaults to configured namespace)
-    pub namespace: Option<String>,
-    /// Max seconds the job may run before it is cancelled (default: the
-    /// configured `timeout_secs`)
-    pub timeout_secs: Option<u64>,
-}
-
-/// Arguments for [`command_status`]: omit `job_id` to list all jobs.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct CommandStatusArgs {
-    /// Job id from `execute_command_background`; omit to list all jobs.
-    pub job_id: Option<String>,
-}
-
-/// Arguments for [`command_cancel`].
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct CancelCommandArgs {
-    /// Job id to interrupt.
-    pub job_id: String,
 }
 
 /// Output sink shared between the task and readers.
@@ -373,25 +345,6 @@ fn snapshot(id: &str, slot: &Arc<JobSlot>, with_output: bool) -> JobInfo {
     }
 }
 
-/// List view: all jobs, newest first, without output bodies.
-#[must_use]
-pub fn list() -> Vec<JobInfo> {
-    let mut reg = lock_reg();
-    gc(&mut reg);
-    let mut rows: Vec<(String, Arc<JobSlot>)> =
-        reg.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-    rows.sort_by(|a, b| {
-        b.1.meta()
-            .started_unix
-            .cmp(&a.1.meta().started_unix)
-            // tie-break on id so same-second jobs keep a deterministic order
-            .then_with(|| b.0.cmp(&a.0))
-    });
-    rows.into_iter()
-        .map(|(id, s)| snapshot(&id, &s, false))
-        .collect()
-}
-
 /// Trip a running job's cancel flag (its next frame poll sends the protocol
 /// interrupt). Already-finished jobs are returned untouched.
 ///
@@ -429,75 +382,11 @@ fn gc(reg: &mut Registry) {
     }
 }
 
-// ── tool-facing API (one fn per MCP tool, tools/mod contract) ────────────
-
-/// Result of [`execute_command_background`].
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-pub struct BackgroundStartResult {
-    /// Pass to `command_status` / `command_cancel`.
-    pub job_id: String,
-    /// Always true at start.
-    pub running: bool,
-    /// The namespace the job runs in.
-    pub namespace: String,
-}
-
-/// Start an `ObjectScript` command as a background job (own terminal
-/// session, output streams to the registry).
-///
-/// # Errors
-/// [`Error::Config`] when [`MAX_RUNNING`] jobs are already active.
-pub fn execute_command_background(
-    client: &IrisClient,
-    args: &BackgroundCommandArgs,
-) -> Result<BackgroundStartResult> {
-    let timeout = Duration::from_secs(args.timeout_secs.unwrap_or(client.settings().timeout_secs));
-    let info = start(
-        client,
-        args.namespace.clone(),
-        args.command.clone(),
-        timeout,
-    )?;
-    Ok(BackgroundStartResult {
-        job_id: info.id,
-        running: info.running,
-        namespace: info.namespace,
-    })
-}
-
-/// Result of [`command_status`]: one job (`job`) or the roster (`jobs`).
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-pub struct StatusResult {
-    /// The job, when `job_id` was given.
-    pub job: Option<JobInfo>,
-    /// All jobs, newest first, when `job_id` was omitted.
-    pub jobs: Vec<JobInfo>,
-}
-
-/// Poll a background job (with streamed output tail) or list all jobs.
-///
-/// # Errors
-/// [`Error::Config`] when the job id is unknown or GC'd.
-pub fn command_status(args: &CommandStatusArgs) -> Result<StatusResult> {
-    match &args.job_id {
-        Some(id) => Ok(StatusResult {
-            job: Some(status(id)?),
-            jobs: Vec::new(),
-        }),
-        None => Ok(StatusResult {
-            job: None,
-            jobs: list(),
-        }),
-    }
-}
-
-/// Cancel a running background job (protocol interrupt, server-side break).
-///
-/// # Errors
-/// [`Error::Config`] when the job id is unknown.
-pub fn command_cancel(args: &CancelCommandArgs) -> Result<JobInfo> {
-    cancel(&args.job_id)
-}
+// ── tool-facing API ──────────────────────────────────────────────────────
+// Background execution is exposed through MCP Tasks (SEP-2663), not extra
+// tools: `execute_command(background=true)` materializes a task from this
+// registry via `start`, `tasks/get` projects `status`, `tasks/cancel` calls
+// `cancel`. The registry itself is transport-agnostic.
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::missing_panics_doc)]
@@ -726,28 +615,5 @@ mod tests {
 
         assert!(status("nope").is_err());
         assert!(cancel("nope").is_err());
-    }
-
-    #[test]
-    fn list_view_omits_bodies_and_sorts_newest_first() {
-        let _s = serial();
-        clear();
-        // fresh finish time: a stale one would be (correctly) GC'd
-        let a = insert("a-listed", false, Some(unix_now()));
-        a.buf.push("body-a");
-        let b = insert("b-listed", true, None);
-        b.buf.push("body-b");
-        let mut rows: Vec<_> = list()
-            .into_iter()
-            .filter(|r| r.id.ends_with("-listed"))
-            .collect();
-        rows.sort_by(|x, y| {
-            y.started_unix
-                .cmp(&x.started_unix)
-                .then_with(|| y.id.cmp(&x.id))
-        });
-        assert_eq!(rows.len(), 2);
-        assert!(rows.iter().all(|r| r.output.is_empty()));
-        assert!(rows.iter().all(|r| r.output_chars == 6));
     }
 }

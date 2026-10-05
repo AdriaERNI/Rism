@@ -13,27 +13,36 @@ trap 'rm -f "$tmp"' EXIT
   printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}'
   printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
   printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"execute_sql","arguments":{"query":"select 1 as ok"}}}'
+  # Rail A: a non-Tasks client asking for background execution must get an
+  # honest tool-level error, never a blocking call that times out.
+  printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"execute_command","arguments":{"command":"write 1","background":true}}}'
 } | timeout 60 rism mcp 2>/dev/null > "$tmp" || { echo "MCP probe: rism mcp failed"; exit 1; }
 
-# tools/list answer must list exactly 28 tools. inputSchema is the exact
-# marker (one per tool); "name" appears 33x on the wire (extra mentions in
-# descriptions/schemas — never count those).
+# tools/list answer must list exactly 25 tools (background execution is the
+# SEP-2663 Tasks extension, not extra tools). inputSchema is the exact
+# marker (one per tool); "name" appears many times on the wire (extra
+# mentions in descriptions/schemas — never count those).
 tools_line=$(grep -E '"id"[[:space:]]*:[[:space:]]*2' "$tmp" | head -1)
 n=$(printf '%s' "$tools_line" | grep -o '"inputSchema"' | wc -l)
-if [ "${n:-0}" -ne 28 ]; then
-  echo "MCP probe: expected 28 tools, counted $n"
+if [ "${n:-0}" -ne 25 ]; then
+  echo "MCP probe: expected 25 tools, counted $n"
   exit 1
 fi
+for gone in execute_command_background command_status command_cancel; do
+  if printf '%s' "$tools_line" | grep -q "\"name\":\"$gone\""; then
+    echo "MCP probe: $gone must be replaced by MCP Tasks"
+    exit 1
+  fi
+done
 
-# MCP best-practice contract: the 4 terminal tools must ship annotations
-# (rmcp renders them camelCase on the wire). title alone is not enough:
-# at least one of the behavior hints must be present.
-if ! printf '%s' "$tools_line" | grep -q '"readOnlyHint":true'; then
-  echo "MCP probe: command_status missing readOnlyHint annotation"
+# MCP best-practice contract: execute_command ships annotations (rmcp
+# renders them camelCase on the wire) and the background param in its schema.
+if ! printf '%s' "$tools_line" | grep -q '"destructiveHint"'; then
+  echo "MCP probe: execute_command missing destructiveHint annotation"
   exit 1
 fi
-if ! printf '%s' "$tools_line" | grep -q '"destructiveHint"'; then
-  echo "MCP probe: execute_command* missing destructiveHint annotation"
+if ! printf '%s' "$tools_line" | grep -q '"background"'; then
+  echo "MCP probe: execute_command schema missing background param"
   exit 1
 fi
 
@@ -45,11 +54,21 @@ if ! grep -E '"id"[[:space:]]*:[[:space:]]*3' "$tmp" | grep -q '"isError":false'
   exit 1
 fi
 
-echo "MCP probe OK: $n tools, SQL answered"
+# Rail A gate: the background call above (id 4) must be a refusal naming
+# the Tasks extension — plain text inside the content block, so the
+# substring survives JSON escaping.
+grep -E '"id"[[:space:]]*:[[:space:]]*4' "$tmp" | grep -q '"isError":true' \
+  || { echo "MCP probe: background=true must refuse for non-Tasks clients"; exit 1; }
+grep -E '"id"[[:space:]]*:[[:space:]]*4' "$tmp" | grep -q 'requires the Tasks extension' \
+  || { echo "MCP probe: Rail-A refusal must name the Tasks extension"; exit 1; }
 
-# --- background terminal-job contract (stream + cancel), same door ---------
-# Long loop: 8 ticks, 1/s. Then poll (must stream), cancel (must interrupt),
-# final status (must be finished + interrupted). No python assumed.
+echo "MCP probe OK: $n tools, SQL answered, Rail-A refusal honest"
+
+# --- background task contract (MCP Tasks, stream + cancel), same door -----
+# Tasks-capable initialize, long loop as a task; tasks/get must show the
+# streamed character count GROW between polls (output itself is not served
+# while working); tasks/cancel must land status cancelled and freeze the
+# count (loop truly dead server-side). No python assumed.
 fifo=$(mktemp -u)
 jobs_out=$(mktemp)
 trap 'rm -f "$tmp" "$fifo" "$jobs_out"' EXIT
@@ -58,35 +77,55 @@ rism mcp <"$fifo" >"$jobs_out" 2>/dev/null &
 mcp_pid=$!
 exec 3>"$fifo"
 
-rpc() { printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":$1,\"method\":\"tools/call\",\"params\":{\"name\":\"$2\",\"arguments\":$3}}" >&3; }
+send() { printf '%s\n' "$1" >&3; }
 
-printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"ci","version":"0"},"capabilities":{}}}' >&3
-printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}' >&3
+send '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"ci","version":"0"},"capabilities":{"extensions":{"io.modelcontextprotocol/tasks":{}}}}}'
+send '{"jsonrpc":"2.0","method":"notifications/initialized"}'
 sleep 1
-rpc 10 execute_command_background '{"command":"for i=1:1:8 { write \"bgtick\",i,!  h 1 }","timeout_secs":60}'
-# wait for the job_id answer
-for _ in $(seq 30); do grep -q 'job_id' "$jobs_out" && break; sleep 0.5; done
-jid=$(grep -o 'rism-[0-9a-f]*-[0-9a-f]*' "$jobs_out" | head -1)
-[ -n "$jid" ] || { echo "MCP probe: no job_id from execute_command_background"; exit 1; }
+send '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"execute_command","arguments":{"command":"for i=1:1:8 { write \"bgtick\",i,!  h 1 }","timeout_secs":60,"background":true}}}'
+# wait for the task handle (top-level resultType is compact JSON, rmcp-
+# serialized — NOT the escaped map_json form)
+for _ in $(seq 30); do grep -q '"resultType":"task"' "$jobs_out" && break; sleep 0.5; done
+grep -q '"resultType":"task"' "$jobs_out" \
+  || { echo "MCP probe: background=true did not create a task"; exit 1; }
+tid=$(grep -o 'rism-[0-9a-f]*-[0-9a-f]*' "$jobs_out" | head -1)
+[ -n "$tid" ] || { echo "MCP probe: no taskId on the task handle"; exit 1; }
+
+# streaming: the streamed-character count must grow between two polls
 sleep 2
-rpc 11 command_status "{\"job_id\":\"$jid\"}"
-# streaming: an output line must have appeared while running
-for _ in $(seq 20); do grep '"id":11' "$jobs_out" | grep -q bgtick && break; sleep 0.5; done
-grep '"id":11' "$jobs_out" | grep -Eq 'running[\\": ]*true' \
-  || { echo "MCP probe: job should be running at first poll"; exit 1; }
-grep '"id":11' "$jobs_out" | grep -q bgtick \
-  || { echo "MCP probe: job output did not stream before finish"; exit 1; }
-rpc 12 command_cancel "{\"job_id\":\"$jid\"}"
-# final status must show finished + interrupted
-for _ in $(seq 30); do
-  rpc 13 command_status "{\"job_id\":\"$jid\"}"
-  sleep 1
-  grep '"id":13' "$jobs_out" | grep -Eq 'running[\\": ]*false' && break
+send "{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"$tid\"}}"
+for _ in $(seq 20); do grep '"id":11' "$jobs_out" | grep -q '"status":"working"' && break; sleep 0.5; done
+c1=$(grep '"id":11' "$jobs_out" | grep -o 'streamed [0-9]*' | tail -1 | grep -o '[0-9]*')
+[ -n "${c1:-}" ] && [ "$c1" -gt 0 ] \
+  || { echo "MCP probe: task streamed no output: $(grep '"id":11' "$jobs_out" | tail -1)"; exit 1; }
+sleep 2
+send "{\"jsonrpc\":\"2.0\",\"id\":12,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"$tid\"}}"
+for _ in $(seq 20); do
+  grep '"id":12' "$jobs_out" | grep -Eq 'streamed ([0-9]+)' && break
+  sleep 0.5
 done
-grep '"id":13' "$jobs_out" | grep -Eq 'interrupted[\\": ]*true' \
-  || { echo "MCP probe: cancelled job must be interrupted=true"; exit 1; }
-grep '"id":13' "$jobs_out" | grep -q 'all done\|bgtick9' \
+c2=$(grep '"id":12' "$jobs_out" | grep -o 'streamed [0-9]*' | tail -1 | grep -o '[0-9]*')
+[ -n "${c2:-}" ] && [ "$c2" -gt "$c1" ] \
+  || { echo "MCP probe: task output did not grow between polls ($c1 -> $c2)"; exit 1; }
+
+send "{\"jsonrpc\":\"2.0\",\"id\":13,\"method\":\"tasks/cancel\",\"params\":{\"taskId\":\"$tid\"}}"
+# final state must be cancelled, and frozen (count stops growing)
+for _ in $(seq 30); do
+  send "{\"jsonrpc\":\"2.0\",\"id\":14,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"$tid\"}}"
+  sleep 1
+  grep '"id":14' "$jobs_out" | grep -q '"status":"cancelled"' && break
+done
+grep '"id":14' "$jobs_out" | grep -q '"status":"cancelled"' \
+  || { echo "MCP probe: cancelled task must report status cancelled"; exit 1; }
+cf=$(grep '"id":14' "$jobs_out" | grep -o 'streamed [0-9]*' | tail -1 | grep -o '[0-9]*')
+sleep 2
+send "{\"jsonrpc\":\"2.0\",\"id\":15,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"$tid\"}}"
+sleep 1
+cl=$(grep '"id":15' "$jobs_out" | grep -o 'streamed [0-9]*' | tail -1 | grep -o '[0-9]*')
+[ "$cl" = "$cf" ] \
+  || { echo "MCP probe: task still streaming after cancel ($cf -> $cl)"; exit 1; }
+grep '"id":14' "$jobs_out" | grep -q 'bgtick9' \
   && { echo "MCP probe: loop ran to completion despite cancel"; exit 1; }
 exec 3>&-
 wait $mcp_pid 2>/dev/null || true
-echo "MCP probe OK: background job streamed and cancelled"
+echo "MCP probe OK: background task streamed, cancelled, and froze"

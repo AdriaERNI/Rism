@@ -2,9 +2,14 @@
 //! plus the result mapping — zero logic here (rust-bestpractices.md §3.2).
 //! NOTE: this module is part of the lib crate — use `crate::`, never `rism::`.
 
+pub mod tasks;
+
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, ContentBlock};
+use rmcp::model::{
+    CallToolResult, CancelTaskParams, ContentBlock, GetTaskParams, GetTaskResult,
+    ServerCapabilities, ServerConfig, UpdateTaskParams,
+};
 use rmcp::{ServerHandler, ServiceExt, tool, tool_handler, tool_router};
 
 use crate::iris::IrisClient;
@@ -24,10 +29,7 @@ use crate::tools::documents::{
 use crate::tools::host::{
     ListFilesArgs, ReadFileArgs, RunShellArgs, list_files, read_file, run_shell,
 };
-use crate::tools::jobs::{
-    BackgroundCommandArgs, CancelCommandArgs, CommandStatusArgs, command_cancel, command_status,
-    execute_command_background,
-};
+use crate::tools::jobs;
 use crate::tools::monitor::{MonitorArgs, monitor_system};
 use crate::tools::serverinfo::{GetServerInfoArgs, get_server_info};
 use crate::tools::sql::{ExecuteSqlArgs, execute_sql};
@@ -134,7 +136,7 @@ impl RismMcp {
     }
 
     #[tool(
-        description = "Execute an ObjectScript command in the IRIS terminal (WebSocket). For method calls, globals, system utilities — anything ObjectScript.",
+        description = "Execute an ObjectScript command in the IRIS terminal (WebSocket). For method calls, globals, system utilities — anything ObjectScript. For long-running work (loops, imports, batch methods) pass background=true: the call answers with a task handle (taskId) instead of blocking; poll it with tasks/get and stop it with tasks/cancel (real server-side interrupt).",
         annotations(
             title = "Run ObjectScript",
             destructive_hint = true,
@@ -146,47 +148,6 @@ impl RismMcp {
         Parameters(args): Parameters<ExecuteCommandArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         Ok(map_json(execute_command(&self.client, &args).await))
-    }
-
-    #[tool(
-        description = "Start an ObjectScript command as a BACKGROUND job (own terminal session) and return its job_id immediately — for long-running work (loops, imports, batch methods). Poll output/state with command_status; stop it with command_cancel (real server-side interrupt).",
-        annotations(
-            title = "Run ObjectScript in background",
-            destructive_hint = true,
-            idempotent_hint = false
-        )
-    )]
-    async fn execute_command_background(
-        &self,
-        Parameters(args): Parameters<BackgroundCommandArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        Ok(map_json(execute_command_background(&self.client, &args)))
-    }
-
-    #[tool(
-        description = "Check a background terminal job: pass job_id for state + streamed output tail, or omit to list all jobs (newest first). running=false means finished (see interrupted/error fields).",
-        annotations(title = "Poll background job", read_only_hint = true)
-    )]
-    async fn command_status(
-        &self,
-        Parameters(args): Parameters<CommandStatusArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        Ok(map_json(command_status(&args)))
-    }
-
-    #[tool(
-        description = "Cancel (interrupt) a running background terminal job by job_id. Sends a server-side break; the command stops within milliseconds and its partial state stays as executed.",
-        annotations(
-            title = "Interrupt background job",
-            destructive_hint = false,
-            idempotent_hint = true
-        )
-    )]
-    async fn command_cancel(
-        &self,
-        Parameters(args): Parameters<CancelCommandArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        Ok(map_json(command_cancel(&args)))
     }
 
     #[tool(
@@ -365,8 +326,13 @@ fn map_json<T: serde::Serialize>(res: crate::Result<T>) -> CallToolResult {
     }
 }
 
-#[tool_handler(router = self.tool_router, name = "rism", version = "0.1.0",
-    instructions = "IRIS development tools via the Atelier API: SQL, documents, compilation.")]
+#[tool_handler(router = self.tool_router)]
+#[allow(
+    // three instant-resolving trait impls (registry reads + pure mapping);
+    // yield_now boilerplate is noise and method-level allow is ignored by
+    // CI's 1.99 (module/impl-level is what works)
+    clippy::unused_async_trait_impl
+)]
 impl ServerHandler for RismMcp {
     /// Prism-parity request/response logging (log.py): every tool call is
     /// logged to stderr at DEBUG with truncation. Debug tools are gated off
@@ -382,6 +348,57 @@ impl ServerHandler for RismMcp {
             return Ok(rmcp::model::CallToolResponse::Complete(
                 CallToolResult::error(vec![ContentBlock::text(
                     "debugger tools are disabled (set RISM_DEBUG_TOOLS=1 to enable)",
+                )]),
+            ));
+        }
+        // SEP-2663 task mode: a Tasks-capable client asking for background
+        // execution gets a task handle instead of a blocking call. The gate
+        // lives here (not in the tool body) because tool fns cannot see the
+        // request context; rmcp's dispatch additionally rejects Task
+        // responses to non-declaring clients with -32021, so this is exact.
+        if name == "execute_command"
+            && request.arguments.as_ref().is_some_and(|a| {
+                a.get("background")
+                    .is_some_and(|b| b == &serde_json::Value::Bool(true))
+            })
+        {
+            let declared = context
+                .client_capabilities()
+                .is_some_and(|caps| caps.supports_tasks());
+            let args: ExecuteCommandArgs = serde_json::from_value(serde_json::Value::Object(
+                request
+                    .arguments
+                    .clone()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .collect(),
+            ))
+            .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
+            if declared {
+                let timeout = std::time::Duration::from_secs(
+                    args.timeout_secs
+                        .unwrap_or(self.client.settings().timeout_secs.max(3600)),
+                );
+                let info = jobs::start(
+                    &self.client,
+                    args.namespace.clone(),
+                    args.command.clone(),
+                    timeout,
+                )
+                .map_err(|e| {
+                    rmcp::ErrorData::internal_error(format!("failed to create task: {e}"), None)
+                })?;
+                return Ok(rmcp::model::CallToolResponse::Task(tasks::create_task(
+                    &info,
+                )));
+            }
+            // Rail A: honest failure instead of a silent 60-s client timeout.
+            return Ok(rmcp::model::CallToolResponse::Complete(
+                CallToolResult::error(vec![ContentBlock::text(
+                    "background=true requires the Tasks extension (the client must declare \
+                     io.modelcontextprotocol/tasks in initialize capabilities); this client \
+                     did not, so run the command synchronously with a safe timeout_secs \
+                     instead",
                 )]),
             ));
         }
@@ -448,6 +465,67 @@ impl ServerHandler for RismMcp {
             res.tools.retain(|t| !t.name.as_ref().starts_with("debug_"));
         }
         Ok(res)
+    }
+
+    /// Advertise tools + the SEP-2663 Tasks extension (this replaces the
+    /// macro-generated version — keep `enable_tasks()` in sync with the
+    /// `background=true` gate in `call_tool`).
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_tasks()
+                .build(),
+        )
+        .with_server_info(rmcp::model::Implementation::new(
+            "rism",
+            env!("CARGO_PKG_VERSION"),
+        ))
+        .with_instructions(
+            "IRIS development tools via the Atelier API: SQL, documents, compilation. \
+             Long-running terminal work: execute_command with background=true returns a \
+             task handle; poll tasks/get, stop tasks/cancel.",
+        )
+    }
+
+    /// SEP-2663 `tasks/get`: the registry snapshot projected to a task.
+    /// Dispatch-level capability validation already rejected non-declaring
+    /// clients; unknown/GC'd ids are a clean JSON-RPC error.
+    async fn get_task(
+        &self,
+        request: GetTaskParams,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> std::result::Result<GetTaskResult, rmcp::ErrorData> {
+        let info =
+            jobs::status(&request.task_id).map_err(|e| tasks::task_error(&e, &request.task_id))?;
+        Ok(GetTaskResult::new(tasks::detailed_task(&info)))
+    }
+
+    /// SEP-2663 `tasks/cancel`: cooperative — trip the flag whose next
+    /// frame poll sends the protocol interrupt. The observable status
+    /// flips to `cancelled` on the next `tasks/get` (spec allows lag).
+    async fn cancel_task(
+        &self,
+        request: CancelTaskParams,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> std::result::Result<(), rmcp::ErrorData> {
+        jobs::cancel(&request.task_id).map_err(|e| tasks::task_error(&e, &request.task_id))?;
+        Ok(())
+    }
+
+    /// SEP-2663 `tasks/update`: rism tasks never request input (a terminal
+    /// `read` during a background job is auto-answered), so there are no
+    /// outstanding input requests to deliver.
+    async fn update_task(
+        &self,
+        request: UpdateTaskParams,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> std::result::Result<(), rmcp::ErrorData> {
+        let _ = request;
+        Err(rmcp::ErrorData::invalid_request(
+            "rism tasks never request input; tasks/update is not used",
+            None,
+        ))
     }
 }
 
