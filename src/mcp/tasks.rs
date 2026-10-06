@@ -7,7 +7,7 @@
 //! `tasks/get`) — zero I/O, unit-testable without a server.
 //!
 //! Status mapping (spec §Task lifecycle):
-//! - running                → `working`   (statusMessage = character count streamed)
+//! - running                → `working`   (statusMessage = bytes streamed)
 //! - finished, no error     → `completed` (result = the sync `CallToolResult`)
 //! - finished, transport/
 //!   timeout error          → `failed`    (JSON-RPC error object)
@@ -119,7 +119,17 @@ fn base_task(info: &JobInfo, status: TaskStatus) -> Task {
 
 /// The exact synchronous `CommandResult` the blocking call would have
 /// returned (spec: completed tasks' result MUST match the sync result).
+/// `jobs::finish` stores the joined terminal outcome in `final_result` at
+/// completion — byte-equal by construction, since it IS the sync path's
+/// `TerminalOutcome`. The streaming `output` tail concatenates raw frames
+/// WITHOUT the sync frame join, so reconstructing from it would silently
+/// diverge for multi-frame commands (proven live; the equivalence test
+/// runs a 4-frame command on both paths). A finished job always has it;
+/// the reconstruct branch is a defensive fallback, not the normal path.
 fn sync_result(info: &JobInfo) -> CommandResult {
+    if let Some(final_result) = &info.final_result {
+        return final_result.clone();
+    }
     CommandResult {
         namespace: info.namespace.clone(),
         command: info.command.clone(),
@@ -143,10 +153,10 @@ fn payload_from(result: &CommandResult) -> TaskPayload {
 
 fn status_message(info: &JobInfo) -> String {
     if info.running {
-        format!("streamed {} characters", info.output_chars)
+        format!("streamed {} bytes", info.output_chars)
     } else if info.interrupted {
         format!(
-            "cancelled (interrupted), streamed {} characters",
+            "cancelled (interrupted), streamed {} bytes",
             info.output_chars
         )
     } else if info.error.is_some() {
@@ -194,7 +204,41 @@ mod tests {
             prompt: if running { None } else { Some("USER>".into()) },
             output_chars: 42,
             output: "tick".into(),
+            final_result: if running {
+                None
+            } else {
+                Some(CommandResult {
+                    namespace: "USER".into(),
+                    command: "h 600".into(),
+                    // joined with the sync frame-join, unlike `output`
+                    output: "tick\r\n".into(),
+                    prompt: "USER>".into(),
+                    output_truncated: false,
+                    output_omitted_chars: 0,
+                })
+            },
         }
+    }
+
+    /// Issue-A regression pin (unit level): the completed payload MUST be
+    /// the stored final outcome, never a reconstruction from the streaming
+    /// tail — live-proof showed the tail lacks the sync frame-join for
+    /// multi-frame commands.
+    #[test]
+    fn completed_payload_uses_final_result_not_streaming_tail() {
+        let info = job(false, false, None);
+        assert_ne!(
+            info.output,
+            info.final_result.as_ref().unwrap().output,
+            "fixture must make tail and final differ"
+        );
+        let dt = detailed_task(&info);
+        let TaskPayload::Completed { result } = &dt.payload else {
+            panic!("expected completed");
+        };
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("tick\\r\\n"), "joined output served: {text}");
+        assert!(!text.contains("\"tick\""));
     }
 
     #[test]
@@ -284,7 +328,7 @@ mod tests {
         let v = serde_json::to_value(create_task(&job(true, false, None))).expect("serializable");
         assert_eq!(v["resultType"], "task", "seed discriminator");
         assert_eq!(v["status"], "working");
-        assert_eq!(v["statusMessage"], "streamed 42 characters");
+        assert_eq!(v["statusMessage"], "streamed 42 bytes");
         assert_eq!(v["ttlMs"], 1_800_000);
     }
 }

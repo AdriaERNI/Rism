@@ -181,13 +181,25 @@ impl Mcp {
 
     /// Character count carried by a statusMessage ("streamed N characters").
     fn streamed_count(task: &Value) -> u64 {
-        task["statusMessage"]
-            .as_str()
-            .unwrap_or_default()
-            .split_whitespace()
-            .nth(1)
-            .and_then(|s| s.trim_end_matches(',').parse().ok())
-            .unwrap_or(0)
+        Self::message_count(task["statusMessage"].as_str().unwrap_or_default())
+    }
+
+    /// Parse the count from "streamed N bytes" or the cancelled variant
+    /// "cancelled (interrupted), streamed N bytes" — locate the token
+    /// AFTER the word `streamed`, never by fixed position (a positional
+    /// nth(1) reads `(interrupted),` as 0 and silently vacuums the
+    /// frozen-after-cancel assertion).
+    fn message_count(msg: &str) -> u64 {
+        let mut it = msg.split_whitespace();
+        while let Some(w) = it.next() {
+            if w == "streamed" {
+                return it
+                    .next()
+                    .and_then(|n| n.trim_end_matches(',').parse().ok())
+                    .unwrap_or(0);
+            }
+        }
+        0
     }
 }
 
@@ -196,6 +208,17 @@ impl Drop for Mcp {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+#[test]
+fn message_count_parser_handles_both_shapes() {
+    assert_eq!(Mcp::message_count("streamed 82 bytes"), 82);
+    assert_eq!(
+        Mcp::message_count("cancelled (interrupted), streamed 153 bytes"),
+        153,
+        "cancelled shape parsed positionally would yield 0"
+    );
+    assert_eq!(Mcp::message_count("completed"), 0);
 }
 
 /// `YYYY-MM-DDTHH:MM:SSZ` check without pulling in a date crate. The year
@@ -350,7 +373,11 @@ fn task_lifecycle_start_stream_cancel_frozen() {
 #[ignore = "requires live IRIS (RISM_IRIS_BASE_URL + config.toml)"]
 fn quick_task_completes_with_the_sync_result() {
     let mut m = Mcp::spawn();
-    let cmd = "write \"quick\",!";
+    // MULTI-frame on purpose: each `write !` inside the loop is a separate
+    // terminal frame, and the sync path joins frames with \n while the
+    // streaming tail concatenates them raw. A single-frame command would
+    // pass both paths identically and mask the divergence (it did, once).
+    let cmd = "for i=1:1:4 { write \"quick\",i,!  h .15 }";
     let res = m.task_start(serde_json::json!({"command": cmd}));
     let id = Mcp::task_id(&res);
     let done = m.wait_terminal(&id, Duration::from_secs(15));
@@ -396,6 +423,19 @@ fn rail_a_and_bad_task_ids_are_errors_not_crashes() {
     assert!(
         text.lowercase_contains("tasks extension"),
         "refusal must name the Tasks extension: {text}"
+    );
+    // Rail-A fires BEFORE schema validation: even a payload that would
+    // fail deny_unknown_fields gets the guidance, not a bare -32602
+    // (a declared client with the same broken payload still gets -32602
+    // — the parse branch runs only inside the declared path).
+    let (is_err, _, text) = plain.call(
+        "execute_command",
+        serde_json::json!({"command": "write 1", "background": true, "force": true}),
+    );
+    assert!(is_err);
+    assert!(
+        text.lowercase_contains("tasks extension"),
+        "schema-invalid + non-declaring must still get Rail-A: {text}"
     );
     // tasks/* methods from a non-declaring client: protocol error (rmcp
     // validates the capability before the handler runs).

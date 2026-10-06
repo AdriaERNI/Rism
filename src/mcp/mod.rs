@@ -365,6 +365,19 @@ impl ServerHandler for RismMcp {
             let declared = context
                 .client_capabilities()
                 .is_some_and(|caps| caps.supports_tasks());
+            if !declared {
+                // Rail A first, before ANY parsing: the honest guidance
+                // must reach a non-declaring client even if the payload
+                // would also fail schema validation.
+                return Ok(rmcp::model::CallToolResponse::Complete(
+                    CallToolResult::error(vec![ContentBlock::text(
+                        "background=true requires the Tasks extension (the client must declare \
+                         io.modelcontextprotocol/tasks in initialize capabilities); this client \
+                         did not, so run the command synchronously with a safe timeout_secs \
+                         instead",
+                    )]),
+                ));
+            }
             let args: ExecuteCommandArgs = serde_json::from_value(serde_json::Value::Object(
                 request
                     .arguments
@@ -374,7 +387,11 @@ impl ServerHandler for RismMcp {
                     .collect(),
             ))
             .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
-            if declared {
+            {
+                // Wall-clock cap floor for background jobs: a task is
+                // detached precisely because it outlives sync timeouts, so
+                // the short sync default would be wrong here. Documented
+                // in docs/mcp-tools.md (Background execution section).
                 let timeout = std::time::Duration::from_secs(
                     args.timeout_secs
                         .unwrap_or(self.client.settings().timeout_secs.max(3600)),
@@ -392,15 +409,6 @@ impl ServerHandler for RismMcp {
                     &info,
                 )));
             }
-            // Rail A: honest failure instead of a silent 60-s client timeout.
-            return Ok(rmcp::model::CallToolResponse::Complete(
-                CallToolResult::error(vec![ContentBlock::text(
-                    "background=true requires the Tasks extension (the client must declare \
-                     io.modelcontextprotocol/tasks in initialize capabilities); this client \
-                     did not, so run the command synchronously with a safe timeout_secs \
-                     instead",
-                )]),
-            ));
         }
         if tracing::enabled!(tracing::Level::DEBUG) {
             let params = request.arguments.as_ref().map_or_else(

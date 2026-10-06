@@ -21,6 +21,7 @@ use serde::Serialize;
 use crate::error::{Error, Result};
 use crate::iris::IrisClient;
 use crate::iris::terminal as api;
+use crate::tools::command::CommandResult;
 
 /// Tail kept per job (ring buffer; total produced is reported separately).
 pub const OUTPUT_CAP: usize = 100_000;
@@ -55,8 +56,16 @@ pub struct JobInfo {
     pub prompt: Option<String>,
     /// Total output produced so far, in bytes (may exceed `output`).
     pub output_chars: usize,
-    /// Tail of the output (up to [`OUTPUT_CAP`] bytes). Empty in list view.
+    /// Streaming output tail (up to [`OUTPUT_CAP`] bytes), concatenated raw
+    /// frames. Progress display only — the equivalent-of-sync output after
+    /// finish lives in [`Self::final_result`].
     pub output: String,
+    /// The exact synchronous `CommandResult`, stored by `finish` from the
+    /// terminal outcome — a completed task's result payload is built from
+    /// THIS (SEP-2663 equivalence). None while running. Not serialized:
+    /// the wire contract is the task projection (`crate::mcp::tasks`).
+    #[serde(skip)]
+    pub final_result: Option<CommandResult>,
 }
 
 /// Output sink shared between the task and readers.
@@ -116,6 +125,8 @@ struct JobMeta {
     interrupted: bool,
     error: Option<String>,
     prompt: Option<String>,
+    /// Joined final output stored by `finish()`; None while running.
+    final_result: Option<CommandResult>,
 }
 
 type Registry = HashMap<String, Arc<JobSlot>>;
@@ -195,6 +206,7 @@ pub fn start(
             interrupted: false,
             error: None,
             prompt: None,
+            final_result: None,
         }),
         buf: SharedBuf::new(),
         cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -305,7 +317,15 @@ fn finish(slot: &Arc<JobSlot>, outcome: std::result::Result<api::TerminalOutcome
         match outcome {
             Ok(o) => {
                 m.interrupted = o.interrupted;
-                m.prompt = Some(o.prompt);
+                m.prompt = Some(o.prompt.clone());
+                m.final_result = Some(CommandResult {
+                    namespace: m.namespace.clone(),
+                    command: m.command.clone(),
+                    output: o.output,
+                    prompt: o.prompt,
+                    output_truncated: o.truncated,
+                    output_omitted_chars: o.omitted_chars,
+                });
             }
             Err(e) => m.error = Some(e),
         }
@@ -339,9 +359,10 @@ fn snapshot(id: &str, slot: &Arc<JobSlot>, with_output: bool) -> JobInfo {
         interrupted: m.interrupted,
         error: m.error,
         prompt: m.prompt,
-        // live buffer values — JobMeta carries no output fields
+        // live buffer values — JobMeta carries no streaming output fields
         output_chars: total,
         output: if with_output { tail } else { String::new() },
+        final_result: m.final_result,
     }
 }
 
@@ -419,6 +440,7 @@ mod tests {
                 interrupted: false,
                 error: None,
                 prompt: None,
+                final_result: None,
             }),
             buf: SharedBuf::new(),
             cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -470,6 +492,7 @@ mod tests {
                     interrupted: false,
                     error: None,
                     prompt: None,
+                    final_result: None,
                 }),
                 buf: SharedBuf::new(),
                 cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -489,6 +512,7 @@ mod tests {
                     interrupted: false,
                     error: None,
                     prompt: None,
+                    final_result: None,
                 }),
                 buf: SharedBuf::new(),
                 cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -538,6 +562,7 @@ mod tests {
                         interrupted: false,
                         error: None,
                         prompt: None,
+                        final_result: None,
                     }),
                     buf: SharedBuf::new(),
                     cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
