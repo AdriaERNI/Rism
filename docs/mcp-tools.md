@@ -65,18 +65,23 @@ answers immediately with a **task handle** (`resultType: "task"`, a
 (SEP-2663) — a protocol mechanism, not extra tools:
 
 - **Poll** with `tasks/get` (`taskId`): status (`working` → `completed` /
-  `cancelled` / `failed`) plus a `statusMessage` with the streamed
-  character count while running. Finished output is served in the
-  `result` of a `completed` task — byte-identical to what the synchronous
-  call would have returned.
+  `cancelled` / `failed`) plus a `statusMessage` with the streamed byte
+  count while running. Finished output is served in the `result` of a
+  `completed` task — identical to what the synchronous call would have
+  returned (same terminal outcome object, so frame joins and truncation
+  markers match byte for byte).
 - **Stop** with `tasks/cancel` (`taskId`): sends the terminal protocol's
   `interrupt` — a real server-side break: the ObjectScript child unwinds
   with `<INTERRUPT>` within milliseconds and the partial state stays as
   executed (same mechanism as the VS Code lite terminal's Ctrl+C).
   Cancelling a finished task is a safe no-op.
-- A task's output lives 30 minutes (advertised as `ttlMs`); after that the
-  id is expired and `tasks/get` answers with a clean error. Up to 16
-  concurrent background tasks; the 17th start is refused actionably.
+- Finished tasks are retained **30 minutes from completion** (advertised
+  as `ttlMs`, measured from creation); after that the id is expired and
+  `tasks/get` answers with a clean error. A running task ends at its
+  `timeout_secs` wall-clock cap regardless — the background default is
+  1 hour (higher than the sync default; a task is detached precisely
+  because it outlives request timeouts). Up to 16 concurrent background
+  tasks; the 17th start is refused actionably.
 - `background=true` requires a client that declared the Tasks extension in
   `initialize`. Non-declaring clients get an honest tool-level error
   telling them to run synchronously — never a silent timeout.

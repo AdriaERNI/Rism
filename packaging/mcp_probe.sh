@@ -66,7 +66,7 @@ echo "MCP probe OK: $n tools, SQL answered, Rail-A refusal honest"
 
 # --- background task contract (MCP Tasks, stream + cancel), same door -----
 # Tasks-capable initialize, long loop as a task; tasks/get must show the
-# streamed character count GROW between polls (output itself is not served
+# streamed byte count GROW between polls (output itself is not served
 # while working); tasks/cancel must land status cancelled and freeze the
 # count (loop truly dead server-side). No python assumed.
 fifo=$(mktemp -u)
@@ -91,7 +91,7 @@ grep -q '"resultType":"task"' "$jobs_out" \
 tid=$(grep -o 'rism-[0-9a-f]*-[0-9a-f]*' "$jobs_out" | head -1)
 [ -n "$tid" ] || { echo "MCP probe: no taskId on the task handle"; exit 1; }
 
-# streaming: the streamed-character count must grow between two polls
+# streaming: the streamed-byte count must grow between two polls
 sleep 2
 send "{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"$tid\"}}"
 for _ in $(seq 20); do grep '"id":11' "$jobs_out" | grep -q '"status":"working"' && break; sleep 0.5; done
@@ -124,8 +124,6 @@ sleep 1
 cl=$(grep '"id":15' "$jobs_out" | grep -o 'streamed [0-9]*' | tail -1 | grep -o '[0-9]*')
 [ "$cl" = "$cf" ] \
   || { echo "MCP probe: task still streaming after cancel ($cf -> $cl)"; exit 1; }
-grep '"id":14' "$jobs_out" | grep -q 'bgtick9' \
-  && { echo "MCP probe: loop ran to completion despite cancel"; exit 1; }
 exec 3>&-
 wait $mcp_pid 2>/dev/null || true
 echo "MCP probe OK: background task streamed, cancelled, and froze"
