@@ -326,6 +326,40 @@ fn map_json<T: serde::Serialize>(res: crate::Result<T>) -> CallToolResult {
     }
 }
 
+/// Prism-parity REQUEST banner (log.py `logged_tool`): logged at the TOP of
+/// `call_tool` for EVERY path, before capability/task-mode branches return.
+fn log_request(name: &str, arguments: Option<&rmcp::model::JsonObject>) {
+    if tracing::enabled!(tracing::Level::DEBUG) {
+        let params = arguments.map_or_else(
+            || serde_json::json!({}),
+            |obj| serde_json::Value::Object(obj.clone().into_iter().collect()),
+        );
+        tracing::debug!(
+            "\n{}\n{}",
+            crate::logfmt::request_banner(name),
+            crate::logfmt::pretty(&crate::logfmt::truncate_params(&params))
+        );
+    }
+}
+
+/// Prism-parity RESPONSE banner for a plain-text result (refusals returning
+/// early — the router tail never runs for them).
+fn log_response_text(name: &str, text: &str) {
+    log_response_json(name, &crate::logfmt::response_value(text));
+}
+
+/// Prism-parity RESPONSE banner for a structured result (task handles).
+fn log_response_json<T: serde::Serialize>(name: &str, value: &T) {
+    if tracing::enabled!(tracing::Level::DEBUG) {
+        let v = serde_json::to_value(value).unwrap_or(serde_json::Value::Null);
+        tracing::debug!(
+            "\n{}\n{}",
+            crate::logfmt::response_banner(name),
+            crate::logfmt::pretty(&crate::logfmt::truncate_result(&v))
+        );
+    }
+}
+
 #[tool_handler(router = self.tool_router)]
 #[allow(
     // three instant-resolving trait impls (registry reads + pure mapping);
@@ -339,20 +373,26 @@ fn map_json<T: serde::Serialize>(res: crate::Result<T>) -> CallToolResult {
 )]
 impl ServerHandler for RismMcp {
     /// Prism-parity request/response logging (log.py): every tool call is
-    /// logged to stderr at DEBUG with truncation. Debug tools are gated off
-    /// when `debug_tools_enabled` is false (attach pauses live jobs — Prism
-    /// hides the whole module in that case).
+    /// logged to stderr at DEBUG with truncation — REQUEST at entry (so
+    /// refusals and early returns are never silent) and RESPONSE wherever a
+    /// result exists to log. Debug tools are gated off when
+    /// `debug_tools_enabled` is false (attach pauses live jobs — Prism hides
+    /// the whole module in that case).
     async fn call_tool(
         &self,
         request: rmcp::model::CallToolRequestParams,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> std::result::Result<rmcp::model::CallToolResponse, rmcp::ErrorData> {
         let name = request.name.to_string();
+        // Hoisted: log the REQUEST before ANY branch (capability refusals,
+        // task-mode early returns included) so "every call is logged" holds
+        // for every path through this function.
+        log_request(&name, request.arguments.as_ref());
         if name.starts_with("debug_") && !self.client.settings().debug_tools_enabled {
+            let text = "debugger tools are disabled (set RISM_DEBUG_TOOLS=1 to enable)";
+            log_response_text(&name, text);
             return Ok(rmcp::model::CallToolResponse::Complete(
-                CallToolResult::error(vec![ContentBlock::text(
-                    "debugger tools are disabled (set RISM_DEBUG_TOOLS=1 to enable)",
-                )]),
+                CallToolResult::error(vec![ContentBlock::text(text)]),
             ));
         }
         // SEP-2663 task mode: a Tasks-capable client asking for background
@@ -373,13 +413,13 @@ impl ServerHandler for RismMcp {
                 // Rail A first, before ANY parsing: the honest guidance
                 // must reach a non-declaring client even if the payload
                 // would also fail schema validation.
+                let text = "background=true requires the Tasks extension (the client must \
+                            declare io.modelcontextprotocol/tasks in initialize capabilities); \
+                            this client did not, so run the command synchronously with a safe \
+                            timeout_secs instead";
+                log_response_text(&name, text);
                 return Ok(rmcp::model::CallToolResponse::Complete(
-                    CallToolResult::error(vec![ContentBlock::text(
-                        "background=true requires the Tasks extension (the client must declare \
-                         io.modelcontextprotocol/tasks in initialize capabilities); this client \
-                         did not, so run the command synchronously with a safe timeout_secs \
-                         instead",
-                    )]),
+                    CallToolResult::error(vec![ContentBlock::text(text)]),
                 ));
             }
             let args: ExecuteCommandArgs = serde_json::from_value(serde_json::Value::Object(
@@ -409,21 +449,10 @@ impl ServerHandler for RismMcp {
                 .map_err(|e| {
                     rmcp::ErrorData::internal_error(format!("failed to create task: {e}"), None)
                 })?;
-                return Ok(rmcp::model::CallToolResponse::Task(tasks::create_task(
-                    &info,
-                )));
+                let seed = tasks::create_task(&info);
+                log_response_json(&name, &seed);
+                return Ok(rmcp::model::CallToolResponse::Task(seed));
             }
-        }
-        if tracing::enabled!(tracing::Level::DEBUG) {
-            let params = request.arguments.as_ref().map_or_else(
-                || serde_json::json!({}),
-                |obj| serde_json::Value::Object(obj.clone().into_iter().collect()),
-            );
-            tracing::debug!(
-                "\n{}\n{}",
-                crate::logfmt::request_banner(&name),
-                crate::logfmt::pretty(&crate::logfmt::truncate_params(&params))
-            );
         }
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
         let res = self.tool_router.call(tcc).await;
@@ -439,13 +468,7 @@ impl ServerHandler for RismMcp {
                     .unwrap_or_default(),
                 _ => String::new(),
             };
-            let value = serde_json::from_str::<serde_json::Value>(&text)
-                .unwrap_or_else(|_| serde_json::json!(&text));
-            tracing::debug!(
-                "\n{}\n{}",
-                crate::logfmt::response_banner(&name),
-                crate::logfmt::pretty(&crate::logfmt::truncate_result(&value))
-            );
+            log_response_text(&name, &text);
         }
         res
     }
