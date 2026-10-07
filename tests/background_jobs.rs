@@ -179,7 +179,7 @@ impl Mcp {
         }
     }
 
-    /// Character count carried by a statusMessage ("streamed N characters").
+    /// Byte count carried by a statusMessage ("streamed N bytes").
     fn streamed_count(task: &Value) -> u64 {
         Self::message_count(task["statusMessage"].as_str().unwrap_or_default())
     }

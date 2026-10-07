@@ -330,7 +330,11 @@ fn map_json<T: serde::Serialize>(res: crate::Result<T>) -> CallToolResult {
 #[allow(
     // three instant-resolving trait impls (registry reads + pure mapping);
     // yield_now boilerplate is noise and method-level allow is ignored by
-    // CI's 1.99 (module/impl-level is what works)
+    // CI's 1.99 (module/impl-level is what works). The lint is `unused_async`
+    // on stable; 1.99 nightlies renamed it to `unused_async_trait_impl` —
+    // silence both names, `unknown_lints` keeps the inactive one quiet.
+    unknown_lints,
+    clippy::unused_async,
     clippy::unused_async_trait_impl
 )]
 impl ServerHandler for RismMcp {
