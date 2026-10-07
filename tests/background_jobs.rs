@@ -17,8 +17,9 @@
     clippy::needless_pass_by_value
 )]
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -31,6 +32,10 @@ struct Mcp {
     next_id: u64,
     /// The `initialize` response — what the server advertised.
     init: Value,
+    /// Server stderr, appended live by a drain thread (Prism-parity DEBUG
+    /// banners land here under `RUST_LOG=debug`; a pipe nobody drains fills
+    /// and deadlocks a chatty server).
+    stderr: Arc<Mutex<Vec<u8>>>,
 }
 
 impl Mcp {
@@ -51,19 +56,41 @@ impl Mcp {
         let exe = env!("CARGO_BIN_EXE_rism");
         let mut child = Command::new(exe)
             .arg("mcp")
+            .env("RUST_LOG", "debug") // Prism-parity banners land on stderr
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
             .expect("spawn rism mcp");
         let stdin = child.stdin.take().unwrap();
         let stdout = BufReader::new(child.stdout.take().unwrap());
+        let stderr = Arc::new(Mutex::new(Vec::new()));
+        {
+            // Drain thread: a nobody-reads pipe fills (64 KB) and deadlocks
+            // the server; chunks append live so assertions can read stderr
+            // WHILE the server is still running.
+            let sink = Arc::clone(&stderr);
+            let mut pipe = child.stderr.take().unwrap();
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 8192];
+                loop {
+                    match pipe.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => sink
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .extend_from_slice(&buf[..n]),
+                    }
+                }
+            });
+        }
         let mut m = Self {
             child,
             stdin,
             stdout,
             next_id: 0,
             init: Value::Null,
+            stderr,
         };
         m.init = m.rpc(
             "initialize",
@@ -151,6 +178,32 @@ impl Mcp {
 
     fn task_id(res: &Value) -> String {
         res["taskId"].as_str().unwrap().to_string()
+    }
+
+    /// Everything the server has written to stderr so far (live snapshot;
+    /// the drain thread appends as chunks arrive).
+    fn stderr_text(&self) -> String {
+        let guard = self
+            .stderr
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        String::from_utf8_lossy(&guard).to_string()
+    }
+
+    /// [`stderr_text`] until `needle` shows up or the budget runs out (log
+    /// writes and stdout responses travel on different fds; the drain
+    /// thread can lag the response by microseconds).
+    fn wait_stderr_contains(&self, needle: &str, budget: Duration) -> bool {
+        let t0 = Instant::now();
+        loop {
+            if self.stderr_text().contains(needle) {
+                return true;
+            }
+            if t0.elapsed() >= budget {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 
     /// `tasks/get` → the `DetailedTask` result (flattened wire shape:
@@ -480,6 +533,78 @@ fn rail_a_and_bad_task_ids_are_errors_not_crashes() {
     );
     assert!(!is_err, "door died: {p}");
     assert!(p["output"].as_str().unwrap().contains("healthy"));
+}
+
+#[test]
+#[ignore = "requires live IRIS (RISM_IRIS_BASE_URL + config.toml)"]
+fn every_call_tool_path_is_logged_prism_parity() {
+    let secs = Duration::from_secs(5);
+    // The call_tool doc promises "every tool call is logged" on EVERY path —
+    // including the early-return branches that never reach the router tail.
+    // Path 1: Rail-A refusal (non-declaring client) must log REQUEST and a
+    // RESPONSE carrying the refusal text.
+    let mut m1 = Mcp::spawn_plain();
+    let (is_err, _, _) = m1.call(
+        "execute_command",
+        serde_json::json!({"command": "write 1", "background": true}),
+    );
+    assert!(is_err);
+    assert!(
+        m1.wait_stderr_contains("── execute_command ── RESPONSE", secs),
+        "Rail-A refusal path logged nothing:\n{}",
+        m1.stderr_text()
+    );
+    let logs = m1.stderr_text();
+    assert!(
+        logs.contains("── execute_command ── REQUEST"),
+        "Rail-A refusal path logged no REQUEST:\n{logs}"
+    );
+    assert!(
+        logs.contains("Tasks extension"),
+        "Rail-A refusal RESPONSE must carry the guidance:\n{logs}"
+    );
+    drop(m1);
+
+    // Path 2: task-mode spawn (returns CallToolResponse::Task before the
+    // router) — REQUEST banner + RESPONSE banner carrying the task handle.
+    let mut m = Mcp::spawn();
+    let res =
+        m.task_start(serde_json::json!({"command": "write \"logged\",!", "timeout_secs": 30}));
+    let id = Mcp::task_id(&res);
+    assert!(
+        m.wait_stderr_contains(&format!("\"taskId\": \"{id}\""), secs),
+        "task-spawn RESPONSE log missing the task handle:\n{}",
+        m.stderr_text()
+    );
+    let _ = m.wait_terminal(&id, Duration::from_secs(15));
+    let logs = m.stderr_text();
+    assert!(
+        logs.contains("── execute_command ── REQUEST"),
+        "task-spawn path logged no REQUEST:\n{logs}"
+    );
+    // Path 3: the normal router tail still logs exactly one pair per call —
+    // spawn + sync here, never zero and never duplicated by the hoist.
+    let (is_err, _, _) = m.call(
+        "execute_command",
+        serde_json::json!({"command": "write 2", "timeout_secs": 30}),
+    );
+    assert!(!is_err);
+    assert!(
+        m.wait_stderr_contains("write 2", secs),
+        "sync-door RESPONSE not logged:\n{}",
+        m.stderr_text()
+    );
+    let logs = m.stderr_text();
+    assert_eq!(
+        logs.matches("── execute_command ── REQUEST").count(),
+        2,
+        "spawn + sync = two REQUEST banners (no double-log):\n{logs}"
+    );
+    assert_eq!(
+        logs.matches("── execute_command ── RESPONSE").count(),
+        2,
+        "spawn + sync = two RESPONSE banners:\n{logs}"
+    );
 }
 
 #[test]
