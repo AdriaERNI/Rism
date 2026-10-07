@@ -37,7 +37,7 @@ export RISM_IRIS_PASSWORD=***   # never stored in the config file
 rism info                      # version + namespaces => connectivity OK
 
 # 3. work
-rism sql "SELECT TOP 5 Name FROM %Dictionary.CompiledClass WHERE NameSpace='USER'"
+rism sql "SELECT TOP 5 Name FROM %Dictionary.ClassDefinition"
 rism doc compile MyPackage.MyClass.cls
 rism test run MyPackage.MyClassTest
 rism debug run '##class(MyPackage.MyClass).Main()' --stop-on-entry

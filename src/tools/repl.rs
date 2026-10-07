@@ -424,7 +424,11 @@ pub mod rusty {
 #[allow(
     clippy::unwrap_used,
     clippy::missing_panics_doc,
-    // fakes resolve instantly; wrapping them in ready() is noise
+    // fakes resolve instantly; `unused_async` was renamed to
+    // `unused_async_trait_impl` in 1.99 nightlies — silence whichever
+    // name this toolchain uses without warning about the other
+    unknown_lints,
+    clippy::unused_async,
     clippy::unused_async_trait_impl
 )]
 mod tests {

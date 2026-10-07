@@ -21,9 +21,10 @@ pub struct ExecuteCommandArgs {
     pub timeout_secs: Option<u64>,
     /// Start the command as a background MCP task (`tasks/get` polling) and
     /// return its `taskId` immediately instead of blocking until it finishes.
-    /// Takes effect only for clients that negotiated the Tasks extension;
-    /// ignored otherwise. For long-running work (loops, imports, batch
-    /// methods) that would outlive synchronous request timeouts.
+    /// Requires the client to have negotiated the Tasks extension; requests
+    /// from other clients are rejected with an error. For long-running work
+    /// (loops, imports, batch methods) that would outlive synchronous request
+    /// timeouts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background: Option<bool>,
 }

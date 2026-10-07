@@ -3,7 +3,11 @@
 Rism serves **25 tools** over JSON-RPC 2.0 / stdio (`rism mcp`). Parameters marked
 `*` are required. All tools accept an optional `namespace` (override the configured
 default) unless noted. Every tool's behavior is identical to the CLI path — same
-core, two doors.
+core, two doors. One documented exception: document writes enforce conflicts by
+default on the MCP door (`ignore_conflict: false`), while the CLI defaults to
+ignoring them — pass `ignore_conflict: true` to match `rism doc put`'s behavior.
+The stricter default is deliberate: an agent cannot interactively resolve a
+clobbered server copy.
 
 Set `RISM_DEBUG_TOOLS=0` to remove the 9 `debug_*` tools from `tools/list`
 (attaching pauses live IRIS jobs; some deployments disable them).
@@ -41,9 +45,9 @@ CI-clean servers). Optional `flags`.
 
 ## SQL & terminal
 
-Terminal tools ship MCP **annotations** (`title`, behavior hints), so clients
-can show names and decide confirmation policy without guessing:
-`execute_command` is `destructiveHint` — ObjectScript can mutate data.
+`execute_command` ships an MCP **annotation** (`title: "Run ObjectScript"`,
+`destructiveHint`) so clients can show names and decide confirmation policy
+without guessing — ObjectScript can mutate data.
 Program/runtime errors (`<SYNTAX>`, `<NOROUTINE>`, `<INTERRUPT>`) come back
 as terminal **output** with a successful call, exactly as a real terminal
 echoes them — read `output`, not just `isError`.
@@ -74,13 +78,17 @@ answers immediately with a **task handle** (`resultType: "task"`, a
   `interrupt` — a real server-side break: the ObjectScript child unwinds
   with `<INTERRUPT>` within milliseconds and the partial state stays as
   executed (same mechanism as the VS Code lite terminal's Ctrl+C).
-  Cancelling a finished task is a safe no-op.
-- Finished tasks are retained **30 minutes from completion** (advertised
-  as `ttlMs`, measured from creation); after that the id is expired and
+  Cancelling a finished task is a safe no-op: `tasks/cancel` acknowledges
+  (intent signal only); the `-32602` error is reserved for unknown/expired
+  ids.
+- Finished tasks are retained **30 minutes from completion** (`ttlMs` is
+  advertised from creation per SEP-2663, so the server may retain slightly
+  longer than the advertised value); after that the id is expired and
   `tasks/get` answers with a clean error. A running task ends at its
   `timeout_secs` wall-clock cap regardless — the background default is
   1 hour (higher than the sync default; a task is detached precisely
-  because it outlives request timeouts). Up to 16 concurrent background
+  because it outlives request timeouts; an explicit `timeout_secs` is
+  used exactly as given, without the 1-hour floor). Up to 16 concurrent background
   tasks; the 17th start is refused actionably.
 - `background=true` requires a client that declared the Tasks extension in
   `initialize`. Non-declaring clients get an honest tool-level error
