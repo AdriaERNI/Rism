@@ -446,9 +446,10 @@ impl ServerHandler for RismMcp {
                 // the protocol version: under < 2026-06-30 the extension
                 // key MUST be treated as if absent (SEP-2663 compat table).
                 let text = "background=true requires the Tasks extension (the client must \
-                            declare io.modelcontextprotocol/tasks in initialize capabilities \
-                            under protocol version 2026-06-30 or later); this client did not, \
-                            so run the command synchronously with a safe timeout_secs instead";
+                            declare io.modelcontextprotocol/tasks in its capabilities — \
+                            initialize or per-request _meta — under protocol version \
+                            2026-06-30 or later); this client did not, so run the command \
+                            synchronously with a safe timeout_secs instead";
                 log_response_text(&name, text);
                 return Ok(rmcp::model::CallToolResponse::Complete(
                     CallToolResult::error(vec![ContentBlock::text(text)]),
