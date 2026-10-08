@@ -11,7 +11,7 @@
 //! jobs are garbage-collected after [`RETENTION`] (advertised as `ttlMs`).
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -132,7 +132,6 @@ struct JobMeta {
 type Registry = HashMap<String, Arc<JobSlot>>;
 
 static JOBS: OnceLock<Mutex<Registry>> = OnceLock::new();
-static SEQ: AtomicU64 = AtomicU64::new(0);
 
 fn registry() -> &'static Mutex<Registry> {
     JOBS.get_or_init(|| Mutex::new(HashMap::new()))
@@ -180,8 +179,10 @@ fn unix_now() -> u64 {
 }
 
 fn new_id() -> String {
-    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-    format!("rism-{:x}-{:x}", std::process::id(), seq)
+    // SEP-2663 Security: task ids MUST be unguessable (they double as
+    // bearer tokens for the stored task). pid keeps the id traceable in
+    // logs; the 64-bit CSPRNG draw kills enumeration.
+    format!("rism-{:x}-{:016x}", std::process::id(), rand::random::<u64>())
 }
 
 /// Start `command` on a dedicated terminal session; returns its job id
@@ -539,10 +540,26 @@ mod tests {
     #[test]
     fn ids_unique_and_shaped() {
         let _s = serial();
-        let a = new_id();
-        let b = new_id();
-        assert!(a.starts_with("rism-") && b.starts_with("rism-"));
-        assert_ne!(a, b);
+        // SEP-2663 entropy MUST: shape `rism-{pid:x}-{16 hex random}` and
+        // 1000 draws all distinct (with seq-based ids this loop was the
+        // bug: enumeration by construction).
+        let mut ids = std::collections::HashSet::new();
+        for _ in 0..1000 {
+            let id = new_id();
+            // no expect() (repo denies clippy::expect_used): a shape break
+            // must fail the assert, not panic outside it.
+            let ok = match id.strip_prefix("rism-").and_then(|r| r.split_once('-')) {
+                Some((pid, rand)) => {
+                    !pid.is_empty()
+                        && pid.chars().all(|c| c.is_ascii_hexdigit())
+                        && rand.len() == 16
+                        && rand.chars().all(|c| c.is_ascii_hexdigit())
+                }
+                None => false,
+            };
+            assert!(ok, "id shape must be rism-{{pid:x}}-{{16 hex}}: {id}");
+            assert!(ids.insert(id.clone()), "duplicate task id: {id}");
+        }
     }
 
     #[test]

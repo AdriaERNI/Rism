@@ -360,6 +360,36 @@ fn log_response_json<T: serde::Serialize>(name: &str, value: &T) {
     }
 }
 
+/// -32021 for tasks/* calls whose session predates the extension
+/// mechanism — same shape rmcp itself returns for missing caps.
+fn missing_tasks_capability() -> rmcp::ErrorData {
+    rmcp::ErrorData::missing_required_client_capability(
+        rmcp::model::ClientCapabilities::builder().enable_tasks().build(),
+    )
+}
+
+/// First protocol version under which the Tasks extension (SEP-2663) is
+/// defined: 2026-06-30, the first release with the extension mechanism
+/// (SEP-2133). Under 2025-11-25 the extension table is explicit — a
+/// declared `io.modelcontextprotocol/tasks` key MUST be ignored (that
+/// version has a DIFFERENT, not-wire-compatible tasks spec). rmcp 3.4.1
+/// knows no `V_2026_06_30` constant, so compare the ISO-date strings
+/// (every protocolVersion is `YYYY-MM-DD`, lexicographic == chronological).
+pub(crate) const TASKS_MIN_PROTOCOL: &str = "2026-06-30";
+
+/// SEP-2663 task gate: client declared the extension AND the negotiated
+/// protocol version defines extensions. Use in `call_tool` (task mode) and
+/// in the `tasks/*` handlers — rmcp's own dispatch validates only the
+/// capability, so the version clause is ours to enforce.
+pub(crate) fn tasks_supported(context: &rmcp::service::RequestContext<rmcp::RoleServer>) -> bool {
+    context
+        .client_capabilities()
+        .is_some_and(|caps| caps.supports_tasks())
+        && context
+            .protocol_version()
+            .is_some_and(|v| v.as_str() >= TASKS_MIN_PROTOCOL)
+}
+
 #[tool_handler(router = self.tool_router)]
 #[allow(
     // three instant-resolving trait impls (registry reads + pure mapping);
@@ -406,17 +436,17 @@ impl ServerHandler for RismMcp {
                     .is_some_and(|b| b == &serde_json::Value::Bool(true))
             })
         {
-            let declared = context
-                .client_capabilities()
-                .is_some_and(|caps| caps.supports_tasks());
+            let declared = tasks_supported(&context);
             if !declared {
                 // Rail A first, before ANY parsing: the honest guidance
                 // must reach a non-declaring client even if the payload
-                // would also fail schema validation.
+                // would also fail schema validation. "Declaring" includes
+                // the protocol version: under < 2026-06-30 the extension
+                // key MUST be treated as if absent (SEP-2663 compat table).
                 let text = "background=true requires the Tasks extension (the client must \
-                            declare io.modelcontextprotocol/tasks in initialize capabilities); \
-                            this client did not, so run the command synchronously with a safe \
-                            timeout_secs instead";
+                            declare io.modelcontextprotocol/tasks in initialize capabilities \
+                            under protocol version 2026-06-30 or later); this client did not, \
+                            so run the command synchronously with a safe timeout_secs instead";
                 log_response_text(&name, text);
                 return Ok(rmcp::model::CallToolResponse::Complete(
                     CallToolResult::error(vec![ContentBlock::text(text)]),
@@ -525,12 +555,18 @@ impl ServerHandler for RismMcp {
 
     /// SEP-2663 `tasks/get`: the registry snapshot projected to a task.
     /// Dispatch-level capability validation already rejected non-declaring
-    /// clients; unknown/GC'd ids are a clean JSON-RPC error.
+    /// clients; unknown/GC'd ids are a clean JSON-RPC error. The version
+    /// clause of the declaration gate is ours — rmcp validates the
+    /// capability only, so under < 2026-06-30 we must answer here (SEP-2663
+    /// compat table: the extension key is inert on older versions).
     async fn get_task(
         &self,
         request: GetTaskParams,
-        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> std::result::Result<GetTaskResult, rmcp::ErrorData> {
+        if !tasks_supported(&context) {
+            return Err(missing_tasks_capability());
+        }
         let info =
             jobs::status(&request.task_id).map_err(|e| tasks::task_error(&e, &request.task_id))?;
         Ok(GetTaskResult::new(tasks::detailed_task(&info)))
@@ -542,8 +578,11 @@ impl ServerHandler for RismMcp {
     async fn cancel_task(
         &self,
         request: CancelTaskParams,
-        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> std::result::Result<(), rmcp::ErrorData> {
+        if !tasks_supported(&context) {
+            return Err(missing_tasks_capability());
+        }
         jobs::cancel(&request.task_id).map_err(|e| tasks::task_error(&e, &request.task_id))?;
         Ok(())
     }
@@ -554,9 +593,12 @@ impl ServerHandler for RismMcp {
     async fn update_task(
         &self,
         request: UpdateTaskParams,
-        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> std::result::Result<(), rmcp::ErrorData> {
         let _ = request;
+        if !tasks_supported(&context) {
+            return Err(missing_tasks_capability());
+        }
         Err(rmcp::ErrorData::invalid_request(
             "rism tasks never request input; tasks/update is not used",
             None,

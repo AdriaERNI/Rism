@@ -90,9 +90,15 @@ answers immediately with a **task handle** (`resultType: "task"`, a
   because it outlives request timeouts; an explicit `timeout_secs` is
   used exactly as given, without the 1-hour floor). Up to 16 concurrent background
   tasks; the 17th start is refused actionably.
-- `background=true` requires a client that declared the Tasks extension in
-  `initialize`. Non-declaring clients get an honest tool-level error
-  telling them to run synchronously — never a silent timeout.
+- `background=true` requires a client that declared the Tasks extension
+  (`io.modelcontextprotocol/tasks`) for a protocol version that defines it
+  — 2026-06-30 or later (SEP-2663). With the classic `initialize`
+  handshake the SDK in use negotiates at most 2025-11-25, under which the
+  extension key MUST be treated as absent; declare it per-request instead
+  (`_meta` with `io.modelcontextprotocol/protocolVersion: "2026-07-28"`
+  and the client capabilities — the SEP-2575 inline lifecycle).
+  Non-declaring clients get an honest tool-level error telling them to run
+  synchronously — never a silent timeout.
 
 ## Unit tests
 
