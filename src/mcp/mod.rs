@@ -364,7 +364,9 @@ fn log_response_json<T: serde::Serialize>(name: &str, value: &T) {
 /// mechanism — same shape rmcp itself returns for missing caps.
 fn missing_tasks_capability() -> rmcp::ErrorData {
     rmcp::ErrorData::missing_required_client_capability(
-        rmcp::model::ClientCapabilities::builder().enable_tasks().build(),
+        rmcp::model::ClientCapabilities::builder()
+            .enable_tasks()
+            .build(),
     )
 }
 

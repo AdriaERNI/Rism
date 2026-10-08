@@ -182,7 +182,11 @@ fn new_id() -> String {
     // SEP-2663 Security: task ids MUST be unguessable (they double as
     // bearer tokens for the stored task). pid keeps the id traceable in
     // logs; the 64-bit CSPRNG draw kills enumeration.
-    format!("rism-{:x}-{:016x}", std::process::id(), rand::random::<u64>())
+    format!(
+        "rism-{:x}-{:016x}",
+        std::process::id(),
+        rand::random::<u64>()
+    )
 }
 
 /// Start `command` on a dedicated terminal session; returns its job id

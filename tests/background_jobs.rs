@@ -392,9 +392,8 @@ fn server_advertises_tasks_extension() {
     // A fresh HANDSHAKE is the proof: the initialize response must carry
     // the extension + correct serverInfo. (The inline client never
     // initializes, so use the handshake builder here.)
-    let m = Mcp::spawn_with(
-        serde_json::json!({"extensions": {"io.modelcontextprotocol/tasks": {}}}),
-    );
+    let m =
+        Mcp::spawn_with(serde_json::json!({"extensions": {"io.modelcontextprotocol/tasks": {}}}));
     let caps = &m.init["result"]["capabilities"];
     assert!(
         caps["extensions"]["io.modelcontextprotocol/tasks"].is_object(),
@@ -608,9 +607,8 @@ fn handshake_declared_extension_key_is_inert() {
     // live). A handshake client declaring the key therefore exercises the
     // inert path, and the modern path is covered by every inline test
     // (spawn() = SEP-2575 per-request `_meta`, 2026-07-28).
-    let mut m = Mcp::spawn_with(
-        serde_json::json!({"extensions": {"io.modelcontextprotocol/tasks": {}}}),
-    );
+    let mut m =
+        Mcp::spawn_with(serde_json::json!({"extensions": {"io.modelcontextprotocol/tasks": {}}}));
     // If rmcp ever learns to echo 2026-06-30+ here, this test's premise
     // (pre-extension session) dies — fail loudly instead of vacuously.
     assert!(
@@ -636,8 +634,15 @@ fn handshake_declared_extension_key_is_inert() {
     );
     // tasks/* likewise rejected — never a DetailedTask.
     let msg = m.rpc("tasks/get", serde_json::json!({"taskId": "nope"}));
-    assert!(msg.get("error").is_some(), "legacy session must reject tasks/get: {msg}");
-    assert_eq!(msg["error"]["code"], serde_json::json!(-32021), "-32021 expected");
+    assert!(
+        msg.get("error").is_some(),
+        "legacy session must reject tasks/get: {msg}"
+    );
+    assert_eq!(
+        msg["error"]["code"],
+        serde_json::json!(-32021),
+        "-32021 expected"
+    );
     // sync door still fully healthy on the legacy session
     let (is_err, p, _) = m.call(
         "execute_command",
