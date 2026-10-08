@@ -467,12 +467,18 @@ impl ServerHandler for RismMcp {
             {
                 // Wall-clock cap floor for background jobs: a task is
                 // detached precisely because it outlives sync timeouts, so
-                // the short sync default would be wrong here. Documented
-                // in docs/mcp-tools.md (Background execution section).
-                let timeout = std::time::Duration::from_secs(
+                // the short sync default would be wrong here. An explicit
+                // 0 means "use the default" (a 0-duration timeout would
+                // kill the task instantly with a misleading error — issue
+                // #16 F3). Clamped to MAX_TIMEOUT_SECS: an absurd value
+                // overflowed the deadline arithmetic and hung the task
+                // silently. Documented in docs/mcp-tools.md (Background
+                // execution section).
+                let timeout = std::time::Duration::from_secs(crate::tools::clamp_timeout_secs(
                     args.timeout_secs
+                        .filter(|n| *n > 0)
                         .unwrap_or(self.client.settings().timeout_secs.max(3600)),
-                );
+                ));
                 let info = jobs::start(
                     &self.client,
                     args.namespace.clone(),

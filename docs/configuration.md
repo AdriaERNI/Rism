@@ -47,6 +47,7 @@ debug_tools_enabled = true
 | `RISM_IRIS_API_VERSION` | API prefix (0 = negotiate) | `0` |
 | `RISM_WORKSPACE` | root for host file tools | *(unset = disabled)* |
 | `RISM_DEBUG_TOOLS` | `0` hides the 9 `debug_*` tools | `1` |
+| `RISM_TERMINAL_MAX_OUTPUT_CHARS` | bound on terminal output retained per command (garbage keeps default) | `100000` |
 
 `RISM_WORKSPACE` also applies to the CLI (`rism cat`, `rism ls`, `rism shell`);
 without it those tools refuse to run rather than defaulting to `/`.

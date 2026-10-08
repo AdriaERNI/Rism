@@ -55,7 +55,7 @@ pub struct JobInfo {
     /// Prompt seen after completion.
     pub prompt: Option<String>,
     /// Total output produced so far, in bytes (may exceed `output`).
-    pub output_chars: usize,
+    pub output_bytes: usize,
     /// Streaming output tail (up to [`OUTPUT_CAP`] bytes), concatenated raw
     /// frames. Progress display only — the equivalent-of-sync output after
     /// finish lives in [`Self::final_result`].
@@ -98,7 +98,7 @@ impl SharedBuf {
             b.drain(..cut);
         }
     }
-    /// `(total_chars, tail_snapshot)`
+    /// `(total_bytes, tail_snapshot)`
     fn snapshot(&self) -> (usize, String) {
         let tail = self
             .tail
@@ -365,7 +365,7 @@ fn snapshot(id: &str, slot: &Arc<JobSlot>, with_output: bool) -> JobInfo {
         error: m.error,
         prompt: m.prompt,
         // live buffer values — JobMeta carries no streaming output fields
-        output_chars: total,
+        output_bytes: total,
         output: if with_output { tail } else { String::new() },
         final_result: m.final_result,
     }
@@ -657,7 +657,7 @@ mod tests {
         assert!(s.error.is_none());
         assert_eq!(s.prompt.as_deref(), Some("USER>"));
         assert_eq!(s.output, "hello");
-        assert_eq!(s.output_chars, 5);
+        assert_eq!(s.output_bytes, 5);
 
         assert!(status("nope").is_err());
         assert!(cancel("nope").is_err());

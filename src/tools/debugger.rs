@@ -165,6 +165,19 @@ fn next_id() -> String {
     format!("{x:012x}")
 }
 
+/// True when the single session slot is free (expired sessions reaped
+/// first). MUST be checked BEFORE opening the DBGP socket: a second
+/// agent connection makes the IRIS `XDebug` server reset the live
+/// session's socket (verified live — the "already active" refusal
+/// after connecting killed the session it meant to protect).
+async fn slot_free() -> bool {
+    reap_expired().await;
+    sessions()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .is_empty()
+}
+
 /// Register a session (max 1 live — Prism parity). Closes expired ones first.
 async fn create_session(
     conn: DbgpConnection,
@@ -630,6 +643,13 @@ pub async fn debug_start(client: &IrisClient, args: &DebugStartArgs) -> Result<D
         .namespace
         .clone()
         .unwrap_or_else(|| client.settings().iris_namespace);
+    // slot guard BEFORE connect — see slot_free's note: connecting a
+    // second agent would reset the live session's socket.
+    if !slot_free().await {
+        return Err(Error::Debug(
+            "a debug session is already active — call debug_stop first".to_string(),
+        ));
+    }
     let conn = DbgpConnection::connect(client, Duration::from_secs(30)).await?;
     let session = match create_session(conn, &args.target, &ns).await {
         Ok(s) => s,
@@ -724,6 +744,13 @@ pub async fn debug_attach(client: &IrisClient, args: &DebugAttachArgs) -> Result
         .clone()
         .unwrap_or_else(|| client.settings().iris_namespace);
     let target = format!("PID:{}", args.pid);
+    // slot guard BEFORE connect — see slot_free's note: connecting a
+    // second agent would reset the live session's socket.
+    if !slot_free().await {
+        return Err(Error::Debug(
+            "a debug session is already active — call debug_stop first".to_string(),
+        ));
+    }
     let conn = DbgpConnection::connect(client, Duration::from_secs(30)).await?;
     let session = match create_session(conn, &target, &ns).await {
         Ok(s) => s,
