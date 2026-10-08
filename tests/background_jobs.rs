@@ -32,6 +32,18 @@ struct Mcp {
     next_id: u64,
     /// The `initialize` response — what the server advertised.
     init: Value,
+    /// Protocol version the server negotiated (initialize result).
+    version: String,
+    /// SEP-2575 per-request `_meta` injected into every `rpc` call when
+    /// the session uses the inline lifecycle (None = classic initialize
+    /// handshake). Tasks-capable `spawn` MUST use it: rmcp 3.4.1 can
+    /// never negotiate >= 2026-06-30 over initialize (no such const — it
+    /// falls back to 2025-11-25), and under that version SEP-2663 says
+    /// the extension key MUST be inert. The inline form (no handshake,
+    /// `io.modelcontextprotocol/protocolVersion: 2026-07-28` +
+    /// clientCapabilities per request) is the only spec-coherent tasks
+    /// path this SDK can serve today — verified live.
+    meta: Option<Value>,
     /// Server stderr, appended live by a drain thread (Prism-parity DEBUG
     /// banners land here under `RUST_LOG=debug`; a pipe nobody drains fills
     /// and deadlocks a chatty server).
@@ -39,19 +51,52 @@ struct Mcp {
 }
 
 impl Mcp {
-    /// Client that declares the SEP-2663 Tasks extension.
+    /// Tasks-capable client on the SEP-2575 inline lifecycle: NO
+    /// initialize handshake; every request carries protocolVersion
+    /// 2026-07-28 + the Tasks extension key in its `_meta`. That version
+    /// is >= our 2026-06-30 floor, so tasks are live (SEP-2663 canonical
+    /// row). Over stdio today the inline lifecycle is the ONLY way to
+    /// reach a >= 2026-06-30 session — rmcp 3.4.1 cannot negotiate a 2026
+    /// version via `initialize` (see docs in documentation/mcp.md).
     fn spawn() -> Self {
-        Self::spawn_with(serde_json::json!({
-            "extensions": {"io.modelcontextprotocol/tasks": {}}
-        }))
+        let mut m = Self::raw();
+        m.meta = Some(serde_json::json!({
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientInfo": {"name": "integration", "version": "0"},
+            "io.modelcontextprotocol/clientCapabilities": {
+                "extensions": {"io.modelcontextprotocol/tasks": {}}
+            }
+        }));
+        m.version = "2026-07-28".to_string();
+        m
     }
 
-    /// Client that does NOT declare Tasks (Rail-A path).
+    /// Client that does NOT declare Tasks (Rail-A path), classic handshake.
     fn spawn_plain() -> Self {
         Self::spawn_with(serde_json::json!({}))
     }
 
+    /// Handshake client declaring `capabilities` on initialize.
     fn spawn_with(capabilities: Value) -> Self {
+        let mut m = Self::raw();
+        m.init = m.rpc(
+            "initialize",
+            serde_json::json!({
+                "protocolVersion": "2026-06-30",
+                "clientInfo": {"name": "integration", "version": "0"},
+                "capabilities": capabilities
+            }),
+        );
+        m.notify("notifications/initialized", serde_json::json!({}));
+        m.version = m.init["result"]["protocolVersion"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        m
+    }
+
+    /// Spawn the server process with NO protocol traffic yet.
+    fn raw() -> Self {
         // locate the real binary: cargo sets CARGO_BIN_EXE_rism for tests
         let exe = env!("CARGO_BIN_EXE_rism");
         let mut child = Command::new(exe)
@@ -84,24 +129,16 @@ impl Mcp {
                 }
             });
         }
-        let mut m = Self {
+        Self {
             child,
             stdin,
             stdout,
             next_id: 0,
             init: Value::Null,
+            version: String::new(),
+            meta: None,
             stderr,
-        };
-        m.init = m.rpc(
-            "initialize",
-            serde_json::json!({
-                "protocolVersion": "2025-06-18",
-                "clientInfo": {"name": "integration", "version": "0"},
-                "capabilities": capabilities
-            }),
-        );
-        m.notify("notifications/initialized", serde_json::json!({}));
-        m
+        }
     }
 
     fn send(&mut self, msg: Value) {
@@ -118,6 +155,14 @@ impl Mcp {
     fn rpc(&mut self, method: &str, params: Value) -> Value {
         self.next_id += 1;
         let id = self.next_id;
+        let params = match &self.meta {
+            Some(meta) if method != "initialize" => {
+                let mut p = params.clone();
+                p["_meta"] = meta.clone();
+                p
+            }
+            _ => params,
+        };
         self.send(serde_json::json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}));
         for _ in 0..64 {
             let mut line = String::new();
@@ -338,15 +383,18 @@ fn annotations_and_task_surface_on_the_wire() {
         ec["inputSchema"]["properties"]["background"].is_object(),
         "background param must be in the schema"
     );
-    // Tasks extension advertised on initialize (checked by every spawn())
+    // (advertise check lives in server_advertises_tasks_extension)
 }
 
 #[test]
 #[ignore = "requires live IRIS (RISM_IRIS_BASE_URL + config.toml)"]
 fn server_advertises_tasks_extension() {
-    // A fresh handshake (spawn already did it) is the proof: the server's
-    // initialize response must carry the extension + correct serverInfo.
-    let m = Mcp::spawn();
+    // A fresh HANDSHAKE is the proof: the initialize response must carry
+    // the extension + correct serverInfo. (The inline client never
+    // initializes, so use the handshake builder here.)
+    let m = Mcp::spawn_with(
+        serde_json::json!({"extensions": {"io.modelcontextprotocol/tasks": {}}}),
+    );
     let caps = &m.init["result"]["capabilities"];
     assert!(
         caps["extensions"]["io.modelcontextprotocol/tasks"].is_object(),
@@ -512,11 +560,21 @@ fn rail_a_and_bad_task_ids_are_errors_not_crashes() {
     let msg = m.rpc("tasks/cancel", serde_json::json!({"taskId": "bogus"}));
     assert!(msg.get("error").is_some());
     // tasks/update: never offers input — honest refusal, not a hang.
+    // Params MUST use the spec shape (inputResponses); a stale-shape
+    // payload would fail at deserialization and make this assert pass for
+    // the wrong reason.
     let msg = m.rpc(
         "tasks/update",
-        serde_json::json!({"taskId": "bogus", "requestId": "r", "input": {}}),
+        serde_json::json!({"taskId": "bogus", "inputResponses": {}}),
     );
     assert!(msg.get("error").is_some(), "update_task must refuse: {msg}");
+    assert!(
+        msg["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("never request input"),
+        "refusal must be the honest handler answer, not a parse error: {msg}"
+    );
     // unknown field rejected (deny_unknown_fields)
     let (is_err, _, _) = m.call(
         "execute_command",
@@ -533,6 +591,81 @@ fn rail_a_and_bad_task_ids_are_errors_not_crashes() {
     );
     assert!(!is_err, "door died: {p}");
     assert!(p["output"].as_str().unwrap().contains("healthy"));
+}
+
+#[test]
+#[ignore = "requires live IRIS (RISM_IRIS_BASE_URL + config.toml)"]
+fn handshake_declared_extension_key_is_inert() {
+    // SEP-2663 compat table: under protocol 2025-11-25 the
+    // `io.modelcontextprotocol/tasks` extension is NOT defined — a
+    // declaring client MUST be treated as non-declaring (that version has
+    // a different, not-wire-compatible tasks spec). rmcp 3.4.1 validates
+    // ONLY the capability (`supports_tasks()`), never the version, so the
+    // version clause is Rism's own gate (`tasks_supported`).
+    //
+    // This is the DEFAULT handshake shape: rmcp 3.4.1 cannot negotiate
+    // 2026-06-30 over initialize (its V_LATEST is 2025-11-25 — probed
+    // live). A handshake client declaring the key therefore exercises the
+    // inert path, and the modern path is covered by every inline test
+    // (spawn() = SEP-2575 per-request `_meta`, 2026-07-28).
+    let mut m = Mcp::spawn_with(
+        serde_json::json!({"extensions": {"io.modelcontextprotocol/tasks": {}}}),
+    );
+    // If rmcp ever learns to echo 2026-06-30+ here, this test's premise
+    // (pre-extension session) dies — fail loudly instead of vacuously.
+    assert!(
+        m.version.as_str() < "2026-06-30",
+        "negotiated {} is already extension-era: gate would be vacuous here — \
+         move these assertions to the inline client",
+        m.version
+    );
+    let (is_err, _, text) = m.call(
+        "execute_command",
+        serde_json::json!({"command": "write 1", "background": true}),
+    );
+    assert!(
+        is_err && text.contains("Tasks extension"),
+        "declared-but-legacy client must get the Rail-A refusal, not a task \
+         handle (would leak a CreateTaskResult its version cannot define): \
+         err={is_err} text={text}"
+    );
+    // The refusal must name the version requirement (honest guidance).
+    assert!(
+        text.contains("2026-06-30"),
+        "Rail-A text must state the protocol floor: {text}"
+    );
+    // tasks/* likewise rejected — never a DetailedTask.
+    let msg = m.rpc("tasks/get", serde_json::json!({"taskId": "nope"}));
+    assert!(msg.get("error").is_some(), "legacy session must reject tasks/get: {msg}");
+    assert_eq!(msg["error"]["code"], serde_json::json!(-32021), "-32021 expected");
+    // sync door still fully healthy on the legacy session
+    let (is_err, p, _) = m.call(
+        "execute_command",
+        serde_json::json!({"command": "write 7", "timeout_secs": 30}),
+    );
+    assert!(!is_err, "legacy session sync door broke: {p}");
+    assert!(p["output"].as_str().unwrap().contains('7'));
+}
+
+#[test]
+#[ignore = "requires live IRIS (RISM_IRIS_BASE_URL + config.toml)"]
+fn inline_task_ids_are_high_entropy() {
+    // SEP-2663 Security MUST: ids unguessable. Two live tasks in one
+    // session: suffixes differ and neither is a counter step (the old
+    // SEQ bug: id N+1 was trivially predictable from id N).
+    let mut m = Mcp::spawn();
+    let a = m.task_start(serde_json::json!({"command": "write 1", "timeout_secs": 30}));
+    let b = m.task_start(serde_json::json!({"command": "write 2", "timeout_secs": 30}));
+    let (ia, ib) = (Mcp::task_id(&a), Mcp::task_id(&b));
+    assert_ne!(ia, ib);
+    let sa = ia.rsplit('-').next().unwrap();
+    let sb = ib.rsplit('-').next().unwrap();
+    assert_eq!(sa.len(), 16, "64-bit hex suffix: {ia}");
+    assert_ne!(sa, sb);
+    for id in [&ia, &ib] {
+        let t = m.wait_terminal(id, Duration::from_secs(15));
+        assert_eq!(t["status"], "completed", "task {id}");
+    }
 }
 
 #[test]
