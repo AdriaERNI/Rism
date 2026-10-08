@@ -55,7 +55,8 @@ pub struct RunTestsArgs {
     pub test_method: Option<String>,
     /// Target namespace (defaults to configured namespace)
     pub namespace: Option<String>,
-    /// Timeout seconds for the whole run (default: configured timeout)
+    /// Timeout seconds for the whole run (default: configured timeout;
+    /// clamped to 7 days)
     pub timeout_secs: Option<u64>,
 }
 
@@ -114,10 +115,10 @@ pub async fn run_tests(client: &IrisClient, args: &RunTestsArgs) -> Result<RunTe
         }
     }
     let ns = ns_of(client, args.namespace.as_ref());
-    let timeout = Duration::from_secs(
+    let timeout = Duration::from_secs(crate::tools::clamp_timeout_secs(
         args.timeout_secs
             .unwrap_or(client.settings().timeout_secs.max(120)),
-    );
+    ));
     let method = args.test_method.clone().unwrap_or_default();
 
     // One WS session: prep ^UnitTestRoot (prerequisite verified live —

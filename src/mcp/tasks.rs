@@ -135,8 +135,12 @@ fn sync_result(info: &JobInfo) -> CommandResult {
         command: info.command.clone(),
         output: info.output.clone(),
         prompt: info.prompt.clone().unwrap_or_default(),
-        output_truncated: info.output_chars > info.output.len(),
-        output_omitted_chars: info.output_chars.saturating_sub(info.output.len()),
+        // byte-vs-byte: `output_bytes` is the total streamed; `output` is
+        // the retained tail (bytes). The wire key stays `output_omitted_chars`
+        // (frozen name); on this defensive reconstruct branch the count is
+        // bytes-accurate (issue #16 F2: was chars-vs-bytes nonsense).
+        output_truncated: info.output_bytes > info.output.len(),
+        output_omitted_chars: info.output_bytes.saturating_sub(info.output.len()),
     }
 }
 
@@ -153,11 +157,11 @@ fn payload_from(result: &CommandResult) -> TaskPayload {
 
 fn status_message(info: &JobInfo) -> String {
     if info.running {
-        format!("streamed {} bytes", info.output_chars)
+        format!("streamed {} bytes", info.output_bytes)
     } else if info.interrupted {
         format!(
             "cancelled (interrupted), streamed {} bytes",
-            info.output_chars
+            info.output_bytes
         )
     } else if info.error.is_some() {
         "failed".to_string()
@@ -202,7 +206,7 @@ mod tests {
             interrupted,
             error: error.map(str::to_string),
             prompt: if running { None } else { Some("USER>".into()) },
-            output_chars: 42,
+            output_bytes: 42,
             output: "tick".into(),
             final_result: if running {
                 None

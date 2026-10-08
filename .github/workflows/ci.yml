@@ -136,6 +136,13 @@ jobs:
         timeout-minutes: 5
         run: cargo test --test background_jobs -- --ignored
 
+      # 25-tool contract matrix + issue-#16 fix proofs over the same
+      # live IRIS. #[ignore]d like background_jobs; spawns its own
+      # `rism mcp` stdio child per test.
+      - name: Live MCP tool matrix
+        timeout-minutes: 15
+        run: cargo test --test tool_matrix -- --ignored
+
   # Tagged builds: Linux + Windows (x64/i686/arm64) binaries + installer,
   # packaged by `release`.
   build:

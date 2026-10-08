@@ -57,8 +57,11 @@ Optional `max_rows`.
 
 ### `execute_command` — `command`*
 ObjectScript command in a terminal session over the WebSocket. Optional
-`timeout_secs`. Commands containing `read` are answered with an empty line
-(nothing is typing); Ctrl+C semantics do not apply — use `timeout_secs`.
+`timeout_secs` (clamped to 7 days — an oversized or absurd value never
+hangs; `0` means immediate timeout on this synchronous door, "use the
+default" on the background door). Commands containing `read` are answered
+with an empty line (nothing is typing); Ctrl+C semantics do not apply —
+use `timeout_secs`.
 
 #### Background execution (MCP Tasks)
 
@@ -87,8 +90,11 @@ answers immediately with a **task handle** (`resultType: "task"`, a
   `tasks/get` answers with a clean error. A running task ends at its
   `timeout_secs` wall-clock cap regardless — the background default is
   1 hour (higher than the sync default; a task is detached precisely
-  because it outlives request timeouts; an explicit `timeout_secs` is
-  used exactly as given, without the 1-hour floor). Up to 16 concurrent background
+  because it outlives request timeouts). An explicit `timeout_secs: 0`
+  means "use the default", not an instant timeout; any other explicit
+  value skips the 1-hour floor. All values — explicit or default — are
+  clamped to 7 days (`MAX_TIMEOUT_SECS`), so an absurd `timeout_secs`
+  can never hang the server (issue #16). Up to 16 concurrent background
   tasks; the 17th start is refused actionably.
 - `background=true` requires a client that declared the Tasks extension
   (`io.modelcontextprotocol/tasks`) for a protocol version that defines it
@@ -103,7 +109,8 @@ answers immediately with a **task handle** (`resultType: "task"`, a
 ## Unit tests
 
 ### `run_tests` — `test_class`*
-Via `%UnitTest.Manager`, no code uploaded. Optional `test_method`, `timeout_secs`.
+Via `%UnitTest.Manager`, no code uploaded. Optional `test_method`,
+`timeout_secs` (clamped to 7 days).
 
 ### `list_tests`
 Discover `%UnitTest` classes. `filter` is a **prefix** — `%` wildcards are rejected

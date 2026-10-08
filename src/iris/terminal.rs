@@ -189,13 +189,42 @@ impl TerminalSession {
         r
     }
 
+    /// `(retained_bytes, dropped_chars)` for one output frame against the
+    /// byte cap. Pure so the accounting is unit-testable without a server.
+    /// `retained` is BYTES on purpose (cap math; the truncation cut is
+    /// char-boundary-floored in [`bound_outcome`]); `dropped` counts CHARS
+    /// because it feeds the wire field `output_omitted_chars` ("chars
+    /// omitted") — issue #16 F2: summing `text.len()` there lied for
+    /// multibyte output.
+    fn account_frame(text: &str, streamed: usize, bound: usize) -> (bool, usize, usize) {
+        if bound == 0 || streamed < bound {
+            let take = if bound == 0 {
+                text.len()
+            } else {
+                bound - streamed
+            };
+            (true, text.len().min(take), 0)
+        } else {
+            (false, 0, text.chars().count())
+        }
+    }
+
     async fn run_with_inner<H: StreamHooks + ?Sized>(
         &mut self,
         command: &str,
         hooks: &mut H,
     ) -> Result<TerminalOutcome> {
         send(&mut self.ws, &json!({"type": "prompt", "input": command})).await?;
-        let deadline = tokio::time::Instant::now() + self.timeout;
+        // checked_add: an absurd timeout must NEVER overflow the deadline
+        // math (issue #16: `Instant + Duration` panic => the request hung
+        // without answering). Ingresses clamp to MAX_TIMEOUT_SECS, so this
+        // fallback is defense-in-depth for future callers; now + 7d cannot
+        // itself overflow.
+        let deadline = tokio::time::Instant::now()
+            .checked_add(self.timeout)
+            .unwrap_or_else(|| {
+                tokio::time::Instant::now() + Duration::from_secs(crate::tools::MAX_TIMEOUT_SECS)
+            });
         let mut lines: Vec<String> = Vec::new();
         let mut streamed = 0usize;
         let mut dropped_chars = 0usize;
@@ -208,17 +237,14 @@ impl TerminalSession {
                         // consuming frames (protocol sync) but neither emit
                         // nor RETAIN them — unbounded lines would defeat
                         // terminal_max_output_chars on chatty commands
-                        if self.bound == 0 || streamed < self.bound {
+                        let (emit, take, dropped) =
+                            Self::account_frame(&text, streamed, self.bound);
+                        if emit {
                             hooks.emit(&text)?;
-                            let take = if self.bound == 0 {
-                                text.len()
-                            } else {
-                                self.bound - streamed
-                            };
-                            streamed += text.len().min(take);
+                            streamed += take;
                             lines.push(text);
                         } else {
-                            dropped_chars += text.len();
+                            dropped_chars += dropped;
                         }
                     }
                     Frame::Prompt(p) => break p,
@@ -446,7 +472,13 @@ fn bound_outcome(lines: &[String], prompt: &str, bound: usize) -> TerminalOutcom
     let (output, truncated, omitted_chars) = if bound > 0 && joined.len() > bound {
         // floor to a char boundary: a multibyte char may straddle `bound`
         let cut = floor_char_boundary(&joined, bound);
-        (joined[..cut].to_string(), true, joined.len() - cut)
+        // chars beyond the cut, not bytes (issue #16 F2: the field feeding
+        // `output_omitted_chars` is documented "chars omitted")
+        (
+            joined[..cut].to_string(),
+            true,
+            joined[cut..].chars().count(),
+        )
     } else {
         (joined, false, 0)
     };
@@ -631,6 +663,23 @@ mod tests {
         let o = bound_outcome(&lines, "USER>", 3);
         assert!(o.truncated);
         assert_eq!(o.output, "é");
-        assert_eq!(o.omitted_chars, 4);
+        // 2 CHARS omitted (4 bytes) — issue #16 F2: this field is
+        // documented "chars omitted"; the old assertion pinned the byte lie.
+        assert_eq!(o.omitted_chars, 2);
+    }
+
+    #[test]
+    fn account_frame_counts_chars_dropped_bytes_retained() {
+        // under the cap: retain whole frames, byte cap math
+        assert_eq!(TerminalSession::account_frame("abcd", 0, 10), (true, 4, 0));
+        // partial fill: retained is capped to remaining budget
+        assert_eq!(TerminalSession::account_frame("abcd", 8, 10), (true, 2, 0));
+        // past the cap: multibyte drops count CHARS, not bytes (F2)
+        assert_eq!(TerminalSession::account_frame("éé", 10, 10), (false, 0, 2));
+        // bound 0 = unbounded: everything retained, nothing dropped
+        assert_eq!(
+            TerminalSession::account_frame("héllo", 999, 0),
+            (true, 6, 0)
+        );
     }
 }

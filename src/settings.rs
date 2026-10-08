@@ -130,6 +130,21 @@ impl Settings {
                 "0" | "false" | "off" | "no"
             );
         }
+        if let Ok(v) = std::env::var("RISM_TERMINAL_MAX_OUTPUT_CHARS") {
+            // unparseable values keep the config/default (same policy as
+            // RISM_IRIS_API_VERSION); lets contract tests pin truncation
+            // at a tiny bound instead of the 100k default
+            if let Some(n) = Self::parse_env_usize(&v) {
+                self.terminal_max_output_chars = n;
+            }
+        }
+    }
+
+    /// Trimmed positive-integer env value; `None` on garbage (keeps
+    /// config/default — `set_var` is unsafe under edition 2024, so tests
+    /// pin this pure form instead of the env itself).
+    fn parse_env_usize(v: &str) -> Option<usize> {
+        v.trim().parse::<usize>().ok()
     }
 
     /// Override the base URL (used by tests and by `--url`).
@@ -208,5 +223,14 @@ mod tests {
             ..Default::default()
         };
         assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn env_parse_terminal_max_output_chars() {
+        assert_eq!(Settings::parse_env_usize("64"), Some(64));
+        assert_eq!(Settings::parse_env_usize(" 64 "), Some(64));
+        assert_eq!(Settings::parse_env_usize("not-a-number"), None);
+        assert_eq!(Settings::parse_env_usize("-5"), None);
+        assert_eq!(Settings::parse_env_usize(""), None);
     }
 }

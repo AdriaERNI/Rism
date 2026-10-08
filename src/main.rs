@@ -144,7 +144,9 @@ async fn dispatch_repl(client: &IrisClient, cli: &Cli, timeout: Option<u64>) -> 
         .namespace
         .clone()
         .unwrap_or_else(|| client.settings().iris_namespace.clone());
-    let per_cmd = Duration::from_secs(timeout.unwrap_or(client.settings().timeout_secs));
+    let per_cmd = Duration::from_secs(rism::tools::clamp_timeout_secs(
+        timeout.unwrap_or(client.settings().timeout_secs),
+    ));
     let mut session = rism::iris::terminal::open(client, &ns, per_cmd).await?;
     let mut io: Box<dyn rism::tools::repl::ReplIo> =
         if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
