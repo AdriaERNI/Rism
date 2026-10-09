@@ -268,7 +268,20 @@ impl TerminalSession {
                     // landing at 99% of the command deadline must still
                     // interrupt (not time out mid-interrupt).
                     let settle = tokio::time::Instant::now() + Duration::from_secs(5);
-                    break self.await_prompt(settle).await?;
+                    // A cancel racing natural completion: the interrupt can
+                    // hit an already-exited child, and IRIS then answers
+                    // `ERROR #6704: Target has exited debugger` — or just
+                    // closes the socket — INSTEAD of <INTERRUPT>+prompt.
+                    // The child is gone either way (cancel achieved), so
+                    // settle noise must never flip the job to `failed`
+                    // (round-5 boundary sweep: 2/26+ rounds hit it; the
+                    // prompt value is cosmetic here — cancelled payloads
+                    // carry no result). Ok(prompt) when it settled clean.
+                    let prompt = match self.await_prompt(settle).await {
+                        Ok(p) => p,
+                        Err(_) => self.prompt.clone(),
+                    };
+                    break prompt;
                 }
             }
         };
@@ -388,12 +401,21 @@ impl TerminalSession {
         let settled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         loop {
             match self.next_or_cancel(deadline, settled.clone()).await? {
-                Next::Frame(msg) => match classify(&msg)? {
-                    Frame::Prompt(p) => return Ok(p),
-                    Frame::Read => {
+                Next::Frame(msg) => match classify(&msg) {
+                    Ok(Frame::Prompt(p)) => return Ok(p),
+                    Ok(Frame::Read) => {
                         send(&mut self.ws, &json!({"type": "read", "input": ""})).await?;
                     }
-                    Frame::Output(_) | Frame::Ignored => {}
+                    // An interrupt landing on an already-exited child —
+                    // `tasks/cancel` racing natural completion — answers
+                    // with an error frame (`ERROR #6704: Target has exited
+                    // debugger`) and then the prompt. Failing here made the
+                    // job land `failed` with the debugger's internal error
+                    // instead of `cancelled` (round-5 boundary-race probe,
+                    // 2/26 rounds); the child is gone either way, so skip
+                    // any other frame (output or error) and settle on the
+                    // prompt that follows.
+                    _ => {}
                 },
                 Next::Cancelled => unreachable!("flag is never set"),
             }
@@ -681,5 +703,49 @@ mod tests {
             TerminalSession::account_frame("héllo", 999, 0),
             (true, 6, 0)
         );
+    }
+
+    #[test]
+    fn joint_straddle_dropped_frames_and_join_account_in_one_pass() {
+        // Round-5 item 6, the JOINT case: `account_frame_*` and
+        // `bound_outcome_*` each pin one piece; no existing test ran a
+        // frame SEQUENCE through both at once (partial fill, frames past
+        // the cap dropped, and the join cut landing mid-multibyte — all
+        // in ONE payload). Composes the real primitives exactly as
+        // `run_with_inner` does. 4 frames × "АБВГДЕ\r\n" (8 chars/14 B)
+        // against bound 20:
+        let bound = 20;
+        let frames = ["АБВГДЕ\r\n"; 4];
+        let mut lines: Vec<String> = Vec::new();
+        let mut streamed = 0usize;
+        let mut dropped_chars = 0usize;
+        for f in frames {
+            let (emit, take, dropped) = TerminalSession::account_frame(f, streamed, bound);
+            if emit {
+                lines.push(f.to_string());
+                streamed += take;
+            } else {
+                dropped_chars += dropped;
+            }
+        }
+        let mut o = bound_outcome(&lines, "USER>", bound);
+        if dropped_chars > 0 {
+            o.truncated = true;
+            o.omitted_chars += dropped_chars;
+        }
+        assert!(o.truncated, "cap must trip");
+        // straddle: 20 bytes cuts inside frame 2's В → floored to 19
+        assert_eq!(o.output.len(), 19, "cut must floor to a char boundary");
+        assert_eq!(o.output.chars().count(), 11, "8 + join \\n + 2");
+        // honesty of the two units together: retained CHARS + omitted CHARS
+        // = emitted chars + join separators (32 + 1); dropped frames are
+        // chars (8+8) and the join-region cut adds 6.
+        assert_eq!(o.omitted_chars, 22, "cut chars 6 + dropped 16");
+        assert_eq!(
+            o.output.chars().count() + o.omitted_chars,
+            frames.iter().map(|f| f.chars().count()).sum::<usize>() + lines.len() - 1,
+            "the whole payload is accounted for, char-for-char"
+        );
+        assert!(o.output.starts_with("АБ"), "retained is a real prefix");
     }
 }

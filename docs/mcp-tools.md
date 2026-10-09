@@ -73,10 +73,11 @@ answers immediately with a **task handle** (`resultType: "task"`, a
 
 - **Poll** with `tasks/get` (`taskId`): status (`working` → `completed` /
   `cancelled` / `failed`) plus a `statusMessage` with the streamed byte
-  count while running. Finished output is served in the `result` of a
-  `completed` task — identical to what the synchronous call would have
-  returned (same terminal outcome object, so frame joins and truncation
-  markers match byte for byte).
+  count while running (`lastUpdatedAt` reflects state changes, not streamed
+  frames, so it stays at `createdAt` while a task works). Finished output
+  is served in the `result` of a `completed` task — identical to what the
+  synchronous call would have returned (same terminal outcome object, so
+  frame joins and truncation markers match byte for byte).
 - **Stop** with `tasks/cancel` (`taskId`): sends the terminal protocol's
   `interrupt` — a real server-side break: the ObjectScript child unwinds
   with `<INTERRUPT>` within milliseconds and the partial state stays as
@@ -87,7 +88,11 @@ answers immediately with a **task handle** (`resultType: "task"`, a
 - Finished tasks are retained **30 minutes from completion** (`ttlMs` is
   advertised from creation per SEP-2663, so the server may retain slightly
   longer than the advertised value); after that the id is expired and
-  `tasks/get` answers with a clean error. A running task ends at its
+  `tasks/get` answers with a clean error. Concretely: retention is measured
+  from completion, so a task that ran past the TTL window is retained
+  LONGER than `ttlMs` advertises — the server never discards a task earlier
+  than `createdAt + ttlMs` (the MUST half), and a running task is bounded
+  only by its own `timeout_secs` (≤ 7 days). A running task ends at its
   `timeout_secs` wall-clock cap regardless — the background default is
   1 hour (higher than the sync default; a task is detached precisely
   because it outlives request timeouts). An explicit `timeout_secs: 0`

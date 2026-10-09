@@ -158,13 +158,16 @@ fn payload_from(result: &CommandResult) -> TaskPayload {
 fn status_message(info: &JobInfo) -> String {
     if info.running {
         format!("streamed {} bytes", info.output_bytes)
+    } else if info.error.is_some() {
+        // same precedence as task_state (error before interrupted): the
+        // flags are mutually exclusive via finish, but the pair must never
+        // diverge (round-5 coherence pin both_flags_set_stays_coherent_failed)
+        "failed".to_string()
     } else if info.interrupted {
         format!(
             "cancelled (interrupted), streamed {} bytes",
             info.output_bytes
         )
-    } else if info.error.is_some() {
-        "failed".to_string()
     } else {
         "completed".to_string()
     }
@@ -274,7 +277,32 @@ mod tests {
         ] {
             let v = serde_json::to_value(detailed_task(&info)).unwrap();
             assert_eq!(v["status"], want, "wire status for {want}");
+            // Rism tasks NEVER request input (a background `read` is
+            // auto-answered), so the inputRequests field must not appear
+            // on any shape — the promise holds at the wire level (round 5).
+            assert!(
+                v.get("inputRequests").is_none(),
+                "inputRequests leaked on {want}: {v}"
+            );
         }
+    }
+
+    /// Round-5 precedence pin: `finish` makes the interrupted/error flags
+    /// mutually exclusive, but `task_state` checks `error` first while
+    /// `status_message` checks `interrupted` first. If a future change ever
+    /// lets both coexist, this catches the divergent pair (status "failed"
+    /// must agree with statusMessage "failed" — every error path answers
+    /// coherently).
+    #[test]
+    fn both_flags_set_stays_coherent_failed() {
+        let mut info = job(false, true, Some("boom"));
+        info.interrupted = true;
+        let (status, payload) = task_state(&info);
+        assert_eq!(status, TaskStatus::Failed);
+        assert!(matches!(payload, TaskPayload::Failed { .. }));
+        let v = serde_json::to_value(detailed_task(&info)).unwrap();
+        assert_eq!(v["status"], "failed");
+        assert_eq!(v["statusMessage"], "failed", "message agrees with status");
     }
 
     #[test]

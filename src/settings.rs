@@ -232,5 +232,14 @@ mod tests {
         assert_eq!(Settings::parse_env_usize("not-a-number"), None);
         assert_eq!(Settings::parse_env_usize("-5"), None);
         assert_eq!(Settings::parse_env_usize(""), None);
+        // round-5 edges: absurd overflow, exponent syntax, and the
+        // documented "0 = unlimited" all stay panic-free (None/Some, never
+        // a loader abort); the live door with these values was probed in
+        // round 5 — the server answers tools/list on every one of them.
+        assert_eq!(Settings::parse_env_usize("99999999999999999999999"), None);
+        assert_eq!(Settings::parse_env_usize("1e3"), None);
+        assert_eq!(Settings::parse_env_usize(" 100000 "), Some(100_000));
+        assert_eq!(Settings::parse_env_usize("0"), Some(0));
+        assert_eq!(Settings::parse_env_usize(" \t7\n"), Some(7));
     }
 }
