@@ -570,14 +570,14 @@ mod tests {
     fn gc_keeps_running_and_fresh_drops_stale() {
         let _s = serial();
         let mut reg = Registry::new();
-        let mk = |id: &str, running: bool, finished: Option<u64>| {
+        let mk = |id: &str, running: bool, finished: Option<u64>, started: u64| {
             (
                 id.to_string(),
                 Arc::new(JobSlot {
                     meta: Mutex::new(JobMeta {
                         command: String::new(),
                         namespace: "USER".into(),
-                        started_unix: 0,
+                        started_unix: started,
                         finished_unix: finished,
                         running,
                         interrupted: false,
@@ -591,13 +591,71 @@ mod tests {
             )
         };
         reg.extend([
-            mk("a", true, None),
-            mk("b", false, Some(unix_now())),
-            mk("c", false, Some(unix_now().saturating_sub(40 * 60))),
+            mk("a", true, None, 0),
+            mk("b", false, Some(unix_now()), 0),
+            mk("c", false, Some(unix_now().saturating_sub(40 * 60)), 0),
         ]);
         gc(&mut reg);
         assert!(reg.contains_key("a") && reg.contains_key("b"));
         assert!(!reg.contains_key("c"), "stale finished job must be dropped");
+    }
+
+    /// Round-5 pin for the retention clock's two halves (the `ttlMs`
+    /// divergence is documented in docs/mcp-tools.md, not code):
+    /// - MUST half (SEP-2663): a task is retrievable at least until
+    ///   `createdAt + ttlMs`. Slot `lower` finished 29 min ago and started
+    ///   29 min + 1 s ago: BOTH clocks say keep, but the assert guards the
+    ///   creation-time floor against a future gc that forgets running-
+    ///   length jobs (a `started`-older-than-retention drop here would be
+    ///   the spec-MUST breach of early expiry).
+    /// - Upper half (documented divergence): retention is measured from
+    ///   FINISH — slot `late` started 31 min ago, finished 1 s ago: an
+    ///   exact-advertise gc would drop it; the shipped contract keeps it.
+    /// - The long-running half: `runner` is 31 min past creation and still
+    ///   running — gc never orphans it (bounded by its own timeout).
+    #[test]
+    fn gc_retention_clock_pins_both_halves() {
+        let _s = serial();
+        let mut reg = Registry::new();
+        let now = unix_now();
+        let mk = |id: &str, running: bool, started: u64, finished: Option<u64>| {
+            (
+                id.to_string(),
+                Arc::new(JobSlot {
+                    meta: Mutex::new(JobMeta {
+                        command: String::new(),
+                        namespace: "USER".into(),
+                        started_unix: started,
+                        finished_unix: finished,
+                        running,
+                        interrupted: false,
+                        error: None,
+                        prompt: None,
+                        final_result: None,
+                    }),
+                    buf: SharedBuf::new(),
+                    cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                }),
+            )
+        };
+        reg.extend([
+            mk("lower", false, now - 29 * 60, Some(now - 29 * 60 + 1)),
+            mk("late", false, now - 31 * 60, Some(now - 1)),
+            mk("runner", true, now - 31 * 60, None),
+        ]);
+        gc(&mut reg);
+        assert!(
+            reg.contains_key("lower"),
+            "createdAt+ttlMs lower bound must never expire early"
+        );
+        assert!(
+            reg.contains_key("late"),
+            "retention is finish-based by documented contract: late must survive"
+        );
+        assert!(
+            reg.contains_key("runner"),
+            "a running task past the advertised TTL is never orphaned"
+        );
     }
 
     #[test]

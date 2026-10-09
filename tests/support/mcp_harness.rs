@@ -14,6 +14,7 @@
     clippy::needless_pass_by_value
 )]
 
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -47,6 +48,12 @@ pub struct Mcp {
     /// banners land here under `RUST_LOG=debug`; a pipe nobody drains fills
     /// and deadlocks a chatty server).
     stderr: Arc<Mutex<Vec<u8>>>,
+    /// Responses that arrived while a *different* id was awaited (rmcp 3.4.1
+    /// answers concurrent requests out of order). `rpc` parks them here and
+    /// checks it first, so a pipelined burst never loses an id — the
+    /// race-boundary tests depend on this (skip-loops silently drop late
+    /// siblings of an already-matched id).
+    pending: HashMap<u64, Value>,
 }
 
 impl Mcp {
@@ -153,21 +160,14 @@ impl Mcp {
             version: String::new(),
             meta: None,
             stderr,
+            pending: HashMap::new(),
         }
     }
 
-    pub fn send(&mut self, msg: Value) {
-        writeln!(self.stdin, "{msg}").unwrap();
-        self.stdin.flush().unwrap();
-    }
-
-    pub fn notify(&mut self, method: &str, params: Value) {
-        self.send(serde_json::json!({"jsonrpc":"2.0","method":method,"params":params}));
-    }
-
-    /// One request; returns the full response message of the matching id,
-    /// skipping interleaved responses (rmcp may answer out of order).
-    pub fn rpc(&mut self, method: &str, params: Value) -> Value {
+    /// Send a request WITHOUT waiting for its response — the caller reads
+    /// it later with [`rpc_take`] (concurrent/race probes that interleave
+    /// ids by hand).
+    pub fn send_request(&mut self, method: &str, params: Value) -> u64 {
         self.next_id += 1;
         let id = self.next_id;
         let params = match &self.meta {
@@ -179,15 +179,69 @@ impl Mcp {
             _ => params,
         };
         self.send(serde_json::json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}));
+        id
+    }
+
+    /// Read frames (parking any other ids' responses) until the response
+    /// for `id` arrives or the budget runs out. `None` = silence, which is
+    /// itself a contract violation the caller asserts on.
+    pub fn rpc_take(&mut self, id: u64, budget: Duration) -> Option<Value> {
+        let t0 = Instant::now();
+        while t0.elapsed() < budget {
+            if let Some(msg) = self.pending.remove(&id) {
+                return Some(msg);
+            }
+            let mut line = String::new();
+            match self.stdout.read_line(&mut line) {
+                Ok(0) | Err(_) => return None,
+                Ok(_) => {}
+            }
+            let Ok(msg) = serde_json::from_str::<Value>(line.trim()) else {
+                continue;
+            };
+            match msg.get("id").and_then(Value::as_u64) {
+                Some(got) if got == id => return Some(msg),
+                Some(other) => {
+                    self.pending.insert(other, msg);
+                }
+                None => {} // notification (e.g. progress): not ours to park
+            }
+        }
+        self.pending.remove(&id)
+    }
+
+    pub fn send(&mut self, msg: Value) {
+        writeln!(self.stdin, "{msg}").unwrap();
+        self.stdin.flush().unwrap();
+    }
+
+    pub fn notify(&mut self, method: &str, params: Value) {
+        self.send(serde_json::json!({"jsonrpc":"2.0","method":method,"params":params}));
+    }
+
+    /// One request; returns the full response message of the matching id.
+    /// Checks the `pending` park-lot first and PARKS interleaved responses
+    /// instead of skipping-and-dropping them (rmcp may answer out of order;
+    /// a dropped sibling of a pipelined burst used to strand a concurrent
+    /// probe).
+    pub fn rpc(&mut self, method: &str, params: Value) -> Value {
+        let id = self.send_request(method, params);
         for _ in 0..64 {
+            if let Some(msg) = self.pending.remove(&id) {
+                return msg;
+            }
             let mut line = String::new();
             let read = self.stdout.read_line(&mut line).unwrap();
             assert!(read != 0, "mcp stdout closed");
             let Ok(msg) = serde_json::from_str::<Value>(line.trim()) else {
                 continue;
             };
-            if msg.get("id").and_then(Value::as_u64) == Some(id) {
-                return msg;
+            match msg.get("id").and_then(Value::as_u64) {
+                Some(got) if got == id => return msg,
+                Some(other) => {
+                    self.pending.insert(other, msg);
+                }
+                None => {}
             }
         }
         panic!("no response for id {id}")
@@ -214,6 +268,67 @@ impl Mcp {
             .to_string();
         let parsed = serde_json::from_str::<Value>(&text).unwrap_or(Value::Null);
         (is_err, parsed, text)
+    }
+
+    /// `tools/call` on a health-probe payload, retried against the
+    /// suite-wide launch storm: 17 parallel live tests hammer the shared
+    /// IRIS child-process slots and a first attempt can answer a
+    /// transient #6713 "Start target failed" — which says nothing about
+    /// the door-under-test. Eventual success is the honest contract
+    /// (same class `probe_alive` tolerates in the matrix); still failing
+    /// after 10 tries IS a regression and panics.
+    pub fn call_survives_storm(&mut self, tool: &str, args: Value) -> Value {
+        let mut last = String::new();
+        for _ in 0..10 {
+            let (is_err, p, text) = self.call(tool, args.clone());
+            if !is_err {
+                return p;
+            }
+            last = text;
+            std::thread::sleep(Duration::from_millis(1500));
+        }
+        panic!("sync door never came back: {last}");
+    }
+
+    /// `execute_command(background=true)` via [`task_start`], retried until
+    /// the task actually RUNS. Under the suite-wide launch storm IRIS can
+    /// refuse the child debugger session (#6713) — and that lands as
+    /// `failed` up to ~3 s AFTER the handle (the open timeout surfaces it,
+    /// not the spawn), so a single early poll false-positives. Poll the
+    /// first 4 s: `failed` with #6713 → retry the whole start; any other
+    /// state (working/completed/cancelled, or a non-storm failure panics
+    /// unless #6713) means the task got off the ground. The storm is not
+    /// the contract these lifecycle tests pin. Returns the live task id.
+    pub fn task_start_live(&mut self, args: Value) -> String {
+        for attempt in 0..6 {
+            let res = self.task_start(args.clone());
+            let id = Mcp::task_id(&res);
+            let t0 = Instant::now();
+            loop {
+                let t = self.task(&id);
+                let st = t["status"].as_str().unwrap_or_default();
+                if st == "failed"
+                    && t["error"]["message"]
+                        .as_str()
+                        .is_some_and(|m| m.contains("#6713"))
+                {
+                    if t0.elapsed() < Duration::from_secs(4) || attempt < 5 {
+                        break; // storm transient — restart
+                    }
+                    panic!("task {id} still #6713 after 6 launches: {t}");
+                }
+                assert!(
+                    st != "failed",
+                    "task {id} failed for a NON-storm reason: {t}"
+                );
+                if st != "working" || t0.elapsed() >= Duration::from_secs(4) {
+                    return id; // running (or already done) — launched clean
+                }
+                std::thread::sleep(Duration::from_millis(400));
+            }
+            std::thread::sleep(Duration::from_millis(1200));
+        }
+        panic!("task never got off the ground under the launch storm");
     }
 
     /// `execute_command(background=true)` as a Tasks client: must answer

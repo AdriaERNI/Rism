@@ -1472,3 +1472,146 @@ fn surface_is_the_25_tools_the_matrix_covers() {
     }
     c.finish();
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// 15. F4 (round 5) — non-integer `timeout_secs` ANSWERS on both doors
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+#[ignore = "requires live IRIS (RISM_IRIS_BASE_URL + config.toml)"]
+fn f4_timeout_type_garbage_answers_both_doors() {
+    // Every model-triggerable timeout shape must ANSWER — never a panic,
+    // never silence — on BOTH channels. The channel asymmetry is by design
+    // and spec-legal: the SYNC door routes through the tool router, which
+    // converts an argument-deserialization failure into a tool-level
+    // isError "failed to deserialize parameters"; the BACKGROUND door
+    // parses arguments itself before task creation, so a bad value is a
+    // JSON-RPC -32602 invalid_params. `null` = absent (Option<u64>) = a
+    // normal run. Do NOT "unify" the channels.
+    let mut m = Mcp::spawn();
+    let mut c = Case::new();
+    for bad in [json!(1.5), json!("30"), json!(true), json!(-1), json!(1e30)] {
+        let msg = m.rpc(
+            "tools/call",
+            json!({"name": "execute_command",
+                   "arguments": {"command": "write 1", "timeout_secs": bad}}),
+        );
+        c.check(
+            msg.get("result").is_some() && msg["result"]["isError"] == json!(true),
+            || format!("sync door must answer tool-level error for {bad}: {msg}"),
+        );
+        c.check(
+            msg["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("deserialize"),
+            || format!("sync door error must name the deserialization: {msg}"),
+        );
+        let msg = m.rpc(
+            "tools/call",
+            json!({"name": "execute_command",
+                   "arguments": {"command": "write 1", "timeout_secs": bad, "background": true}}),
+        );
+        c.check(msg["error"]["code"] == json!(-32602), || {
+            format!("background door must answer -32602 for {bad}: {msg}")
+        });
+    }
+    // null = absent: a normal run on both doors (>=2 polls on the task one).
+    let msg = m.rpc(
+        "tools/call",
+        json!({"name": "execute_command",
+               "arguments": {"command": "write \"f4-null\",!", "timeout_secs": null}}),
+    );
+    c.check(
+        msg["result"]["isError"] != json!(true)
+            && msg["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("f4-null"),
+        || format!("null timeout must run normally: {msg}"),
+    );
+    let handle = m.task_start(json!({
+        "command": "for i=1:1:2 { write \"f4-bgnull\",i,!  h .1 }",
+        "timeout_secs": null
+    }));
+    let id = Mcp::task_id(&handle);
+    let done = m.wait_terminal(&id, Duration::from_secs(30));
+    c.check(done["status"] == json!("completed"), || {
+        format!("null-timeout task must complete: {done}")
+    });
+    probe_alive(&mut c, &mut m, "f4-still-healthy");
+    c.finish();
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 17. Round-5 item 6 (refactorer) — the JOINT straddle on both doors:
+//     mid-multibyte cap cut AND whole frames dropped past the cap in
+//     ONE payload. The F2 test does the single-frame straddle; the
+//     account_frame/bound_outcome units do the pieces separately; this
+//     is the case where BOTH accounting paths run at once.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+#[ignore = "requires live IRIS (RISM_IRIS_BASE_URL + config.toml)"]
+fn joint_multibyte_straddle_holds_on_both_doors() {
+    // 4 frames of 12 Cyrillic chars + CRLF (14 chars / 26 B each) against
+    // a 50-B cap (raw stdio probe 2026-10-09, both doors): f1 fully
+    // emitted, f2 pushed whole but the join cut floors INSIDE a Cyrillic
+    // char (retained 26 chars / 49 B — one byte BELOW the cap), f3+f4 are
+    // dropped (28 CHARS). omitted = 3 cut chars + 28 dropped = 31 — a
+    // byte-summed drop would say 56+3; the F2-style no-drop shape would
+    // say 88; single-frame math says none of these. Task door in the
+    // SAME bound must answer byte-equal (final_result IS the sync path).
+    let cmd = "for i=1:1:4 { set s=\"\" for j=1:1:6 { set s=s_$c(1040,1041) } write s,! }";
+    let mut m = Mcp::spawn_with_env(&[("RISM_TERMINAL_MAX_OUTPUT_CHARS", "50")]);
+    let mut c = Case::new();
+    let r = c.ok(
+        &mut m,
+        "execute_command",
+        json!({"command": cmd, "timeout_secs": 60}),
+    );
+    let out = r["output"].as_str().unwrap_or_default();
+    c.check(r["output_truncated"] == json!(true), || {
+        format!("50-byte cap over 4 frames must trip: {r}")
+    });
+    c.check(out.chars().count() == 26 && out.len() == 49, || {
+        format!(
+            "joint straddle retains 26 chars / 49 bytes: got {} chars {} bytes",
+            out.chars().count(),
+            out.len()
+        )
+    });
+    c.check(r["output_omitted_chars"] == json!(31), || {
+        format!(
+            "omitted must be 3 cut CHARS + 28 dropped CHARS: {}",
+            r["output_omitted_chars"]
+        )
+    });
+    c.check(
+        u64::try_from(out.chars().count()).unwrap_or(0)
+            + r["output_omitted_chars"].as_u64().unwrap_or(0)
+            == 57,
+        || "retained + omitted must account the payload char-for-char".to_string(),
+    );
+    // The task door in a fresh server with the SAME bound: byte-equal
+    // result, so the equivalence claim now covers straddle+drops.
+    drop(m);
+    let mut m = Mcp::spawn_with_env(&[("RISM_TERMINAL_MAX_OUTPUT_CHARS", "50")]);
+    let handle = m.task_start(json!({"command": cmd, "timeout_secs": 60}));
+    let id = Mcp::task_id(&handle);
+    let done = m.wait_terminal(&id, Duration::from_secs(30));
+    c.check(done["status"] == json!("completed"), || {
+        format!("a truncated task still completes: {done}")
+    });
+    let (is_err, _, sync_text) = m.call(
+        "execute_command",
+        json!({"command": cmd, "timeout_secs": 60}),
+    );
+    c.check(!is_err, || "sync replay failed".to_string());
+    c.check(
+        done["result"]["content"][0]["text"] == json!(sync_text),
+        || "task final_result must equal the sync payload on the joint straddle".to_string(),
+    );
+    probe_alive(&mut c, &mut m, "f5-joint-healthy");
+    c.finish();
+}
