@@ -49,8 +49,15 @@ fn aliases_parse_to_http_without_binding() {
 fn stdio_door_with_net_flags_warns_and_serves_stdio() {
     // Warning on stderr, stdio door underneath: one initialize line must
     // still get a JSON-RPC answer on stdout, and NO port was opened.
+    // Ephemeral-port discovery (P-05a): bind :0, read the number, DROP the
+    // listener — a foreign squatter can never sit on the probed port.
+    let free_port = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").expect("probe port bind");
+        l.local_addr().expect("addr").port()
+    };
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_rism"))
-        .args(["mcp", "--transport", "stdio", "--port", "39999"])
+        .args(["mcp", "--transport", "stdio", "--port"])
+        .arg(free_port.to_string())
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -75,10 +82,10 @@ fn stdio_door_with_net_flags_warns_and_serves_stdio() {
         stdout.contains("\"jsonrpc\"") && stdout.contains("protocolVersion"),
         "stdio answered: {stdout}"
     );
-    // Nothing ever listened on 39999.
+    // Nothing ever listened on the probed port.
     assert!(
         std::net::TcpStream::connect_timeout(
-            &"127.0.0.1:39999".parse().expect("addr"),
+            &std::net::SocketAddr::from(([127, 0, 0, 1], free_port)),
             std::time::Duration::from_millis(300)
         )
         .is_err(),
@@ -124,4 +131,71 @@ fn non_loopback_bind_without_optout_refuses() {
             predicate::str::contains("--allow-all-interfaces")
                 .and(predicate::str::contains("NO authentication")),
         );
+}
+
+#[test]
+fn named_loopback_host_binds_without_optout() {
+    // F-02: /etc/hosts loopback names must pass the async bind-policy gate
+    // (the old dead branch refused them, pushing users to
+    // --allow-all-interfaces = Host-guard off). Guarded: skip if this box
+    // has no ip6-localhost entry.
+    if std::net::ToSocketAddrs::to_socket_addrs(&("ip6-localhost", 0u16)).is_err() {
+        return;
+    }
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_rism"))
+        .args([
+            "mcp",
+            "--transport",
+            "http",
+            "--host",
+            "ip6-localhost",
+            "--port",
+            "0",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    // stderr drained on a thread (the pipe-nobody-reads lesson from
+    // http_door.rs); the ready line proves gate-pass + actual bind.
+    let sink = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    {
+        let sink = sink.clone();
+        let mut reader = child.stderr.take().expect("stderr piped");
+        std::thread::spawn(move || {
+            let mut chunk = [0u8; 4096];
+            loop {
+                match std::io::Read::read(&mut reader, &mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => sink
+                        .lock()
+                        .expect("lock")
+                        .push_str(&String::from_utf8_lossy(&chunk[..n])),
+                }
+            }
+        });
+    }
+    let start = std::time::Instant::now();
+    let listening = loop {
+        if sink.lock().expect("lock").contains("listening on http://") {
+            break true;
+        }
+        if start.elapsed() > std::time::Duration::from_secs(20) {
+            break false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    };
+    // Kill by PID — this test's own child, nothing else.
+    let _ = child.kill();
+    let _ = child.wait();
+    let text = sink.lock().expect("lock").clone();
+    assert!(
+        listening,
+        "ip6-localhost must pass the bind gate and reach the ready line; stderr was: {text}"
+    );
+    assert!(
+        !text.contains("--allow-all-interfaces"),
+        "a loopback name must never be told to opt out: {text}"
+    );
 }

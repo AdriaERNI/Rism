@@ -9,8 +9,9 @@ use std::path::PathBuf;
 use serde::Deserialize;
 
 /// Which MCP door `rism mcp` serves. The CLI flag, `RISM_MCP_TRANSPORT`, and
-/// the config value all resolve through one alias map (Prism parity:
-/// `http` = streamable-HTTP; both `streamable-http`/`streamable_http`
+/// the config value all resolve through one alias map (Prism-compatible
+/// aliases, minus the deprecated `sse`, which is rejected rather than
+/// mapped: `http` = streamable-HTTP; both `streamable-http`/`streamable_http`
 /// spellings are accepted).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum McpTransport {

@@ -169,7 +169,8 @@ ignored. Precedence: CLI flag > env > `config.toml` (`mcp_transport`,
     `rism mcp --transport http` has **no authentication**: every process that
     can reach the bound address can drive all 25 tools, including `run_shell`,
     file tools, and the debugger. Bind loopback only unless you fully own the
-    network boundary.
+    network boundary. Origin is validated when present (RFC 6454 match on the
+    door's own origin); native clients may omit the header.
 
 ```bash
 rism mcp                                            # stdio (default, unchanged)

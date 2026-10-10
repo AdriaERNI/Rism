@@ -4,7 +4,7 @@
 //!
 //! NOTE: this module is part of the lib crate — use `crate::`, never `rism::`.
 
-use std::net::{IpAddr, ToSocketAddrs};
+use std::net::IpAddr;
 use std::sync::Arc;
 
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
@@ -39,28 +39,41 @@ impl Default for HttpServerConfig {
 
 /// True when `host` resolves only to loopback addresses (bind-policy check;
 /// an unresolvable host is NOT loopback — the bind error will name it).
-#[must_use]
-pub fn is_loopback_host(host: &str) -> bool {
+pub async fn is_loopback_host(host: &str) -> bool {
     if host == "localhost" {
         return true;
     }
-    match host.parse::<IpAddr>() {
-        Ok(ip) => ip.is_loopback(),
-        // Unresolvable host is NOT loopback (refused; the bind error names it).
-        Err(_) => host
-            .to_socket_addrs()
-            .is_ok_and(|mut addrs| !addrs.any(|a| !a.ip().is_loopback())),
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return ip.is_loopback();
     }
+    // Resolve the name ASYNC and judge the ANSWERS: the old
+    // `str::to_socket_addrs` branch was dead code (std parses a bare str as
+    // "host:service", so any portless name errored before DNS ran) and it
+    // blocked. Empty or failing resolution is NOT loopback (refused; the
+    // bind error names it).
+    let Ok(addrs) = tokio::net::lookup_host((host, 0)).await else {
+        return false;
+    };
+    let mut answered = false;
+    for addr in addrs {
+        if !addr.ip().is_loopback() {
+            return false;
+        }
+        answered = true;
+    }
+    answered
 }
 
 /// Bind-policy gate: refuse any non-loopback bind without the explicit
-/// `--allow-all-interfaces` opt-out. Called before any socket is opened.
+/// `--allow-all-interfaces` opt-out. Called before any socket is opened;
+/// named hosts are resolved here (async) so the answer, not the string,
+/// decides.
 ///
 /// # Errors
 /// [`Error::Config`] with the reason when the bind would expose an
 /// auth-less door to the network.
-fn check_bind_policy(cfg: &HttpServerConfig) -> crate::Result<()> {
-    if cfg.allow_all_interfaces || is_loopback_host(&cfg.host) {
+async fn check_bind_policy(cfg: &HttpServerConfig) -> crate::Result<()> {
+    if cfg.allow_all_interfaces || is_loopback_host(&cfg.host).await {
         return Ok(());
     }
     Err(Error::Config(format!(
@@ -100,7 +113,7 @@ pub async fn serve_http(settings: Settings, cfg: HttpServerConfig) -> anyhow::Re
     // empty on this door (logs NEVER on stdout, mcp.md §8.1).
     crate::mcp::init_logging_stderr();
 
-    check_bind_policy(&cfg)?;
+    check_bind_policy(&cfg).await?;
     // Bind BEFORE building the handler: a refused/in-use port fails fast
     // without ever contacting IRIS.
     let bind = format!("{}:{}", cfg.host, cfg.port);
@@ -137,6 +150,15 @@ pub async fn serve_http_on(
         .local_addr()
         .map_err(|e| anyhow::anyhow!("rism mcp: local_addr: {e}"))?;
 
+    // Probes/tests parse this exact line for the ACTUAL port (row D). The
+    // socket already accepts from bind, so the line goes up HERE: a slow
+    // IRIS negotiate below (<= timeout_secs) must never keep a healthy
+    // door silent past a harness's ready-line budget.
+    eprintln!(
+        "rism MCP server ready (http) - listening on http://{}/mcp",
+        display_addr(addr)
+    );
+
     // Handler built ONCE: RismMcp is Clone and cheap (IrisClient =
     // Arc<Inner>; ToolRouter clones per-route Arcs + small Arc'd metadata),
     // so the per-request factory is a shallow field clone — no IRIS
@@ -150,6 +172,17 @@ pub async fn serve_http_on(
         // Stateful `Mcp-Session-Id` sessions — the row-D contract (rmcp's
         // own default; pinned so an upstream default flip can't sneak in).
         .with_legacy_session_mode(true)
+        // Spec 2025-06-18 transports §Security Warning (MUST): Origin is
+        // validated when present. rmcp only runs the check when the
+        // allowlist is non-empty OR the empty-list flag is set (tower.rs
+        // gate), and an ABSENT Origin always passes — curl/SDK/probe
+        // clients are unaffected. Loopback binds get the door's own
+        // origins (scheme/host/port per RFC 6454); an allow-all bind ships
+        // an empty list + the flag = deny every PRESENT Origin (no
+        // same-origin string is knowable when serving on a LAN address,
+        // and this door has no browser consumers).
+        .with_allowed_origins(allowed_origins_for(addr, all_interfaces))
+        .enforce_origin_validation()
         .with_cancellation_token(CancellationToken::new());
     if all_interfaces {
         // A loopback bind keeps rmcp's Host-header guard (DNS-rebinding);
@@ -162,12 +195,6 @@ pub async fn serve_http_on(
     let service: StreamableHttpService<RismMcp, LocalSessionManager> =
         StreamableHttpService::new(factory, Arc::new(LocalSessionManager::default()), config);
     let router = axum::Router::new().nest_service("/mcp", service);
-
-    // Probes/tests parse this exact line for the ACTUAL port (row D).
-    eprintln!(
-        "rism MCP server ready (http) - listening on http://{}/mcp",
-        display_addr(addr)
-    );
 
     let shutdown = signal_shutdown();
     let keepalive = ct.clone();
@@ -214,29 +241,81 @@ fn display_addr(addr: std::net::SocketAddr) -> String {
     addr.to_string()
 }
 
+/// rmcp Origin allowlist for a bound address (F-01). Loopback binds list
+/// the door's own origins (every name that can reach it, explicit port so
+/// a stray localhost page on another port can't ride in); an
+/// allow-all-interfaces bind lists NOTHING — combined with
+/// `enforce_origin_validation()` that denies every request that SENDS an
+/// Origin while absent-Origin native clients keep passing (rmcp passes
+/// them unconditionally), which is the strictest honest posture for an
+/// address we cannot name a same-origin for.
+fn allowed_origins_for(addr: std::net::SocketAddr, all_interfaces: bool) -> Vec<String> {
+    if all_interfaces || !addr.ip().is_loopback() {
+        return Vec::new();
+    }
+    let port = addr.port();
+    vec![
+        format!("http://localhost:{port}"),
+        format!("http://127.0.0.1:{port}"),
+        format!("http://[::1]:{port}"),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn loopback_bind_policy() {
-        assert!(is_loopback_host("localhost"));
-        assert!(is_loopback_host("127.0.0.1"));
-        assert!(is_loopback_host("::1"));
-        assert!(!is_loopback_host("0.0.0.0"));
-        assert!(!is_loopback_host("192.168.121.127"));
-        assert!(!is_loopback_host("::"));
+    #[tokio::test]
+    async fn loopback_bind_policy() {
+        assert!(is_loopback_host("localhost").await);
+        assert!(is_loopback_host("127.0.0.1").await);
+        assert!(is_loopback_host("::1").await);
+        assert!(!is_loopback_host("0.0.0.0").await);
+        assert!(!is_loopback_host("192.168.121.127").await);
+        assert!(!is_loopback_host("::").await);
         // unresolvable is NOT loopback (refused; the bind error will name it)
-        assert!(!is_loopback_host("no.such.host.invalid"));
+        assert!(!is_loopback_host("no.such.host.invalid").await);
+    }
+
+    #[tokio::test]
+    async fn named_loopback_hosts_really_resolve() {
+        // The old resolver branch was dead code — a bare name never reached
+        // any resolver, so /etc/hosts loopback names were refused and users
+        // reached for --allow-all-interfaces (which then binds loopback but
+        // DISABLES the Host guard). Guarded so a CI box without the entry or
+        // without DNS skips rather than fails.
+        if tokio::net::lookup_host(("ip6-localhost", 0)).await.is_err() {
+            return;
+        }
+        assert!(is_loopback_host("ip6-localhost").await);
     }
 
     #[test]
-    fn refuse_non_loopback_without_optout() {
+    fn origin_allowlist_follows_the_bind() {
+        // F-01 posture: loopback bind = the door's own origins (explicit
+        // port, so a stray page on another localhost port can't ride in);
+        // allow-all/non-loopback bind = empty list, which with
+        // enforce_origin_validation() denies every PRESENT Origin.
+        let v4 = std::net::SocketAddr::from(([127, 0, 0, 1], 3456));
+        let origins = allowed_origins_for(v4, false);
+        assert!(origins.contains(&"http://127.0.0.1:3456".to_string()));
+        assert!(origins.contains(&"http://localhost:3456".to_string()));
+        assert!(origins.contains(&"http://[::1]:3456".to_string()));
+        let v6 =
+            std::net::SocketAddr::new(std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST), 3456);
+        assert_eq!(allowed_origins_for(v6, false), origins);
+        assert_eq!(allowed_origins_for(v4, true), Vec::<String>::new());
+        let lan = std::net::SocketAddr::from(([192, 168, 1, 5], 3000));
+        assert_eq!(allowed_origins_for(lan, false), Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn refuse_non_loopback_without_optout() {
         let cfg = HttpServerConfig {
             host: "0.0.0.0".to_string(),
             ..Default::default()
         };
-        let err = check_bind_policy(&cfg).err();
+        let err = check_bind_policy(&cfg).await.err();
         assert!(err.is_some_and(|e| {
             let t = e.to_string();
             t.contains("--allow-all-interfaces") && t.contains("NO authentication")
@@ -246,7 +325,7 @@ mod tests {
             allow_all_interfaces: true,
             ..cfg
         };
-        assert!(check_bind_policy(&cfg).is_ok());
+        assert!(check_bind_policy(&cfg).await.is_ok());
     }
 
     #[test]

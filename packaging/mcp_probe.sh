@@ -196,8 +196,13 @@ n=$(http_post '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' "$sid" | grep -o 
 [ "$n" -eq 25 ] || { echo "MCP probe: HTTP door expected 25 tools, counted $n"; kill $http_pid 2>/dev/null; exit 1; }
 http_post '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"execute_sql","arguments":{"query":"select 1 as ok"}}}' "$sid" \
   | grep -q '"isError":false' || { echo "MCP probe: HTTP execute_sql did not answer cleanly"; kill $http_pid 2>/dev/null; exit 1; }
-# SIGTERM must exit the door cleanly (row D kill contract)
+# SIGTERM must exit the door cleanly (row D kill contract) — assert the REAL
+# exit status: the old `wait ... || true` swallowed it, so the "exit 0"
+# claim below printed even when the door died dirty (mutation M7 proven).
 kill -TERM $http_pid 2>/dev/null
-wait $http_pid 2>/dev/null || true
+if ! wait $http_pid; then
+  echo "MCP probe: HTTP door SIGTERM exit != 0"
+  exit 1
+fi
 trap 'rm -f "$tmp" "$fifo" "$jobs_out" "$httplog"' EXIT
 echo "MCP probe OK: HTTP door answered (25 tools, SQL clean), SIGTERM exit 0"
