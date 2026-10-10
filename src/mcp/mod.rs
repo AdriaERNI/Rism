@@ -2,6 +2,7 @@
 //! plus the result mapping — zero logic here (rust-bestpractices.md §3.2).
 //! NOTE: this module is part of the lib crate — use `crate::`, never `rism::`.
 
+pub mod http;
 pub mod tasks;
 
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -615,12 +616,10 @@ impl ServerHandler for RismMcp {
     }
 }
 
-/// Serve the MCP over stdio until the client disconnects.
-///
-/// # Errors
-/// Transport/handshake errors.
-pub async fn serve(settings: Settings) -> anyhow::Result<()> {
-    // stdout is the JSON-RPC channel: logs go to stderr, always (mcp.md §8.1).
+/// stderr-only tracing for BOTH MCP doors: stdout is protocol payload
+/// (JSON-RPC on stdio, empty on http), so logs NEVER go there (mcp.md §8.1).
+/// `RUST_LOG` wins; default level is `info` on the server doors.
+pub(crate) fn init_logging_stderr() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -629,6 +628,15 @@ pub async fn serve(settings: Settings) -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .with_ansi(false)
         .init();
+}
+
+/// Serve the MCP over stdio until the client disconnects.
+///
+/// # Errors
+/// Transport/handshake errors.
+pub async fn serve(settings: Settings) -> anyhow::Result<()> {
+    // stdout is the JSON-RPC channel: logs go to stderr, always (mcp.md §8.1).
+    init_logging_stderr();
 
     let server = RismMcp::new(settings).await?;
     let service = server

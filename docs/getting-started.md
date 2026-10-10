@@ -109,6 +109,26 @@ Run `rism mcp` as a stdio server in any MCP client:
 The agent then sees all 25 tools ([MCP Tools](mcp-tools.md)). Secrets travel via the
 client's `env` block — never paste passwords into the chat with your agent.
 
+Prefer a long-running server over a spawned process? Start the streamable-HTTP
+door and point any remote-capable MCP client at it:
+
+```bash
+rism mcp --transport http --port 3000   # 127.0.0.1:3000/mcp — no auth on this door
+```
+
+```json
+{
+  "mcpServers": {
+    "rism": { "url": "http://localhost:3000/mcp" }
+  }
+}
+```
+
+Works with Claude Desktop/Cursor and other clients that speak streamable-HTTP.
+The server keeps IRIS credentials from its own environment (`RISM_IRIS_*`) or
+config file — on Windows that is `%APPDATA%\rism\config.toml`, on Linux
+`~/.config/rism/config.toml` ([Configuration](configuration.md)).
+
 ## Where to go next
 
 - [Configuration](configuration.md) — precedence, file reference

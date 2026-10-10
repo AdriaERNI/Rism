@@ -8,6 +8,46 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
+/// Which MCP door `rism mcp` serves. The CLI flag, `RISM_MCP_TRANSPORT`, and
+/// the config value all resolve through one alias map (Prism parity:
+/// `http` = streamable-HTTP; both `streamable-http`/`streamable_http`
+/// spellings are accepted).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpTransport {
+    /// Line-delimited JSON-RPC over stdin/stdout (the shipped default).
+    Stdio,
+    /// Streamable-HTTP server at `/mcp` (opt-in; no auth on the wire).
+    Http,
+}
+
+impl McpTransport {
+    /// Alias map shared by every input tier. Unknown values yield `None` so
+    /// the caller decides between a clap error (CLI/env) and a config error.
+    #[must_use]
+    pub fn parse_alias(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "stdio" => Some(Self::Stdio),
+            "http" | "streamable-http" | "streamable_http" => Some(Self::Http),
+            _ => None,
+        }
+    }
+
+    /// Precedence merge for the config tier: a CLI/env value (already parsed)
+    /// wins; otherwise the config string is resolved through the alias map.
+    ///
+    /// # Errors
+    /// A message naming the offending value when config selects no known
+    /// transport (the caller adds the file path).
+    pub fn resolve(cli: Option<Self>, config: &str) -> std::result::Result<Self, String> {
+        match cli {
+            Some(t) => Ok(t),
+            None => Self::parse_alias(config).ok_or_else(|| {
+                format!("mcp_transport = \"{config}\" is not a known transport (stdio, http)")
+            }),
+        }
+    }
+}
+
 /// Rism runtime settings.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
@@ -34,6 +74,16 @@ pub struct Settings {
     /// Expose the `debug_*` tools (default on; `RISM_DEBUG_TOOLS=0` hides them —
     /// attaching pauses live IRIS jobs, so some deployments disable them).
     pub debug_tools_enabled: bool,
+    /// MCP door for `rism mcp`: "stdio" (default) or "http" (streamable-HTTP
+    /// aliases accepted too). Resolved via [`McpTransport::resolve`], which
+    /// keeps bad values a startup ERROR instead of silently falling back.
+    pub mcp_transport: String,
+    /// TCP port for the http door (0 = ephemeral; the actual port is printed
+    /// on the stderr ready line). Ignored by stdio.
+    pub mcp_port: u16,
+    /// Bind host for the http door; loopback only unless
+    /// `--allow-all-interfaces` is given. Ignored by stdio.
+    pub mcp_host: String,
 }
 
 impl Default for Settings {
@@ -49,6 +99,9 @@ impl Default for Settings {
             terminal_max_output_chars: 100_000,
             workspace_root: String::new(),
             debug_tools_enabled: true,
+            mcp_transport: "stdio".to_string(),
+            mcp_port: 3000,
+            mcp_host: "127.0.0.1".to_string(),
         }
     }
 }
@@ -223,6 +276,59 @@ mod tests {
             ..Default::default()
         };
         assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn transport_alias_map_is_the_parity_contract() {
+        // Prism parity: http = streamable-http; both spellings; any case.
+        assert_eq!(
+            McpTransport::parse_alias("stdio"),
+            Some(McpTransport::Stdio)
+        );
+        assert_eq!(McpTransport::parse_alias("http"), Some(McpTransport::Http));
+        assert_eq!(
+            McpTransport::parse_alias("streamable-http"),
+            Some(McpTransport::Http)
+        );
+        assert_eq!(
+            McpTransport::parse_alias("streamable_http"),
+            Some(McpTransport::Http)
+        );
+        assert_eq!(McpTransport::parse_alias("HTTP"), Some(McpTransport::Http));
+        assert_eq!(
+            McpTransport::parse_alias(" Stdio "),
+            Some(McpTransport::Stdio)
+        );
+        // SSE was never a transport: reject, never silently map.
+        assert_eq!(McpTransport::parse_alias("sse"), None);
+        assert_eq!(McpTransport::parse_alias(""), None);
+    }
+
+    #[test]
+    fn transport_resolve_precedence_and_error() {
+        // CLI/env tier (Some) always wins, even over a bad config value.
+        assert_eq!(
+            McpTransport::resolve(Some(McpTransport::Stdio), "http").ok(),
+            Some(McpTransport::Stdio)
+        );
+        assert_eq!(
+            McpTransport::resolve(None, "streamable_http").ok(),
+            Some(McpTransport::Http)
+        );
+        let err = McpTransport::resolve(None, "sse").err();
+        assert!(err.is_some_and(|e| e.contains("sse") && e.contains("mcp_transport")));
+    }
+
+    #[test]
+    fn mcp_transport_settings_defaults() {
+        let s = Settings::default();
+        assert_eq!(s.mcp_transport, "stdio");
+        assert_eq!(s.mcp_port, 3000);
+        assert_eq!(s.mcp_host, "127.0.0.1");
+        // an old config.toml (no new keys) deserializes with these defaults
+        let old: Settings = toml::from_str("iris_namespace = \"USER\"").unwrap_or_default();
+        assert_eq!(old.mcp_transport, "stdio");
+        assert_eq!(old.mcp_port, 3000);
     }
 
     #[test]
