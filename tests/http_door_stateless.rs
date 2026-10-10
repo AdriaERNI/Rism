@@ -14,7 +14,69 @@
     clippy::needless_pass_by_value
 )]
 
-use std::time::Duration;
+use std::io::Read;
+use std::time::{Duration, Instant};
+
+/// P-07 / M8 pin: the ready line must arrive IMMEDIATELY AFTER BIND, not
+/// after the handler build. `base_url` is a socket that accepts but never
+/// answers, so the negotiate GET blocks for the full 30 s client timeout;
+/// with the line at its OLD position it could only print at t~30 s, and
+/// this asserts t < 3 s. Mutation M8 (move it back) goes RED.
+#[test]
+fn ready_line_precedes_handler_negotiate() {
+    let blackhole = std::net::TcpListener::bind("127.0.0.1:0").expect("blackhole bind");
+    let bh_addr = blackhole.local_addr().expect("addr");
+    // Accept + hold every connection; never write a response (the thread
+    // ends with the test binary).
+    std::thread::spawn(move || {
+        let _held: Vec<_> = blackhole.incoming().flatten().collect();
+    });
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_rism"))
+        .args([
+            "mcp",
+            "--transport",
+            "http",
+            "--port",
+            "0",
+            "--url",
+            &format!("http://{bh_addr}"),
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn rism http door");
+    let mut reader = child.stderr.take().expect("stderr piped");
+    let t0 = Instant::now();
+    let mut acc = String::new();
+    loop {
+        let mut chunk = [0u8; 512];
+        match reader.read(&mut chunk) {
+            Ok(0) | Err(_) => break, // EOF or reset: nothing more will come
+            Ok(n) => acc.push_str(&String::from_utf8_lossy(&chunk[..n])),
+        }
+        if acc.contains("listening on http://") {
+            break;
+        }
+        assert!(
+            t0.elapsed() < Duration::from_secs(15),
+            "no ready line within 15 s while the 30 s blackhole negotiate \
+             is pending — the line is at its old post-negotiate position; \
+             stderr so far: {acc}"
+        );
+    }
+    let at = t0.elapsed();
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        acc.contains("listening on http://"),
+        "ready line present: {acc}"
+    );
+    assert!(
+        at < Duration::from_secs(3),
+        "ready line came at {at:?} — must precede the negotiate (30 s)"
+    );
+}
 
 use serde_json::{Value, json};
 
@@ -133,13 +195,23 @@ async fn http_door_factory_sessions_and_error_path() {
             "dead-IRIS call must answer with a tool-level error, got: {payload}"
         );
 
-        // Row-D DELETE = session teardown; then the id must be dead.
-        client()
+        // Row-D DELETE = session teardown (202 Accepted), and the id must
+        // be DEAD afterwards: a follow-up POST answers 404 (spec MUST for
+        // terminated sessions) — asserted, not just commented.
+        let del = client()
             .delete(&url)
             .header("Mcp-Session-Id", &sid)
             .send()
             .await
             .expect("delete answered");
+        assert_eq!(del.status(), 202, "DELETE tears the session down");
+        let (status, _) = post(
+            &url,
+            &sid,
+            json!({"jsonrpc": "2.0", "id": 9, "method": "tools/list"}),
+        )
+        .await;
+        assert_eq!(status, 404, "deleted session id must be dead");
     }
 
     // Shutdown path: cancelling the door's token exits serve (no zombie).
