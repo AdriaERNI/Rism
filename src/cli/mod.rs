@@ -107,7 +107,7 @@ pub enum Commands {
     Info,
     /// Serve as an MCP server. Default door: stdio (byte-identical to every
     /// released version). `--transport http` opens a streamable-HTTP door at
-    /// /mcp — NO authentication on that door: every local process can drive
+    /// /mcp - NO authentication on that door: every local process can drive
     /// all 25 tools. Binds 127.0.0.1 unless --host/--allow-all-interfaces.
     Mcp {
         /// Transport door: `stdio` (default) or `http`; aliases
@@ -122,7 +122,7 @@ pub enum Commands {
         /// without --allow-all-interfaces)
         #[arg(long)]
         host: Option<String>,
-        /// Bind a non-loopback host with no auth on the wire — loud warning,
+        /// Bind a non-loopback host with no auth on the wire - loud warning,
         /// deliberate opt-out
         #[arg(long)]
         allow_all_interfaces: bool,
