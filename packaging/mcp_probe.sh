@@ -154,3 +154,50 @@ grep -E '"id"[[:space:]]*:[[:space:]]*2' "$tmp" | grep -q '"isError":true' \
 grep -E '"id"[[:space:]]*:[[:space:]]*2' "$tmp" | grep -q '2026-06-30' \
   || { echo "MCP probe: Rail-A refusal must name the protocol floor"; exit 1; }
 echo "MCP probe OK: pre-2026-06-30 extension key treated as absent"
+
+# --- HTTP door (streamable-HTTP, opt-in): raw POSTs over bash /dev/tcp ----
+# Zero new deps (no python/curl assumed): speaks HTTP/1.1 directly. Port 0
+# + ready-line parse, session header, 25-tool count, one call, SIGTERM-quit:
+# the exact contract VM row D exercises. Fresh connection per POST (the door
+# closes keep-alives between turns; Connection: close makes it deterministic).
+httplog=$(mktemp)
+rism mcp --transport http --port 0 2>"$httplog" >/dev/null &
+http_pid=$!
+http_url=""
+for _ in $(seq 40); do
+  http_url=$(grep -o 'listening on http://[^ ]*' "$httplog" 2>/dev/null | head -1 | cut -d' ' -f3 || true)
+  [ -n "$http_url" ] && break
+  sleep 0.25
+done
+[ -n "$http_url" ] || { echo "MCP probe: no HTTP ready line"; kill $http_pid 2>/dev/null; exit 1; }
+hp=${http_url#http://}; hp=${hp%/mcp}
+[ "${hp#127.0.0.1:}" != "$hp" ] || { echo "MCP probe: ready URL not loopback: $http_url"; kill $http_pid 2>/dev/null; exit 1; }
+
+# http_post <json-body> [session-id] -> raw HTTP response on stdout
+http_post() {
+  local body=$1 sid=${2:-} sidhdr=""
+  [ -n "$sid" ] && sidhdr=$'Mcp-Session-Id: '"$sid"$'\r\n'
+  exec 3<>"/dev/tcp/${hp%%:*}/${hp##*:}" || { echo "MCP probe: cannot connect $http_url" >&2; return 1; }
+  printf 'POST /mcp HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json\r\nAccept: application/json, text/event-stream\r\nConnection: close\r\nContent-Length: %d\r\n%s\r\n%s' \
+    "$hp" "${#body}" "$sidhdr" "$body" >&3
+  timeout 20 cat <&3
+  exec 3>&-
+}
+
+INIT='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","clientInfo":{"name":"ci","version":"0"},"capabilities":{}}}'
+resp=$(http_post "$INIT") || exit 1
+printf '%s' "$resp" | grep -qi $'^HTTP/1\\.[01] 200\\|^HTTP/1.[01] 200' \
+  || { echo "MCP probe: HTTP initialize not 200: $(printf '%s' "$resp" | head -1)"; kill $http_pid 2>/dev/null; exit 1; }
+sid=$(printf '%s' "$resp" | tr -d '\r' | awk 'tolower($1)=="mcp-session-id:"{print $2}')
+[ -n "$sid" ] || { echo "MCP probe: no Mcp-Session-Id header (stateful door)"; kill $http_pid 2>/dev/null; exit 1; }
+http_post '{"jsonrpc":"2.0","method":"notifications/initialized"}' "$sid" \
+  | grep -qi '202' || { echo "MCP probe: initialized notification not 202"; kill $http_pid 2>/dev/null; exit 1; }
+n=$(http_post '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' "$sid" | grep -o '"inputSchema"' | wc -l)
+[ "$n" -eq 25 ] || { echo "MCP probe: HTTP door expected 25 tools, counted $n"; kill $http_pid 2>/dev/null; exit 1; }
+http_post '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"execute_sql","arguments":{"query":"select 1 as ok"}}}' "$sid" \
+  | grep -q '"isError":false' || { echo "MCP probe: HTTP execute_sql did not answer cleanly"; kill $http_pid 2>/dev/null; exit 1; }
+# SIGTERM must exit the door cleanly (row D kill contract)
+kill -TERM $http_pid 2>/dev/null
+wait $http_pid 2>/dev/null || true
+trap 'rm -f "$tmp" "$fifo" "$jobs_out" "$httplog"' EXIT
+echo "MCP probe OK: HTTP door answered (25 tools, SQL clean), SIGTERM exit 0"

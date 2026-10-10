@@ -6,9 +6,11 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::Parser;
 
-use rism::cli::{Cli, Commands, DebugCommands, DocCall, OutputFormat, TestCommands, render};
+use rism::cli::{
+    Cli, Commands, DebugCommands, DocCall, McpConfig, OutputFormat, TestCommands, render,
+};
 use rism::iris::IrisClient;
-use rism::settings::Settings;
+use rism::settings::{McpTransport, Settings};
 use rism::tools::command::{ExecuteCommandArgs, execute_command};
 use rism::tools::compile::{CompileDocumentsArgs, compile_documents};
 use rism::tools::debugger::{
@@ -32,9 +34,10 @@ use rism::tools::testing::{
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    if matches!(cli.command, Commands::Mcp) {
-        // MCP mode is its own entry: stderr-only logging, stdio transport.
-        return rism::mcp::serve(resolve_settings(&cli)?).await;
+    if let Commands::Mcp { .. } = &cli.command {
+        // MCP mode is its own entry: stderr-only logging, transport per
+        // flags (no flags = stdio, byte-identical to every released version).
+        return serve_mcp(&cli).await;
     }
 
     // CLI mode: human logs to stderr, results to stdout.
@@ -255,6 +258,55 @@ fn resolve_settings(cli: &Cli) -> Result<Settings> {
         s.iris_base_url.clone_from(url);
     }
     Ok(s)
+}
+
+/// `rism mcp` dispatch: resolve precedence (CLI > env > config.toml >
+/// defaults — env rides clap `env=` on the flags), then serve the chosen
+/// door. stdio stays the untouched shipped path.
+async fn serve_mcp(cli: &Cli) -> Result<()> {
+    let Commands::Mcp {
+        transport,
+        port,
+        host,
+        allow_all_interfaces,
+    } = &cli.command
+    else {
+        unreachable!("serve_mcp is only called for Commands::Mcp");
+    };
+    let mcfg = McpConfig {
+        transport: *transport,
+        port: *port,
+        host: host.clone(),
+        allow_all_interfaces: *allow_all_interfaces,
+    };
+    let settings = resolve_settings(cli)?;
+    let transport = rism::mcp::http::resolve_transport(
+        mcfg.transport,
+        &settings.mcp_transport,
+        Settings::config_path().as_deref(),
+    )?;
+    match transport {
+        McpTransport::Stdio => {
+            if mcfg.has_unused_net_flags_stdio() {
+                eprintln!("rism mcp: --port/--host are ignored with the stdio transport");
+            }
+            rism::mcp::serve(settings).await
+        }
+        McpTransport::Http => {
+            let host = match mcfg.host.clone() {
+                Some(h) => h,
+                // config tier: an empty mcp_host means "not set" → default
+                None if !settings.mcp_host.trim().is_empty() => settings.mcp_host.clone(),
+                None => "127.0.0.1".to_string(),
+            };
+            let cfg = rism::mcp::http::HttpServerConfig {
+                host,
+                port: mcfg.port.unwrap_or(settings.mcp_port),
+                allow_all_interfaces: mcfg.allow_all_interfaces,
+            };
+            rism::mcp::http::serve_http(settings, cfg).await
+        }
+    }
 }
 
 async fn dispatch_debug(

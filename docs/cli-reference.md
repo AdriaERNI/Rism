@@ -150,5 +150,29 @@ units included. `--raw` prints the raw metric vector instead of the scored table
 ## MCP server
 
 ### `rism mcp`
-Serve JSON-RPC 2.0 over stdio (all 25 tools). Used by MCP clients; no flags.
-`RISM_DEBUG_TOOLS=0` removes the 9 `debug_*` tools from discovery.
+Serve JSON-RPC 2.0 (all 25 tools). Used by MCP clients. No flags = **stdio**,
+byte-identical to every released version. `RISM_DEBUG_TOOLS=0` removes the 9
+`debug_*` tools from discovery.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--transport <stdio\|http>` | `stdio` | Door to serve. `http` = streamable-HTTP at `/mcp`; aliases `streamable-http` / `streamable_http`, any case (env: `RISM_MCP_TRANSPORT`) |
+| `--port <N>` | `3000` | TCP port for the http door; `0` = ephemeral — the actual port is printed on the stderr ready line (env: `RISM_MCP_PORT`) |
+| `--host <H>` | `127.0.0.1` | Bind host for the http door; non-loopback requires `--allow-all-interfaces` |
+| `--allow-all-interfaces` | off | Deliberate opt-out that binds a non-loopback host (prints a warning banner) |
+
+`--port`/`--host` with the stdio transport print one stderr warning and are
+ignored. Precedence: CLI flag > env > `config.toml` (`mcp_transport`,
+`mcp_port`, `mcp_host`) > defaults.
+
+!!! danger "No auth on the HTTP door"
+    `rism mcp --transport http` has **no authentication**: every process that
+    can reach the bound address can drive all 25 tools, including `run_shell`,
+    file tools, and the debugger. Bind loopback only unless you fully own the
+    network boundary.
+
+```bash
+rism mcp                                            # stdio (default, unchanged)
+rism mcp --transport http --port 3000               # streamable-HTTP on 127.0.0.1:3000/mcp
+RISM_MCP_TRANSPORT=http RISM_MCP_PORT=0 rism mcp    # env form, ephemeral port
+```

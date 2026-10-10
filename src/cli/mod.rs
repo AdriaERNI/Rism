@@ -3,6 +3,7 @@
 
 use clap::{Parser, Subcommand};
 
+use crate::settings::McpTransport;
 use crate::tools::documents::{
     DeleteDocumentArgs, GetDocumentArgs, ListDocumentsArgs, PutDocumentArgs,
 };
@@ -104,8 +105,60 @@ pub enum Commands {
     },
     /// Show IRIS server info (also a connectivity smoke test)
     Info,
-    /// Serve as an MCP server over stdio
-    Mcp,
+    /// Serve as an MCP server. Default door: stdio (byte-identical to every
+    /// released version). `--transport http` opens a streamable-HTTP door at
+    /// /mcp - NO authentication on that door: every local process can drive
+    /// all 25 tools. Binds 127.0.0.1 unless --host/--allow-all-interfaces.
+    Mcp {
+        /// Transport door: `stdio` (default) or `http`; aliases
+        /// `streamable-http` / `streamable_http` (env: `RISM_MCP_TRANSPORT`)
+        #[arg(long, env = "RISM_MCP_TRANSPORT", value_parser = parse_mcp_transport)]
+        transport: Option<McpTransport>,
+        /// TCP port for the `http` door; 0 = ephemeral, actual port printed
+        /// on the stderr ready line (env: `RISM_MCP_PORT`)
+        #[arg(long, env = "RISM_MCP_PORT")]
+        port: Option<u16>,
+        /// Bind host for the http door (default 127.0.0.1; loopback only
+        /// without --allow-all-interfaces)
+        #[arg(long)]
+        host: Option<String>,
+        /// Bind a non-loopback host with no auth on the wire - loud warning,
+        /// deliberate opt-out
+        #[arg(long)]
+        allow_all_interfaces: bool,
+    },
+}
+
+/// clap `--transport` parser: one alias map for CLI and env, so an unknown
+/// value is clap's standard invalid-value error (exit 2), never a panic.
+fn parse_mcp_transport(s: &str) -> std::result::Result<McpTransport, String> {
+    McpTransport::parse_alias(s).ok_or_else(|| {
+        format!("'{s}' is not a transport (stdio, http, streamable-http, streamable_http)")
+    })
+}
+
+/// Resolved `rism mcp` transport config (precedence: CLI flag >
+/// `RISM_MCP_*` env > config.toml > defaults; merged by the main dispatch).
+#[derive(Debug, Clone)]
+pub struct McpConfig {
+    /// Which door to serve.
+    pub transport: Option<McpTransport>,
+    /// http door port (None = settings/default 3000; Some(0) = ephemeral).
+    pub port: Option<u16>,
+    /// http door bind host (None = settings/default 127.0.0.1).
+    pub host: Option<String>,
+    /// Opt-out of the loopback-only bind rule (loud warning on stderr).
+    pub allow_all_interfaces: bool,
+}
+
+impl McpConfig {
+    /// True when `--port`/`--host` were given but the door is stdio (warn,
+    /// then serve stdio exactly as shipped).
+    #[must_use]
+    pub fn has_unused_net_flags_stdio(&self) -> bool {
+        !matches!(self.transport, Some(McpTransport::Http))
+            && (self.port.is_some() || self.host.is_some())
+    }
 }
 
 /// Debug subcommands. CLI sessions are self-contained: each command opens,
@@ -246,7 +299,7 @@ impl Commands {
                 namespace: ns_override.clone(),
                 max_rows: *max_rows,
             }),
-            Self::Mcp
+            Self::Mcp { .. }
             | Self::Doc(_)
             | Self::Compile { .. }
             | Self::Info
@@ -323,7 +376,7 @@ impl Commands {
                 }),
             }),
             Self::Sql { .. }
-            | Self::Mcp
+            | Self::Mcp { .. }
             | Self::Compile { .. }
             | Self::Info
             | Self::Exec { .. }
