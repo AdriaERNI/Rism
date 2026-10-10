@@ -65,7 +65,7 @@ fn check_bind_policy(cfg: &HttpServerConfig) -> crate::Result<()> {
     }
     Err(Error::Config(format!(
         "refusing to bind the HTTP MCP door to '{host}' without --allow-all-interfaces: \
-         this door has NO authentication — every host on the network could drive all \
+         this door has NO authentication - every host on the network could drive all \
          25 Rism tools. Use --host 127.0.0.1, or pass --allow-all-interfaces to accept \
          that risk explicitly.",
         host = cfg.host
@@ -110,7 +110,7 @@ pub async fn serve_http(settings: Settings, cfg: HttpServerConfig) -> anyhow::Re
     if cfg.allow_all_interfaces {
         // Loud opt-out banner (stderr; the actual port when ephemeral).
         eprintln!(
-            "warning: rism MCP HTTP door bound to {} with NO authentication — every \
+            "warning: rism MCP HTTP door bound to {} with NO authentication - every \
              process that can reach this address can drive all 25 tools (incl. shell \
              and debugger). Do not expose it beyond a trusted network.",
             match listener.local_addr() {
@@ -165,7 +165,7 @@ pub async fn serve_http_on(
 
     // Probes/tests parse this exact line for the ACTUAL port (row D).
     eprintln!(
-        "rism MCP server ready (http) — listening on http://{}/mcp",
+        "rism MCP server ready (http) - listening on http://{}/mcp",
         display_addr(addr)
     );
 
