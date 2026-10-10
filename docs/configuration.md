@@ -27,7 +27,15 @@ sql_max_rows   = 1000
 terminal_max_output_chars = 100000
 workspace_root = "~/code"   # root for read_file/list_files/run_shell
 debug_tools_enabled = true
+mcp_transport = "stdio"     # "stdio" | "http" (streamable-HTTP at /mcp)
+mcp_port = 3000             # http door port; 0 = ephemeral
+mcp_host = "127.0.0.1"      # http door bind; loopback only without the flag
 ```
+
+!!! note "The HTTP MCP door has no authentication"
+    `mcp_transport = "http"` serves every tool to any process that can reach
+    `mcp_host:mcp_port` — see [CLI Reference](cli-reference.md) before binding
+    anything but loopback.
 
 !!! warning "The password does not live here"
     `iris_password` is deliberately **skipped** by the config parser
@@ -48,6 +56,8 @@ debug_tools_enabled = true
 | `RISM_WORKSPACE` | root for host file tools | *(unset = disabled)* |
 | `RISM_DEBUG_TOOLS` | `0` hides the 9 `debug_*` tools | `1` |
 | `RISM_TERMINAL_MAX_OUTPUT_CHARS` | bound on terminal output retained per command (garbage keeps default) | `100000` |
+| `RISM_MCP_TRANSPORT` | `rism mcp` door: `stdio` or `http` (+ streamable-http aliases) | `stdio` |
+| `RISM_MCP_PORT` | http door port (`0` = ephemeral; actual port on the stderr ready line) | `3000` |
 
 `RISM_WORKSPACE` also applies to the CLI (`rism cat`, `rism ls`, `rism shell`);
 without it those tools refuse to run rather than defaulting to `/`.
