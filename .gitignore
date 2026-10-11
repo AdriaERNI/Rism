@@ -49,6 +49,10 @@ Thumbs.db
 .rism/
 /scratch/
 
+# Generated docs dumps (scripts/gen-llms.py; regenerated in pages.yml)
+docs/llms.txt
+docs/llms-full.txt
+
 
 # Added by cargo
 
