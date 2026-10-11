@@ -1,8 +1,11 @@
 # MCP Tools
 
-Rism serves **25 tools** over JSON-RPC 2.0 / stdio (`rism mcp`). Parameters marked
-`*` are required. All tools accept an optional `namespace` (override the configured
-default) unless noted. Every tool's behavior is identical to the CLI path — same
+Rism serves **25 tools** over JSON-RPC 2.0 on two doors (`rism mcp`):
+**stdio** (default) and **streamable-HTTP** (`rism mcp --transport http`,
+at `/mcp`). Parameters marked
+`*` are required. Namespace-scoped tools accept an optional `namespace`
+(override the configured default) unless noted — `get_server_info` and the
+host tools (`run_shell`, `read_file`, `list_files`) take none. Every tool's behavior is identical to the CLI path — same
 core, two doors. One documented exception: document writes enforce conflicts by
 default on the MCP door (`ignore_conflict: false`), while the CLI defaults to
 ignoring them — pass `ignore_conflict: true` to match `rism doc put`'s behavior.
@@ -46,7 +49,8 @@ CI-clean servers). Optional `flags`.
 ## SQL & terminal
 
 `execute_command` ships an MCP **annotation** (`title: "Run ObjectScript"`,
-`destructiveHint`) so clients can show names and decide confirmation policy
+`destructiveHint: true`, `idempotentHint: false`) so clients can show names
+and decide confirmation policy
 without guessing — ObjectScript can mutate data.
 Program/runtime errors (`<SYNTAX>`, `<NOROUTINE>`, `<INTERRUPT>`) come back
 as terminal **output** with a successful call, exactly as a real terminal
@@ -110,6 +114,34 @@ answers immediately with a **task handle** (`resultType: "task"`, a
   and the client capabilities — the SEP-2575 inline lifecycle).
   Non-declaring clients get an honest tool-level error telling them to run
   synchronously — never a silent timeout.
+- `tasks/update` always answers with a JSON-RPC error: rism tasks never
+  request input (a terminal `read` inside a background job is auto-answered
+  with an empty line), so there is no outstanding input request to deliver.
+- Task ids are unguessable by protocol MUST: shape `rism-{pid:hex}-{16 hex
+  random}` — never a sequence.
+
+## HTTP door wire contract
+
+The streamable-HTTP door (`rism mcp --transport http`) is plain HTTP at
+`/mcp`; harnesses can rely on this status matrix (pinned by
+`tests/http_door_status_matrix.rs`), evaluated in guard order
+(method → Accept/Content-Type → session → Origin/Host → body size):
+
+| Situation | Status |
+|---|---|
+| POST without `Accept: application/json, text/event-stream` | `406` |
+| GET/DELETE without `Mcp-Session-Id` | `400` |
+| POST/GET with an unknown session id | `404` |
+| DELETE with an unknown session id | `202` (idempotent terminate) |
+| PUT | `405` |
+| POST with a non-JSON `Content-Type` | `415` |
+| Body > 4 MiB | `413` (rmcp default cap) |
+| Present `Origin` not matching the door's own origin | `403` |
+
+Sessions are stateful (`Mcp-Session-Id` issued at `initialize`) and idle out
+after **300 s** keep-alive; a SIGTERM/Ctrl+C shuts the door down with a clean
+process exit. No authentication exists on this door — treat the bound address
+as the trust boundary ([CLI Reference](cli-reference.md) danger box).
 
 ## Unit tests
 
@@ -148,15 +180,17 @@ detail. `include_raw_metrics` returns the raw vector too.
 
 ## Host file tools (agent-side)
 
-Operate on the machine **running Rism**, rooted at `workspace_root` /
-`RISM_WORKSPACE`. Path traversal outside the root is refused. Disabled when no
-root is configured.
+Operate on the machine **running Rism**. `read_file` / `list_files` are
+rooted at `workspace_root` / `RISM_WORKSPACE`, refuse to run when no root is
+configured (they never default to `/`), and reject traversal outside the
+root. `run_shell` is not root-gated: it starts in the workspace root if set,
+otherwise the process working directory.
 
 | Tool | Params |
 |---|---|
 | `read_file` | `path`\* — text; binary detected and rejected |
 | `list_files` | `path`, `pattern` (glob), `max_results` |
-| `run_shell` | `command`\*, `cwd`, `timeout_secs` — `bash` on Unix, PowerShell on Windows |
+| `run_shell` | `command`\*, `cwd`, `timeout_secs` (default 30 s, clamped to [1, 3600]) — `bash` on Unix, PowerShell on Windows |
 
 ## Typical agent flows
 

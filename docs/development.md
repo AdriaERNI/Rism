@@ -4,7 +4,7 @@
 
 ```bash
 cargo build                          # debug binary: target/debug/rism
-cargo test                           # 47 unit + wiremock API tests — no server needed
+cargo test                           # ~100 unit + wiremock + contract tests run server-free (35 live tests are #[ignore]d) — no server needed
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
@@ -17,8 +17,12 @@ against captured frames.
 
 The `Live smoke (fresh IRIS)` CI job boots `intersystemsdc/iris-community:2025.3`
 as a service container and drives the shipped binary through every door —
-`info`, `doc put`/`compile`/`get`/`delete`, `sql`, `exec`, `test run/list/results`,
-`debug run` (real DBGP stop), `monitor`. Its purpose: catch anything a dev box
+`info`, `doc put`/`compile`/`get`/`delete`, `sql`, `exec`, a piped-stdin REPL
+state leg, `test run/list/results`, `debug run` (real DBGP stop), `monitor` —
+plus the `#[ignore]d` MCP contract suites over the same IRIS
+(`cargo test --test background_jobs -- --ignored` and `cargo test --test
+tool_matrix -- --ignored`: the full 25-tool matrix, background-task lifecycle,
+annotations, error hygiene). Its purpose: catch anything a dev box
 masks (pre-compiled caches, leftover classes). Local equivalent:
 
 ```bash
@@ -41,9 +45,11 @@ Fresh-server lessons baked into the workflow (keep them):
 | Workflow | Trigger | Gates |
 |---|---|---|
 | `ci.yml` → Lint | PR / push | `cargo fmt --check`, `clippy -D warnings` |
-| `ci.yml` → Test | PR / push | `cargo test --locked` (Linux + Windows) |
-| `ci.yml` → Live smoke (fresh IRIS) | PR / push | end-to-end on clean 2025.3 |
-| `ci.yml` → Build + GitHub Release | tag `v*` | signed binaries, winx64/setup.exe, checksums, git-cliff release notes |
+| `ci.yml` → Test | PR / push | `cargo test --all-targets` (Linux; Windows correctness runs at release time via the `build` matrix) |
+| `ci.yml` → Live smoke (fresh IRIS) | PR / push | end-to-end on clean 2025.3 + the `#[ignore]d` MCP contract jobs |
+| `ci.yml` → Build + GitHub Release | tag `v*` | Linux/Windows binaries, winx64/setup.exe, checksums, git-cliff release notes — artifacts are **unsigned** (Store signing pending, see [Windows Store](windows-store.md)) |
+| `windows-installer.yml` | PR / push touching `installer/**`, `src/**`, … | real-VM install → upgrade → uninstall contract on a hosted Windows runner |
+| `linux-packages.yml` | PR: `packaging/**` + CI files; push: also `src/**`, Cargo files | install/upgrade/uninstall + functional smoke in deb/rpm/pacman containers |
 | `pages.yml` | push `main` | `mkdocs build --strict` → GitHub Pages |
 
 Note: clippy on GitHub's current stable flags stricter lints than pinned

@@ -15,9 +15,9 @@ the documented REST + WebSocket endpoints your IRIS already exposes.
 | | Rism |
 |---|---|
 | **Distribution** | one static binary (Linux packages + Windows installer) — no Python, no runtime installs |
-| **Two doors, one core** | `rism <command>` for humans and scripts; `rism mcp` for AI clients (Claude Desktop, Hermes, any MCP client) |
+| **Two doors, one core** | `rism <command>` for humans and scripts; `rism mcp` for AI clients (Claude Desktop, Hermes, any MCP client) — over stdio, or over streamable-HTTP with `rism mcp --transport http` |
 | **Zero footprint on the server** | every tool rides the Atelier API (`/api/atelier/…`) and the terminal WebSocket — nothing is installed inside IRIS |
-| **Prism parity** | behavior-matched port of [Prism](https://github.com/AdriaERNI/Prism)'s 25-tool surface — same log format and debugger, in ~8k lines of Rust; long-running terminal work moves to protocol-native MCP Tasks instead of extra tools |
+| **Prism parity** | behavior-matched port of [Prism](https://github.com/AdriaERNI/Prism)'s 25-tool surface — same log format and debugger, in ~10k lines of Rust; long-running terminal work moves to protocol-native MCP Tasks instead of extra tools |
 | **Debugger without Studio** | full DBGP control (breakpoints, stepping, variable inspection) from the CLI or an agent session — no GUI needed |
 
 ## 25 tools at a glance
@@ -38,13 +38,15 @@ rism info                      # version + namespaces => connectivity OK
 
 # 3. work
 rism sql "SELECT TOP 5 Name FROM %Dictionary.ClassDefinition"
-rism doc compile MyPackage.MyClass.cls
+rism doc compile MyPackage.MyClass.cls --file src/MyPackage.MyClass.cls   # put + compile
 rism test run MyPackage.MyClassTest
 rism debug run '##class(MyPackage.MyClass).Main()' --stop-on-entry
 rism monitor                   # live metrics + load score
 ```
 
-Serving as an MCP server for an AI client is one line in your client config:
+Serving as an MCP server for an AI client is one line in your client config
+(stdio door — `rism mcp --transport http` serves the same 25 tools over
+streamable-HTTP instead):
 
 ```json
 { "mcpServers": { "rism": { "command": "rism", "args": ["mcp"] } } }
@@ -56,6 +58,9 @@ Serving as an MCP server for an AI client is one line in your client config:
 - [Configuration](configuration.md) — config file, environment variables, precedence
 - [CLI Reference](cli-reference.md) — every command and flag
 - [MCP Tools](mcp-tools.md) — all 25 tools with parameters
+- [AI Agents](ai-agents.md) — wiring Rism into Claude Desktop/Code, Cursor, VS Code
 - [Debugger](debugger.md) — DBGP sessions, breakpoints, stepping
 - [Development](development.md) — build, test, CI, release flow
 - [Windows Store](windows-store.md) — installer, Store submission, readiness checklist
+- [Linux Packages](linux-packages.md) — deb/rpm/pacman contract
+- [Installer Exit Codes](installer-exit-codes.md) — silent-install codes

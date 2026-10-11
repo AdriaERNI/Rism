@@ -51,7 +51,7 @@ both doors — CLI and MCP.
 
 ```bash
 rism sql "SELECT Name FROM %Dictionary.ClassDefinition"
-rism --format json sql --max-rows 10 "SELECT * FROM %Library.RoutineMgr_StudioOpenDialog"
+rism --format json sql "SELECT TOP 10 Name FROM %Dictionary.CompiledClass"
 rism doc list --filter "My.%" --filetypes CLS,RTN
 rism doc get My.Class.cls
 rism doc compile My.Class.cls --file src/My.Class.cls     # put + compile
@@ -76,16 +76,19 @@ rism --url http://host:52773 --namespace %SYS sql "SELECT 1"
 ```
 
 Settings resolve env (`RISM_IRIS_*`, `RISM_WORKSPACE`, `RISM_DEBUG_TOOLS=0`
-to hide the debugger tools) → `$XDG_CONFIG_HOME/rism/config.toml`
+to hide the debugger tools, `RISM_TERMINAL_MAX_OUTPUT_CHARS` to bound
+terminal output per command, `RISM_MCP_TRANSPORT`/`RISM_MCP_PORT` for the
+MCP door) → `$XDG_CONFIG_HOME/rism/config.toml`
 (`~/.config/rism/config.toml`) → defaults (`_SYSTEM/SYS` @
 `http://localhost:52773`, namespace `USER`, API version auto-negotiated).
 Set `RUST_LOG=debug` for Prism-style REQUEST/RESPONSE tool-call logs on
 stderr.
 
-### MCP (stdio)
+### MCP (stdio + streamable-HTTP)
 
 ```bash
-rism mcp
+rism mcp                                  # stdio door (default, wire-frozen)
+rism mcp --transport http --port 3000     # streamable-HTTP at 127.0.0.1:3000/mcp
 ```
 
 Tools: `execute_sql`, `list_documents`, `get_document`, `put_document`,
@@ -98,6 +101,18 @@ suite (`debug_start`, `debug_attach`, `debug_list_processes`, `debug_step`,
 namespace-scoped ones accept an optional `namespace` override. Host-side
 tools (`run_shell`, `read_file`, `list_files`) act on the machine Rism runs
 on; file tools are rooted at `RISM_WORKSPACE` with traversal blocked.
+
+The **streamable-HTTP door** (`rism mcp --transport http`) serves the same
+25 tools at `http://<host>:<port>/mcp`. It has **no authentication**: the
+default bind is loopback-only (`127.0.0.1:3000`; a non-loopback bind is
+refused unless you pass `--allow-all-interfaces`), and `Origin` headers are
+validated against the door's own origin — `localhost` and the bound
+`127.0.0.1`/`[::1]` with the exact port pass, any other origin is denied
+with `403`; native clients may omit the header. With
+`--allow-all-interfaces` there is no knowable same-origin, so **every
+present Origin is denied**. See
+[docs/cli-reference.md](docs/cli-reference.md) for every flag and the
+security notes.
 
 Rism never uploads helper code to the server — everything, including unit
 testing, goes through the Atelier REST API and its terminal WebSocket.
