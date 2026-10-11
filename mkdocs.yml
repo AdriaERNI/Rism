@@ -48,6 +48,7 @@ nav:
   - Configuration: configuration.md
   - CLI Reference: cli-reference.md
   - MCP Tools: mcp-tools.md
+  - AI Agents: ai-agents.md
   - Debugger: debugger.md
   - Development: development.md
   - Windows Store: windows-store.md
