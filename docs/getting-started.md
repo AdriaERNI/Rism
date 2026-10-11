@@ -4,7 +4,8 @@
 
 - A reachable **InterSystems IRIS** (or HealthShare/IRIS for Health) instance with the
   Atelier API enabled. Rism's CI smoke-tests against **IRIS Community 2025.3**;
-  any version exposing `/api/atelier/` v1–v4 works.
+  Rism auto-negotiates whatever numeric `api` the server advertises (a live
+  2025.3 probe answers v8), but only the v1–v4 range is behavior-tested.
 - Credentials for an account with `%All` or at least Studio/Atelier web-service
   permissions (`%Service_Studio`, `%Service_CSP`).
 
@@ -127,7 +128,9 @@ rism mcp --transport http --port 3000   # 127.0.0.1:3000/mcp — no auth on this
 Works with Claude Desktop/Cursor and other clients that speak streamable-HTTP.
 The server keeps IRIS credentials from its own environment (`RISM_IRIS_*`) or
 config file — on Windows that is `%APPDATA%\rism\config.toml`, on Linux
-`~/.config/rism/config.toml` ([Configuration](configuration.md)).
+`~/.config/rism/config.toml` ([Configuration](configuration.md)). Per-client
+config file locations, the security posture of the HTTP door, and what agents
+see in `tools/list` are covered in [AI Agents](ai-agents.md).
 
 ## Where to go next
 
