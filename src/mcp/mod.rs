@@ -137,7 +137,7 @@ impl RismMcp {
     }
 
     #[tool(
-        description = "Execute an ObjectScript command in the IRIS terminal (WebSocket). For method calls, globals, system utilities — anything ObjectScript. For long-running work (loops, imports, batch methods) pass background=true: the call answers with a task handle (taskId) instead of blocking; poll it with tasks/get and stop it with tasks/cancel (real server-side interrupt).",
+        description = "Execute an ObjectScript command in the IRIS terminal (WebSocket). For method calls, globals, system utilities — anything ObjectScript. For long-running work pass background=true (see server instructions).",
         annotations(
             title = "Run ObjectScript",
             destructive_hint = true,
@@ -557,9 +557,27 @@ impl ServerHandler for RismMcp {
             env!("CARGO_PKG_VERSION"),
         ))
         .with_instructions(
-            "IRIS development tools via the Atelier API: SQL, documents, compilation. \
-             Long-running terminal work: execute_command with background=true returns a \
-             task handle; poll tasks/get, stop tasks/cancel.",
+            // Wire-visible model briefing (< 2048 chars — some clients
+            // truncate). Every tool name must match the #[tool] fns exactly;
+            // the prose is hints, not enforcement. Mission-D ledger row M15.
+            "Rism: 25 tools for InterSystems IRIS via the Atelier API. What for: SQL \
+             (execute_sql); documents (list_documents, get_document, put_document, \
+             put_and_compile, compile_documents, delete_document); terminal \
+             (execute_command); %UnitTest (list_tests, run_tests, get_test_results); \
+             server info (get_server_info); metrics (monitor_system); local host files \
+             (read_file, list_files, run_shell - act on Rism's machine, not IRIS); DBGP \
+             debugging (debug_list_processes, debug_start, debug_attach, debug_step, \
+             debug_stack, debug_variables, debug_inspect, debug_breakpoints, \
+             debug_stop). Order: get_server_info first to confirm connectivity; doc \
+             work is list -> get -> edit -> put_and_compile (compile errors come back \
+             on the same call); failing test -> debug_start with stop_on_entry, then \
+             stack/variables/inspect, always debug_stop. Long work: execute_command \
+             background=true -> taskId; poll tasks/get, stop tasks/cancel. Constraints: \
+             SQL returns <= max_rows (default 1000, truncated flag); terminal output \
+             bounded (default 100000 chars/command); <= 16 concurrent background tasks, \
+             results kept 30 min; timeouts clamp to 7 days; debug_* may be disabled \
+             server-side; writes fail on conflict unless ignore_conflict=true; the HTTP \
+             door has no authentication - trusted networks only.",
         )
     }
 
