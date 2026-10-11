@@ -24,6 +24,8 @@ jobs:
           python-version: "3.12"
       - name: Install mkdocs
         run: pip install "mkdocs-material>=9.5"
+      - name: Generate llms.txt / llms-full.txt (site root, deterministic)
+        run: python scripts/gen-llms.py
       - name: Build (strict — broken links / bad nav fail the job)
         run: mkdocs build --strict
       - uses: actions/upload-pages-artifact@v4

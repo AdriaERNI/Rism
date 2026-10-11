@@ -1,6 +1,6 @@
 [package]
 name = "rism"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 description = "Rust MCP server and CLI for InterSystems IRIS development"
 license = "AGPL-3.0"
@@ -12,10 +12,13 @@ name = "rism"
 path = "src/lib.rs"
 
 [dependencies]
+rustyline = { version = "18", default-features = false, features = ["with-dirs", "with-file-history", "custom-bindings"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "process", "time", "io-util", "io-std", "fs", "signal"] }
 clap = { version = "4", features = ["derive", "env"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "cookies"] }
-rmcp = { version = "3.4", features = ["server", "transport-io"] }
+rmcp = { version = "3.4", features = ["server", "transport-io", "transport-streamable-http-server"] }
+axum = "0.8"
+tokio-util = "0.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 schemars = "1"
@@ -31,6 +34,7 @@ glob = "0.3"
 toml = "0.9"
 base64 = "0.22"
 xmltree = "0.10"
+rand = "0.9"
 
 [dev-dependencies]
 assert_cmd = "2"

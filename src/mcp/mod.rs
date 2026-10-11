@@ -2,9 +2,15 @@
 //! plus the result mapping — zero logic here (rust-bestpractices.md §3.2).
 //! NOTE: this module is part of the lib crate — use `crate::`, never `rism::`.
 
+pub mod http;
+pub mod tasks;
+
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, ContentBlock};
+use rmcp::model::{
+    CallToolResult, CancelTaskParams, ContentBlock, GetTaskParams, GetTaskResult,
+    ServerCapabilities, ServerConfig, UpdateTaskParams,
+};
 use rmcp::{ServerHandler, ServiceExt, tool, tool_handler, tool_router};
 
 use crate::iris::IrisClient;
@@ -24,6 +30,7 @@ use crate::tools::documents::{
 use crate::tools::host::{
     ListFilesArgs, ReadFileArgs, RunShellArgs, list_files, read_file, run_shell,
 };
+use crate::tools::jobs;
 use crate::tools::monitor::{MonitorArgs, monitor_system};
 use crate::tools::serverinfo::{GetServerInfoArgs, get_server_info};
 use crate::tools::sql::{ExecuteSqlArgs, execute_sql};
@@ -130,7 +137,12 @@ impl RismMcp {
     }
 
     #[tool(
-        description = "Execute an ObjectScript command in the IRIS terminal (WebSocket). For method calls, globals, system utilities — anything ObjectScript."
+        description = "Execute an ObjectScript command in the IRIS terminal (WebSocket). For method calls, globals, system utilities — anything ObjectScript. For long-running work pass background=true (see server instructions).",
+        annotations(
+            title = "Run ObjectScript",
+            destructive_hint = true,
+            idempotent_hint = false
+        )
     )]
     async fn execute_command(
         &self,
@@ -315,36 +327,172 @@ fn map_json<T: serde::Serialize>(res: crate::Result<T>) -> CallToolResult {
     }
 }
 
-#[tool_handler(router = self.tool_router, name = "rism", version = "0.1.0",
-    instructions = "IRIS development tools via the Atelier API: SQL, documents, compilation.")]
+/// Prism-parity REQUEST banner (log.py `logged_tool`): logged at the TOP of
+/// `call_tool` for EVERY path, before capability/task-mode branches return.
+fn log_request(name: &str, arguments: Option<&rmcp::model::JsonObject>) {
+    if tracing::enabled!(tracing::Level::DEBUG) {
+        let params = arguments.map_or_else(
+            || serde_json::json!({}),
+            |obj| serde_json::Value::Object(obj.clone().into_iter().collect()),
+        );
+        tracing::debug!(
+            "\n{}\n{}",
+            crate::logfmt::request_banner(name),
+            crate::logfmt::pretty(&crate::logfmt::truncate_params(&params))
+        );
+    }
+}
+
+/// Prism-parity RESPONSE banner for a plain-text result (refusals returning
+/// early — the router tail never runs for them).
+fn log_response_text(name: &str, text: &str) {
+    log_response_json(name, &crate::logfmt::response_value(text));
+}
+
+/// Prism-parity RESPONSE banner for a structured result (task handles).
+fn log_response_json<T: serde::Serialize>(name: &str, value: &T) {
+    if tracing::enabled!(tracing::Level::DEBUG) {
+        let v = serde_json::to_value(value).unwrap_or(serde_json::Value::Null);
+        tracing::debug!(
+            "\n{}\n{}",
+            crate::logfmt::response_banner(name),
+            crate::logfmt::pretty(&crate::logfmt::truncate_result(&v))
+        );
+    }
+}
+
+/// -32021 for tasks/* calls whose session predates the extension
+/// mechanism — same shape rmcp itself returns for missing caps.
+fn missing_tasks_capability() -> rmcp::ErrorData {
+    rmcp::ErrorData::missing_required_client_capability(
+        rmcp::model::ClientCapabilities::builder()
+            .enable_tasks()
+            .build(),
+    )
+}
+
+/// First protocol version under which the Tasks extension (SEP-2663) is
+/// defined: 2026-06-30, the first release with the extension mechanism
+/// (SEP-2133). Under 2025-11-25 the extension table is explicit — a
+/// declared `io.modelcontextprotocol/tasks` key MUST be ignored (that
+/// version has a DIFFERENT, not-wire-compatible tasks spec). rmcp 3.4.1
+/// knows no `V_2026_06_30` constant, so compare the ISO-date strings
+/// (every protocolVersion is `YYYY-MM-DD`, lexicographic == chronological).
+pub(crate) const TASKS_MIN_PROTOCOL: &str = "2026-06-30";
+
+/// SEP-2663 task gate: client declared the extension AND the negotiated
+/// protocol version defines extensions. Use in `call_tool` (task mode) and
+/// in the `tasks/*` handlers — rmcp's own dispatch validates only the
+/// capability, so the version clause is ours to enforce.
+pub(crate) fn tasks_supported(context: &rmcp::service::RequestContext<rmcp::RoleServer>) -> bool {
+    context
+        .client_capabilities()
+        .is_some_and(|caps| caps.supports_tasks())
+        && context
+            .protocol_version()
+            .is_some_and(|v| v.as_str() >= TASKS_MIN_PROTOCOL)
+}
+
+#[tool_handler(router = self.tool_router)]
+#[allow(
+    // three instant-resolving trait impls (registry reads + pure mapping);
+    // yield_now boilerplate is noise and method-level allow is ignored by
+    // CI's 1.99 (module/impl-level is what works). The lint is `unused_async`
+    // on stable; 1.99 nightlies renamed it to `unused_async_trait_impl` —
+    // silence both names, `unknown_lints` keeps the inactive one quiet.
+    unknown_lints,
+    clippy::unused_async,
+    clippy::unused_async_trait_impl
+)]
 impl ServerHandler for RismMcp {
     /// Prism-parity request/response logging (log.py): every tool call is
-    /// logged to stderr at DEBUG with truncation. Debug tools are gated off
-    /// when `debug_tools_enabled` is false (attach pauses live jobs — Prism
-    /// hides the whole module in that case).
+    /// logged to stderr at DEBUG with truncation — REQUEST at entry (so
+    /// refusals and early returns are never silent) and RESPONSE wherever a
+    /// result exists to log. Debug tools are gated off when
+    /// `debug_tools_enabled` is false (attach pauses live jobs — Prism hides
+    /// the whole module in that case).
     async fn call_tool(
         &self,
         request: rmcp::model::CallToolRequestParams,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> std::result::Result<rmcp::model::CallToolResponse, rmcp::ErrorData> {
         let name = request.name.to_string();
+        // Hoisted: log the REQUEST before ANY branch (capability refusals,
+        // task-mode early returns included) so "every call is logged" holds
+        // for every path through this function.
+        log_request(&name, request.arguments.as_ref());
         if name.starts_with("debug_") && !self.client.settings().debug_tools_enabled {
+            let text = "debugger tools are disabled (set RISM_DEBUG_TOOLS=1 to enable)";
+            log_response_text(&name, text);
             return Ok(rmcp::model::CallToolResponse::Complete(
-                CallToolResult::error(vec![ContentBlock::text(
-                    "debugger tools are disabled (set RISM_DEBUG_TOOLS=1 to enable)",
-                )]),
+                CallToolResult::error(vec![ContentBlock::text(text)]),
             ));
         }
-        if tracing::enabled!(tracing::Level::DEBUG) {
-            let params = request.arguments.as_ref().map_or_else(
-                || serde_json::json!({}),
-                |obj| serde_json::Value::Object(obj.clone().into_iter().collect()),
-            );
-            tracing::debug!(
-                "\n{}\n{}",
-                crate::logfmt::request_banner(&name),
-                crate::logfmt::pretty(&crate::logfmt::truncate_params(&params))
-            );
+        // SEP-2663 task mode: a Tasks-capable client asking for background
+        // execution gets a task handle instead of a blocking call. The gate
+        // lives here (not in the tool body) because tool fns cannot see the
+        // request context; rmcp's dispatch additionally rejects Task
+        // responses to non-declaring clients with -32021, so this is exact.
+        if name == "execute_command"
+            && request.arguments.as_ref().is_some_and(|a| {
+                a.get("background")
+                    .is_some_and(|b| b == &serde_json::Value::Bool(true))
+            })
+        {
+            let declared = tasks_supported(&context);
+            if !declared {
+                // Rail A first, before ANY parsing: the honest guidance
+                // must reach a non-declaring client even if the payload
+                // would also fail schema validation. "Declaring" includes
+                // the protocol version: under < 2026-06-30 the extension
+                // key MUST be treated as if absent (SEP-2663 compat table).
+                let text = "background=true requires the Tasks extension (the client must \
+                            declare io.modelcontextprotocol/tasks in its capabilities — \
+                            initialize or per-request _meta — under protocol version \
+                            2026-06-30 or later); this client did not, so run the command \
+                            synchronously with a safe timeout_secs instead";
+                log_response_text(&name, text);
+                return Ok(rmcp::model::CallToolResponse::Complete(
+                    CallToolResult::error(vec![ContentBlock::text(text)]),
+                ));
+            }
+            let args: ExecuteCommandArgs = serde_json::from_value(serde_json::Value::Object(
+                request
+                    .arguments
+                    .clone()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .collect(),
+            ))
+            .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
+            {
+                // Wall-clock cap floor for background jobs: a task is
+                // detached precisely because it outlives sync timeouts, so
+                // the short sync default would be wrong here. An explicit
+                // 0 means "use the default" (a 0-duration timeout would
+                // kill the task instantly with a misleading error — issue
+                // #16 F3). Clamped to MAX_TIMEOUT_SECS: an absurd value
+                // overflowed the deadline arithmetic and hung the task
+                // silently. Documented in docs/mcp-tools.md (Background
+                // execution section).
+                let timeout = std::time::Duration::from_secs(crate::tools::clamp_timeout_secs(
+                    args.timeout_secs
+                        .filter(|n| *n > 0)
+                        .unwrap_or(self.client.settings().timeout_secs.max(3600)),
+                ));
+                let info = jobs::start(
+                    &self.client,
+                    args.namespace.clone(),
+                    args.command.clone(),
+                    timeout,
+                )
+                .map_err(|e| {
+                    rmcp::ErrorData::internal_error(format!("failed to create task: {e}"), None)
+                })?;
+                let seed = tasks::create_task(&info);
+                log_response_json(&name, &seed);
+                return Ok(rmcp::model::CallToolResponse::Task(seed));
+            }
         }
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
         let res = self.tool_router.call(tcc).await;
@@ -360,13 +508,7 @@ impl ServerHandler for RismMcp {
                     .unwrap_or_default(),
                 _ => String::new(),
             };
-            let value = serde_json::from_str::<serde_json::Value>(&text)
-                .unwrap_or_else(|_| serde_json::json!(&text));
-            tracing::debug!(
-                "\n{}\n{}",
-                crate::logfmt::response_banner(&name),
-                crate::logfmt::pretty(&crate::logfmt::truncate_result(&value))
-            );
+            log_response_text(&name, &text);
         }
         res
     }
@@ -399,14 +541,103 @@ impl ServerHandler for RismMcp {
         }
         Ok(res)
     }
+
+    /// Advertise tools + the SEP-2663 Tasks extension (this replaces the
+    /// macro-generated version — keep `enable_tasks()` in sync with the
+    /// `background=true` gate in `call_tool`).
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_tasks()
+                .build(),
+        )
+        .with_server_info(rmcp::model::Implementation::new(
+            "rism",
+            env!("CARGO_PKG_VERSION"),
+        ))
+        .with_instructions(
+            // Wire-visible model briefing (< 2048 chars — some clients
+            // truncate). Every tool name must match the #[tool] fns exactly;
+            // the prose is hints, not enforcement. Mission-D ledger row M15.
+            "Rism: 25 tools for InterSystems IRIS via the Atelier API. What for: SQL \
+             (execute_sql); documents (list_documents, get_document, put_document, \
+             put_and_compile, compile_documents, delete_document); terminal \
+             (execute_command); %UnitTest (list_tests, run_tests, get_test_results); \
+             server info (get_server_info); metrics (monitor_system); local host files \
+             (read_file, list_files, run_shell - act on Rism's machine, not IRIS); DBGP \
+             debugging (debug_list_processes, debug_start, debug_attach, debug_step, \
+             debug_stack, debug_variables, debug_inspect, debug_breakpoints, \
+             debug_stop). Order: get_server_info first to confirm connectivity; doc \
+             work is list -> get -> edit -> put_and_compile (compile errors come back \
+             on the same call); failing test -> debug_start with stop_on_entry, then \
+             stack/variables/inspect, always debug_stop. Long work: execute_command \
+             background=true -> taskId; poll tasks/get, stop tasks/cancel. Constraints: \
+             SQL returns <= max_rows (default 1000, truncated flag); terminal output \
+             bounded (default 100000 chars/command); <= 16 concurrent background tasks, \
+             results kept 30 min; timeouts clamp to 7 days; debug_* may be disabled \
+             server-side; writes fail on conflict unless ignore_conflict=true; the HTTP \
+             door has no authentication - trusted networks only.",
+        )
+    }
+
+    /// SEP-2663 `tasks/get`: the registry snapshot projected to a task.
+    /// Dispatch-level capability validation already rejected non-declaring
+    /// clients; unknown/GC'd ids are a clean JSON-RPC error. The version
+    /// clause of the declaration gate is ours — rmcp validates the
+    /// capability only, so under < 2026-06-30 we must answer here (SEP-2663
+    /// compat table: the extension key is inert on older versions).
+    async fn get_task(
+        &self,
+        request: GetTaskParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> std::result::Result<GetTaskResult, rmcp::ErrorData> {
+        if !tasks_supported(&context) {
+            return Err(missing_tasks_capability());
+        }
+        let info =
+            jobs::status(&request.task_id).map_err(|e| tasks::task_error(&e, &request.task_id))?;
+        Ok(GetTaskResult::new(tasks::detailed_task(&info)))
+    }
+
+    /// SEP-2663 `tasks/cancel`: cooperative — trip the flag whose next
+    /// frame poll sends the protocol interrupt. The observable status
+    /// flips to `cancelled` on the next `tasks/get` (spec allows lag).
+    async fn cancel_task(
+        &self,
+        request: CancelTaskParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> std::result::Result<(), rmcp::ErrorData> {
+        if !tasks_supported(&context) {
+            return Err(missing_tasks_capability());
+        }
+        jobs::cancel(&request.task_id).map_err(|e| tasks::task_error(&e, &request.task_id))?;
+        Ok(())
+    }
+
+    /// SEP-2663 `tasks/update`: rism tasks never request input (a terminal
+    /// `read` during a background job is auto-answered), so there are no
+    /// outstanding input requests to deliver.
+    async fn update_task(
+        &self,
+        request: UpdateTaskParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> std::result::Result<(), rmcp::ErrorData> {
+        let _ = request;
+        if !tasks_supported(&context) {
+            return Err(missing_tasks_capability());
+        }
+        Err(rmcp::ErrorData::invalid_request(
+            "rism tasks never request input; tasks/update is not used",
+            None,
+        ))
+    }
 }
 
-/// Serve the MCP over stdio until the client disconnects.
-///
-/// # Errors
-/// Transport/handshake errors.
-pub async fn serve(settings: Settings) -> anyhow::Result<()> {
-    // stdout is the JSON-RPC channel: logs go to stderr, always (mcp.md §8.1).
+/// stderr-only tracing for BOTH MCP doors: stdout is protocol payload
+/// (JSON-RPC on stdio, empty on http), so logs NEVER go there (mcp.md §8.1).
+/// `RUST_LOG` wins; default level is `info` on the server doors.
+pub(crate) fn init_logging_stderr() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -415,6 +646,15 @@ pub async fn serve(settings: Settings) -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .with_ansi(false)
         .init();
+}
+
+/// Serve the MCP over stdio until the client disconnects.
+///
+/// # Errors
+/// Transport/handshake errors.
+pub async fn serve(settings: Settings) -> anyhow::Result<()> {
+    // stdout is the JSON-RPC channel: logs go to stderr, always (mcp.md §8.1).
+    init_logging_stderr();
 
     let server = RismMcp::new(settings).await?;
     let service = server

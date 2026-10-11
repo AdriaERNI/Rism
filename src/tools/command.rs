@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::Result;
 use crate::iris::IrisClient;
 use crate::iris::terminal as api;
+use crate::tools::clamp_timeout_secs;
 
 /// Arguments for [`execute_command`].
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -17,8 +18,18 @@ pub struct ExecuteCommandArgs {
     pub command: String,
     /// Target namespace (defaults to configured namespace)
     pub namespace: Option<String>,
-    /// Timeout in seconds (default: `timeout_secs` from settings)
+    /// Timeout in seconds (default: `timeout_secs` from settings; clamped
+    /// to 7 days). `0` means immediate timeout here — on the background
+    /// door it means "use the default".
     pub timeout_secs: Option<u64>,
+    /// Start the command as a background MCP task (`tasks/get` polling) and
+    /// return its `taskId` immediately instead of blocking until it finishes.
+    /// Requires the client to have negotiated the Tasks extension; requests
+    /// from other clients are rejected with an error. For long-running work
+    /// (loops, imports, batch methods) that would outlive synchronous request
+    /// timeouts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<bool>,
 }
 
 /// Command result.
@@ -51,7 +62,9 @@ pub async fn execute_command(
         .namespace
         .clone()
         .unwrap_or_else(|| client.settings().iris_namespace.clone());
-    let timeout = Duration::from_secs(args.timeout_secs.unwrap_or(client.settings().timeout_secs));
+    let timeout = Duration::from_secs(clamp_timeout_secs(
+        args.timeout_secs.unwrap_or(client.settings().timeout_secs),
+    ));
     let out = api::execute(client, &ns, &args.command, timeout).await?;
     Ok(CommandResult {
         namespace: ns,

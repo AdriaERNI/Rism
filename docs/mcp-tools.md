@@ -1,9 +1,16 @@
 # MCP Tools
 
-Rism serves **25 tools** over JSON-RPC 2.0 / stdio (`rism mcp`). Parameters marked
-`*` are required. All tools accept an optional `namespace` (override the configured
-default) unless noted. Every tool's behavior is identical to the CLI path — same
-core, two doors.
+Rism serves **25 tools** over JSON-RPC 2.0 on two doors (`rism mcp`):
+**stdio** (default) and **streamable-HTTP** (`rism mcp --transport http`,
+at `/mcp`). Parameters marked
+`*` are required. Namespace-scoped tools accept an optional `namespace`
+(override the configured default) unless noted — `get_server_info` and the
+host tools (`run_shell`, `read_file`, `list_files`) take none. Every tool's behavior is identical to the CLI path — same
+core, two doors. One documented exception: document writes enforce conflicts by
+default on the MCP door (`ignore_conflict: false`), while the CLI defaults to
+ignoring them — pass `ignore_conflict: true` to match `rism doc put`'s behavior.
+The stricter default is deliberate: an agent cannot interactively resolve a
+clobbered server copy.
 
 Set `RISM_DEBUG_TOOLS=0` to remove the 9 `debug_*` tools from `tools/list`
 (attaching pauses live IRIS jobs; some deployments disable them).
@@ -41,17 +48,106 @@ CI-clean servers). Optional `flags`.
 
 ## SQL & terminal
 
+`execute_command` ships an MCP **annotation** (`title: "Run ObjectScript"`,
+`destructiveHint: true`, `idempotentHint: false`) so clients can show names
+and decide confirmation policy
+without guessing — ObjectScript can mutate data.
+Program/runtime errors (`<SYNTAX>`, `<NOROUTINE>`, `<INTERRUPT>`) come back
+as terminal **output** with a successful call, exactly as a real terminal
+echoes them — read `output`, not just `isError`.
+
 ### `execute_sql` — `query`*
 Optional `max_rows`.
 
 ### `execute_command` — `command`*
 ObjectScript command in a terminal session over the WebSocket. Optional
-`timeout_secs`.
+`timeout_secs` (clamped to 7 days — an oversized or absurd value never
+hangs; `0` means immediate timeout on this synchronous door, "use the
+default" on the background door). Commands containing `read` are answered
+with an empty line (nothing is typing); Ctrl+C semantics do not apply —
+use `timeout_secs`.
+
+#### Background execution (MCP Tasks)
+
+For long-running work (loops, batch methods, imports) that would blow a
+request timeout, pass `background: true`: instead of blocking, the call
+answers immediately with a **task handle** (`resultType: "task"`, a
+`taskId`, status `working`). This is the MCP Tasks extension
+(SEP-2663) — a protocol mechanism, not extra tools:
+
+- **Poll** with `tasks/get` (`taskId`): status (`working` → `completed` /
+  `cancelled` / `failed`) plus a `statusMessage` with the streamed byte
+  count while running (`lastUpdatedAt` reflects state changes, not streamed
+  frames, so it stays at `createdAt` while a task works). Finished output
+  is served in the `result` of a `completed` task — identical to what the
+  synchronous call would have returned (same terminal outcome object, so
+  frame joins and truncation markers match byte for byte).
+- **Stop** with `tasks/cancel` (`taskId`): sends the terminal protocol's
+  `interrupt` — a real server-side break: the ObjectScript child unwinds
+  with `<INTERRUPT>` within milliseconds and the partial state stays as
+  executed (same mechanism as the VS Code lite terminal's Ctrl+C).
+  Cancelling a finished task is a safe no-op: `tasks/cancel` acknowledges
+  (intent signal only); the `-32602` error is reserved for unknown/expired
+  ids.
+- Finished tasks are retained **30 minutes from completion** (`ttlMs` is
+  advertised from creation per SEP-2663, so the server may retain slightly
+  longer than the advertised value); after that the id is expired and
+  `tasks/get` answers with a clean error. Concretely: retention is measured
+  from completion, so a task that ran past the TTL window is retained
+  LONGER than `ttlMs` advertises — the server never discards a task earlier
+  than `createdAt + ttlMs` (the MUST half), and a running task is bounded
+  only by its own `timeout_secs` (≤ 7 days). A running task ends at its
+  `timeout_secs` wall-clock cap regardless — the background default is
+  1 hour (higher than the sync default; a task is detached precisely
+  because it outlives request timeouts). An explicit `timeout_secs: 0`
+  means "use the default", not an instant timeout; any other explicit
+  value skips the 1-hour floor. All values — explicit or default — are
+  clamped to 7 days (`MAX_TIMEOUT_SECS`), so an absurd `timeout_secs`
+  can never hang the server (issue #16). Up to 16 concurrent background
+  tasks; the 17th start is refused actionably.
+- `background=true` requires a client that declared the Tasks extension
+  (`io.modelcontextprotocol/tasks`) for a protocol version that defines it
+  — 2026-06-30 or later (SEP-2663). With the classic `initialize`
+  handshake the SDK in use negotiates at most 2025-11-25, under which the
+  extension key MUST be treated as absent; declare it per-request instead
+  (`_meta` with `io.modelcontextprotocol/protocolVersion: "2026-07-28"`
+  and the client capabilities — the SEP-2575 inline lifecycle).
+  Non-declaring clients get an honest tool-level error telling them to run
+  synchronously — never a silent timeout.
+- `tasks/update` always answers with a JSON-RPC error: rism tasks never
+  request input (a terminal `read` inside a background job is auto-answered
+  with an empty line), so there is no outstanding input request to deliver.
+- Task ids are unguessable by protocol MUST: shape `rism-{pid:hex}-{16 hex
+  random}` — never a sequence.
+
+## HTTP door wire contract
+
+The streamable-HTTP door (`rism mcp --transport http`) is plain HTTP at
+`/mcp`; harnesses can rely on this status matrix (pinned by
+`tests/http_door_status_matrix.rs`), evaluated in guard order
+(method → Accept/Content-Type → session → Origin/Host → body size):
+
+| Situation | Status |
+|---|---|
+| POST without `Accept: application/json, text/event-stream` | `406` |
+| GET/DELETE without `Mcp-Session-Id` | `400` |
+| POST/GET with an unknown session id | `404` |
+| DELETE with an unknown session id | `202` (idempotent terminate) |
+| PUT | `405` |
+| POST with a non-JSON `Content-Type` | `415` |
+| Body > 4 MiB | `413` (rmcp default cap) |
+| Present `Origin` not matching the door's own origin | `403` |
+
+Sessions are stateful (`Mcp-Session-Id` issued at `initialize`) and idle out
+after **300 s** keep-alive; a SIGTERM/Ctrl+C shuts the door down with a clean
+process exit. No authentication exists on this door — treat the bound address
+as the trust boundary ([CLI Reference](cli-reference.md) danger box).
 
 ## Unit tests
 
 ### `run_tests` — `test_class`*
-Via `%UnitTest.Manager`, no code uploaded. Optional `test_method`, `timeout_secs`.
+Via `%UnitTest.Manager`, no code uploaded. Optional `test_method`,
+`timeout_secs` (clamped to 7 days).
 
 ### `list_tests`
 Discover `%UnitTest` classes. `filter` is a **prefix** — `%` wildcards are rejected
@@ -84,15 +180,17 @@ detail. `include_raw_metrics` returns the raw vector too.
 
 ## Host file tools (agent-side)
 
-Operate on the machine **running Rism**, rooted at `workspace_root` /
-`RISM_WORKSPACE`. Path traversal outside the root is refused. Disabled when no
-root is configured.
+Operate on the machine **running Rism**. `read_file` / `list_files` are
+rooted at `workspace_root` / `RISM_WORKSPACE`, refuse to run when no root is
+configured (they never default to `/`), and reject traversal outside the
+root. `run_shell` is not root-gated: it starts in the workspace root if set,
+otherwise the process working directory.
 
 | Tool | Params |
 |---|---|
 | `read_file` | `path`\* — text; binary detected and rejected |
 | `list_files` | `path`, `pattern` (glob), `max_results` |
-| `run_shell` | `command`\*, `cwd`, `timeout_secs` — `bash` on Unix, PowerShell on Windows |
+| `run_shell` | `command`\*, `cwd`, `timeout_secs` (default 30 s, clamped to [1, 3600]) — `bash` on Unix, PowerShell on Windows |
 
 ## Typical agent flows
 

@@ -93,6 +93,14 @@ jobs:
           $RISM_BIN sql "select Name from %Dictionary.ClassDefinition where Name='RismCI.Smoke'" | grep -q "RismCI.Smoke"
           $RISM_BIN exec 'write "smoke-ok"' | grep -q "smoke-ok"
 
+          # interactive REPL contract (piped stdin = same loop, no TTY):
+          # one session must carry state across lines — set, read back, kill.
+          printf 'set ^rismCiTmp="kept"\nwrite "state:",$g(^rismCiTmp),!\nkill ^rismCiTmp\n' \
+            | $RISM_BIN exec > /tmp/repl.out 2>/tmp/repl.err
+          grep -q "state:kept" /tmp/repl.out || { cat /tmp/repl.err; exit 1; }
+          # global really gone (cleanup verified through the same door)
+          $RISM_BIN exec 'write "gone:",$data(^rismCiTmp),!' | grep -q "gone:0"
+
           # unit-testing trio (tests our own uploaded class)
           cat > /tmp/ci/test.cls <<'EOF'
           Class RismCI.SmokeTest Extends %UnitTest.TestCase
@@ -119,6 +127,21 @@ jobs:
           $RISM_BIN doc delete RismCI.SmokeTest.cls
           $RISM_BIN doc delete RismCI.Smoke.cls
           echo "LIVE SMOKE OK"
+
+      # MCP-surface contracts (annotations, background lifecycle, cap,
+      # error hygiene) against the same fresh IRIS. #[ignore]d so local
+      # `cargo test` stays server-free; the binary under test is the one
+      # cargo builds for integration tests.
+      - name: Live MCP contracts
+        timeout-minutes: 5
+        run: cargo test --test background_jobs -- --ignored
+
+      # 25-tool contract matrix + issue-#16 fix proofs over the same
+      # live IRIS. #[ignore]d like background_jobs; spawns its own
+      # `rism mcp` stdio child per test.
+      - name: Live MCP tool matrix
+        timeout-minutes: 15
+        run: cargo test --test tool_matrix -- --ignored
 
   # Tagged builds: Linux + Windows (x64/i686/arm64) binaries + installer,
   # packaged by `release`.

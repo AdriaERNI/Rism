@@ -48,7 +48,7 @@ Remove: `sudo pacman -R rism`.
 |---|---|
 | `/usr/bin/rism` | the binary (statically linked — no runtime dependencies) |
 | `/usr/share/doc/rism/README.md`, `LICENSE` | docs + AGPL-3.0 text |
-| `~/.config/rism/config.toml` | **never touched by the package** — created by Rism at first use; survives uninstall (same policy as the Windows installer) |
+| `~/.config/rism/config.toml` | **never touched by the package** — the `rism/` config *directory* is created by Rism at first use (for the terminal history file); the `config.toml` itself is never written by the binary. Either way it survives uninstall (same policy as the Windows installer) |
 
 `postinst` checks for a running `rism` process and prints a restart
 reminder if the package was upgraded under a live MCP session — it never
@@ -61,7 +61,10 @@ install → upgrade → uninstall contract inside real `debian:12`,
 `ubuntu:24.04`, `fedora:42`, and `archlinux:latest` containers, plus a
 **functional smoke** — the *installed* binary against a live IRIS 2025.3
 service container (`rism info` / SQL / doc put+compile+get / terminal / the
-MCP stdio door via `packaging/mcp_probe.sh`) — and a config-preservation
+MCP doors — stdio and streamable-HTTP — via `packaging/mcp_probe.sh`, whose
+HTTP leg parses the ready line from a `--port 0` bind, counts 25 tools over
+a session, makes one call, and asserts a clean SIGTERM exit) — and a
+config-preservation
 probe, on every change to `packaging/**` or the pipelines — the same gate
 philosophy as [Windows installer contract](windows-store.md). Package *contents* are
 asserted against the package listing (`dpkg-deb -c` / `rpm -qlp` /

@@ -84,6 +84,15 @@ pub fn truncate_result(result: &Value) -> Value {
     Value::Object(out)
 }
 
+/// Response-payload value for logging: parse a content-text blob as JSON,
+/// falling back to the raw string (`map_json` payloads are JSON text; refusal
+/// guidance is plain prose). One source of truth shared by the router tail
+/// and the early-return branches in `mcp::call_tool`.
+#[must_use]
+pub fn response_value(text: &str) -> Value {
+    serde_json::from_str::<Value>(text).unwrap_or_else(|_| json!(text))
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::missing_panics_doc)]
 mod tests {
@@ -121,6 +130,13 @@ mod tests {
         // no content untouched
         let other = json!({"command": "write 1"});
         assert_eq!(truncate_params(&other), other);
+    }
+
+    #[test]
+    fn response_value_parses_json_falls_back_to_text() {
+        assert_eq!(response_value(r#"{"a":1}"#), json!({"a": 1}));
+        assert_eq!(response_value("plain prose"), json!("plain prose"));
+        assert_eq!(response_value(""), json!(""));
     }
 
     #[test]

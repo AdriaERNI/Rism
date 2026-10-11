@@ -55,7 +55,8 @@ debug_stop      { "session_id": "1" }
   otherwise.
 - `context_get` **crashes the agent** unless `stack_get`/`feature_set` ran first;
   Rism always establishes the stack before reading variables.
-- Connects are retried (4×) against transient `#6713` session-slot races.
+- Connects are retried (4×) against transient session-slot races (IRIS
+  errors 998 / 6709, "not stopped yet").
 - `xmltree` owns the parsed reply, so extracted values outlive the parse call.
 
 ## Caveats
