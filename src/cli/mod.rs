@@ -201,7 +201,7 @@ pub enum GraphCommands {
     Subclasses {
         /// Class name
         class: String,
-        /// Max BFS levels (default: settings graph_depth)
+        /// Max BFS levels (default: settings `graph_depth`)
         #[arg(long)]
         depth: Option<u32>,
     },
@@ -223,13 +223,13 @@ pub enum GraphCommands {
         /// Which direction(s)
         #[arg(long, value_parser = parse_direction_arg, default_value = "both")]
         direction: DirectionArg,
-        /// Max BFS levels for used_by (default 1)
+        /// Max BFS levels for `used_by` (default 1)
         #[arg(long)]
         depth: Option<u32>,
     },
 }
 
-/// `--kind` parser: accepts the frozen snake_case strings (§4) plus
+/// `--kind` parser: accepts the frozen `snake_case` strings (§4) plus
 /// clap's kebab derivations, so `depends_on`/`depends-on` both work.
 fn parse_kind_arg(s: &str) -> std::result::Result<KindArg, String> {
     match s.replace('-', "_").as_str() {
@@ -267,7 +267,7 @@ pub enum KindArg {
     Properties,
     /// Parameters only
     Parameters,
-    /// XData block names only
+    /// `XData` block names only
     Xdata,
 }
 
@@ -470,6 +470,16 @@ impl Commands {
         }
     }
 
+    /// Search/graph commands as one [`CodeCall`] for main dispatch.
+    #[must_use]
+    pub fn to_code(&self, ns_override: &Option<String>) -> Option<CodeCall> {
+        match self {
+            Self::Search { .. } => self.to_search(ns_override).map(CodeCall::Search),
+            Self::Graph(_) => self.to_graph(ns_override).map(CodeCall::Graph),
+            _ => None,
+        }
+    }
+
     /// Shared args for the graph tools, or None when the command isn't
     /// `graph`. The three graph entry points share no args struct, so this
     /// hands back the enum of conversions for main dispatch.
@@ -600,6 +610,15 @@ impl Commands {
             | Self::Ls { .. } => None,
         }
     }
+}
+
+/// A dispatched search/graph call.
+#[derive(Debug)]
+pub enum CodeCall {
+    /// search
+    Search(SearchCodeArgs),
+    /// graph family
+    Graph(GraphCall),
 }
 
 /// A dispatched graph call.

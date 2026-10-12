@@ -375,7 +375,7 @@ mod tests {
     }
 
     /// U16 — search/graph settings defaults + the env parse path (pure-fn
-    /// form, mirrors the terminal_max_output_chars test above).
+    /// form, mirrors the `terminal_max_output_chars` test above).
     #[test]
     fn settings_search_graph_defaults_and_env() {
         let s = Settings::default();

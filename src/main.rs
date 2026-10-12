@@ -7,7 +7,8 @@ use anyhow::{Context, Result};
 use clap::Parser;
 
 use rism::cli::{
-    Cli, Commands, DebugCommands, DocCall, GraphCall, McpConfig, OutputFormat, TestCommands, render,
+    Cli, CodeCall, Commands, DebugCommands, DocCall, GraphCall, McpConfig, OutputFormat,
+    TestCommands, render,
 };
 use rism::iris::IrisClient;
 use rism::settings::{McpTransport, Settings};
@@ -120,21 +121,8 @@ async fn main() -> Result<()> {
         .await?;
         render::render_monitor(&res, cli.format);
     } else if dispatch_host(&client, &cli).await? {
-    } else if let Some(args) = cli.command.to_search(&cli.namespace) {
-        let res = search_code(&client, &args).await?;
-        render::render_search(&res, cli.format);
-    } else if let Some(call) = cli.command.to_graph(&cli.namespace) {
-        match call {
-            GraphCall::Subclasses { args } => {
-                render::render_subclasses(&find_subclasses(&client, &args).await?, cli.format);
-            }
-            GraphCall::Members { args } => {
-                render::render_members(&class_members(&client, &args).await?, cli.format);
-            }
-            GraphCall::Deps { args } => {
-                render::render_deps(&class_dependencies(&client, &args).await?, cli.format);
-            }
-        }
+    } else if let Some(call) = cli.command.to_code(&cli.namespace) {
+        dispatch_code(&client, call, cli.format).await?;
     } else if matches!(cli.command, Commands::Compile { .. }) {
         let Commands::Compile { names, flags } = &cli.command else {
             unreachable!("matched above")
@@ -217,6 +205,33 @@ async fn dispatch_host(client: &IrisClient, cli: &Cli) -> Result<bool> {
         _ => return Ok(false),
     }
     Ok(true)
+}
+
+/// `rism search` / `rism graph …` dispatch (kept out of `main` for the
+/// line-count lint).
+async fn dispatch_code(client: &IrisClient, call: CodeCall, format: OutputFormat) -> Result<()> {
+    match call {
+        CodeCall::Search(args) => {
+            render::render_search(&search_code(client, &args).await?, format);
+        }
+        CodeCall::Graph(g) => dispatch_graph(client, g, format).await?,
+    }
+    Ok(())
+}
+
+async fn dispatch_graph(client: &IrisClient, call: GraphCall, format: OutputFormat) -> Result<()> {
+    match call {
+        GraphCall::Subclasses { args } => {
+            render::render_subclasses(&find_subclasses(client, &args).await?, format);
+        }
+        GraphCall::Members { args } => {
+            render::render_members(&class_members(client, &args).await?, format);
+        }
+        GraphCall::Deps { args } => {
+            render::render_deps(&class_dependencies(client, &args).await?, format);
+        }
+    }
+    Ok(())
 }
 
 async fn dispatch_doc(client: &IrisClient, call: DocCall, format: OutputFormat) -> Result<()> {
