@@ -481,3 +481,140 @@ pub fn render_debug_attach(info: &DebugSessionInfo, format: OutputFormat) {
         },
     );
 }
+
+/// Render search hits: one row per match (`doc | member/line | text`)
+/// plus the tally/truncation footer (E_SPEC §4).
+pub fn render_search(res: &crate::tools::search::SearchResult, format: OutputFormat) {
+    render_json(
+        &serde_json::to_value(res).unwrap_or_default(),
+        format,
+        || {
+            println!("{:<44} {:<18} {}", "DOC", "MEMBER/LINE", "TEXT");
+            println!(
+                "{}",
+                "-".repeat(
+                    44 + 1
+                        + 18
+                        + 1
+                        + 60usize.min(
+                            res.results
+                                .iter()
+                                .map(|d| {
+                                    d.matches
+                                        .iter()
+                                        .map(|m| m.text.chars().count())
+                                        .max()
+                                        .unwrap_or(0)
+                                })
+                                .max()
+                                .unwrap_or(0)
+                        )
+                )
+            );
+            for doc in &res.results {
+                for m in &doc.matches {
+                    let who = match (&m.member, m.line, &m.label) {
+                        (Some(mb), _, _) => mb.clone(),
+                        (None, Some(l), _) => l.to_string(),
+                        (None, None, Some(lbl)) => lbl.clone(),
+                        (None, None, None) => "-".to_string(),
+                    };
+                    println!("{:<44} {:<18} {}", doc.doc, who, m.text.trim());
+                }
+            }
+            let tally = res.server_tally.clone().unwrap_or_else(|| {
+                format!("{} match/es in {} doc/s", res.match_count, res.doc_count)
+            });
+            let more = if res.truncated { " (truncated)" } else { "" };
+            println!("\n{tally}{more}");
+        },
+    );
+}
+
+/// Render `find_subclasses` output.
+pub fn render_subclasses(res: &crate::tools::graph::FindSubclassesResult, format: OutputFormat) {
+    render_json(
+        &serde_json::to_value(res).unwrap_or_default(),
+        format,
+        || {
+            println!("{:<44} {:<44} {}", "SUBCLASS", "SUPER", "LEVEL");
+            for n in &res.subclasses {
+                println!("{:<44} {:<44} {}", n.name, n.parent, n.level);
+            }
+            let more = if res.truncated { " (truncated)" } else { "" };
+            println!(
+                "\n{} subclass(es) of {} (depth {}){more}",
+                res.count, res.class, res.depth
+            );
+        },
+    );
+}
+
+/// Render `class_members` output.
+pub fn render_members(res: &crate::tools::graph::ClassMembersResult, format: OutputFormat) {
+    render_json(
+        &serde_json::to_value(res).unwrap_or_default(),
+        format,
+        || {
+            for m in &res.methods {
+                println!(
+                    "method    {:<32} {}{} {}",
+                    m.name,
+                    if m.class_method { "class " } else { "" },
+                    if m.sql_proc { "sql " } else { "" },
+                    m.formal_spec
+                );
+            }
+            for p in &res.properties {
+                println!("property  {:<32} {}{}", p.name, p.type_, p.collection);
+            }
+            for p in &res.parameters {
+                println!(
+                    "parameter {:<32} {}",
+                    p.name,
+                    p.type_.clone().unwrap_or_default()
+                );
+            }
+            for x in &res.xdata {
+                println!("xdata     {:<32}", x.name);
+            }
+            println!(
+                "\n{} method(s), {} property(ies), {} parameter(s), {} xdata in {}",
+                res.counts.methods,
+                res.counts.properties,
+                res.counts.parameters,
+                res.counts.xdata,
+                res.class
+            );
+        },
+    );
+}
+
+/// Render `class_dependencies` output.
+pub fn render_deps(res: &crate::tools::graph::ClassDependenciesResult, format: OutputFormat) {
+    render_json(
+        &serde_json::to_value(res).unwrap_or_default(),
+        format,
+        || {
+            if !res.depends_on.is_empty() {
+                println!("depends_on:");
+                for d in &res.depends_on {
+                    println!("  {:<44} ({}) level {}", d.name, d.kind, d.level);
+                }
+            }
+            if !res.used_by.is_empty() {
+                println!("used_by:");
+                for d in &res.used_by {
+                    println!("  {:<44} ({}) level {}", d.name, d.kind, d.level);
+                }
+            }
+            let more = if res.truncated { " (truncated)" } else { "" };
+            println!(
+                "\n{}: {} depends_on, {} used_by{more}",
+                res.class,
+                res.depends_on.len(),
+                res.used_by.len()
+            );
+        },
+    );
+}
