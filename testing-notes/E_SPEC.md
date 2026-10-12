@@ -19,7 +19,16 @@ doc-comment feeds both the MCP JSON schema and `clap` help. All four MCP
 stubs carry `annotations(title = ..., read_only_hint = true,
 destructive_hint = false)` — all four are pure reads; no endpoint other than
 the existing `action/search` GET and `action/query` POST is touched.
-Tool count 29 → 33 (README, docs/mcp-tools.md ×4 sections, mcp_probe count).
+Tool count: **verified live against the code: `src/mcp/mod.rs` has 25
+`#[tool]` fns** (TASK.md's "29→33" is the same arithmetic shifted by 4 —
+the issue text was written against a branch counting differently).
+This PR: 25 → 29 visible tools. Drift surface that must move 25→29:
+README.md ×2, docs/ai-agents.md ×2, docs/cli-reference.md ×2,
+docs/getting-started.md, docs/index.md ×3, docs/mcp-tools.md header, and
+`tests/http_door.rs`'s `assert_eq!(...count(), 25, "25 tools")` (+
+`http_door_stateless.rs` if it pins a number). docs/mcp-tools.md gets 4
+new `###` sections (its 13 sections are grouped per-family, so the
+section-count drift gate reads the new headings).
 
 ### search_code — `src/tools/search.rs::SearchCodeArgs`
 
@@ -545,4 +554,46 @@ the lane's run (regenerate, don't hand-copy).
 
 ## §7 Test matrix
 
-(to be filled)
+Unit — wiremock / pure, no server (runs in default `cargo test`):
+
+| # | name (file) | pins |
+|---|---|---|
+| U1 | `search_args_roundtrip_denies_unknown` (src/tools/search.rs) | §1 SearchCodeArgs serde: missing query → err; extra field → err; `documents` Vec default |
+| U2 | `graph_args_roundtrip_denies_unknown` (src/tools/graph.rs) | 3 graph structs; kind/direction enums snake_case wire values |
+| U3 | `search_url_encodes_query_and_masks` (tests/api.rs) | GET path `/{ns}/action/search`; query_param `query` == percent-encoded form of `a$b.*c?` (asserts urlencoding ran: `%24` present); `documents` == `*.cls%2C*.mac%2C*.int` when non-default masks |
+| U4 | `search_bools_omitted_or_zero_one` (tests/api.rs) | no `case`/`word` params present when None; `case=1`/`word=1` when Some(true); `sys=0&gen=0` emitted with defaults (explicit, per §2 table) |
+| U5 | `search_parses_result_array_tally_truncation` (tests/api.rs) | §2: console tally extracted; `truncated` true on "Maximum search limit reached"; false otherwise |
+| U6 | `search_line_int_string_label_normalize` (src/tools/search.rs unit) | `{"line":5}` → 5; `{"line":"9"}` → 9; `{"line":"Description+32"}` → line null + label set; match never dropped |
+| U7 | `search_empty_result_object_or_array` (tests/api.rs) | `result:{}` and `result:[]` and missing → 0 results, no error; `result:"str"` → InvalidEnvelope |
+| U8 | `subclasses_rejects_unsafe_class_before_http` (tests/api.rs, pattern :263) | `find_subclasses("Bobby'; DROP")` → Err(Config) AND mock.verify() shows ZERO requests |
+| U9 | `members_rejects_unsafe_class_before_http` | same for class_members |
+| U10 | `deps_rejects_unsafe_class_before_http` | same for class_dependencies |
+| U11 | `subclasses_sql_shape_contains_walk` (tests/api.rs) | intercepted POST body `query` == exactly `SELECT Name, Super FROM %Dictionary.ClassDefinition WHERE Super [ 'X' ORDER BY Name` (first level), multi-super row `Super="A,B"` filtered to child of B only (exactness) |
+| U12 | `members_sql_shape_origin_filter` (tests/api.rs) | `include_inherited=false` → body contains `AND Origin = 'X'`; true → absent; xdata query has no Origin |
+| U13 | `deps_parse_and_classify` (src/tools/graph.rs unit) | DependsOn raw `"Foo.Bar,main^Baz,Qux(1)"` → kinds class/routine/other; empty → [] |
+| U14 | `used_by_sql_shape_super_merge` (tests/api.rs) | body contains `DependsOn [ 'X' OR Super [ 'X'`; substring hit `Xyz` dropped by exact check |
+| U15 | `names_valid_class_name_moved` (src/tools/names.rs unit) | moved predicate keeps old acceptance set (copy testing.rs cases) |
+| U16 | `settings_search_graph_defaults_and_env` (src/settings.rs) | search_max_results=200, graph_depth=10; parse_env path (pure-fn form, mirrors terminal_max_output_chars test) |
+
+Integration — stdio MCP door + live IRIS (`#[ignore]`, `--ignored`, also
+added to tests/tool_matrix.rs case list — 4 new tools × ≥2 observable
+cases each go in the matrix harness):
+
+| # | name (file) | pins |
+|---|---|---|
+| L1 | `search_code_finds_inserted_marker` (tests/tool_matrix.rs) | put+compile `RismCI.Search<uniq>.cls` containing `RismCILiveMkr<uniq>`; search finds doc+member; delete in cleanup path — never assumes corpus (TASK rule) |
+| L2 | `search_code_cap_and_empty` | query matching >200 hits on system docs (regex `Quit`, sys=1, max default): `truncated==true`, `match_count<=200`; nonsense regex → 0 results no error |
+| L3 | `find_subclasses_live_chain` | create `RismCI.G1<uniq>` extends %RegisteredObject, `G2` extends G1, `G3` extends G2 (+ G4 extends G2,G3 multi-super): depth=1 → {G2}; depth=10 → {G2:1,G3:2,G4:2} exact |
+| L4 | `class_members_live` | own method/property/param on G1: inherited=false vs %RegisteredObject pollution absent; include_inherited=true ⊇ `New` |
+| L5 | `class_dependencies_live` | G2 depends_on ⊇ {G1} (Super edge); used_by(G1,depth=1) = {G2} |
+| L6 | `search_regex_and_case_flags_live` | case_sensitive true vs false differ on `zZ` literal in fixture; whole-word guard: query `Rism` doesn't hit `RismCI` word-bounded |
+| L7 | mcp_probe / drift gates | CI scripts: tool count 25→29 grep fixes (§1 verified; if coordinator's ledger says otherwise, ledger wins — names don't change); docs/mcp-tools.md gains 4 sections (drift gate); instructions-field budget re-counted live (rmcp listing) |
+
+Live `#[ignore]` set additions to `tests/tool_matrix.rs` are the permanent
+proof; the `--ignored` CI job (service container) must show the 4 new
+tools green. BENCH tests are NOT in cargo test — `bench/run_bench.py`
+manually/archived (spec §6) keeps wall-time out of CI.
+
+Regression guards: existing 29 tool tests untouched; wildcard-arm compile
+errors force CLI arms updated (belt); `cargo clippy -Dwarnings` incl. new
+modules docs (every pub item doc-commented — missing_docs is on).
