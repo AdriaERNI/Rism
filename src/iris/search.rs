@@ -1,5 +1,5 @@
 //! Code-search endpoint: `GET /{ns}/action/search` (Atelier text/regex
-//! search; params + response shapes verified live per E_SPEC §2 — the
+//! search; params + response shapes verified live per `E_SPEC` §2 — the
 //! result payload is a TOP-LEVEL `result[]` array, with a console tally
 //! line and `Maximum search limit reached` truncation notice).
 
@@ -9,7 +9,7 @@ use crate::error::{Error, Result};
 use crate::iris::http::{Envelope, IrisClient};
 
 /// Which wire knobs to send for one search. `None` means "omit the param"
-/// so the server default applies (E_SPEC §1: `case`/`word`/`regex` are
+/// so the server default applies (`E_SPEC` §1: `case`/`word`/`regex` are
 /// only sent when the caller set them; `sys`/`gen` ride explicit defaults
 /// from the tools layer).
 #[derive(Debug, Clone)]
@@ -44,7 +44,7 @@ fn bool_flag(v: Option<bool>) -> Option<&'static str> {
 /// # Errors
 /// Transport/envelope errors; HTTP 404 on a server without `action/search`
 /// surfaces as [`Error::HttpStatus`] (deliberately NOT mapped to
-/// DocNotFound — E_SPEC §2).
+/// `DocNotFound` — `E_SPEC` §2).
 pub async fn search(client: &IrisClient, namespace: &str, p: &SearchParams) -> Result<Envelope> {
     let mut url = format!("{}/action/search", client.api_url(namespace));
     let mut qs: Vec<(String, String)> = vec![
@@ -92,7 +92,7 @@ pub async fn search(client: &IrisClient, namespace: &str, p: &SearchParams) -> R
 pub const TRUNCATION_MARKER: &str = "Maximum search limit reached";
 
 /// Normalize an `action/search` envelope into the tools-layer result
-/// (E_SPEC §2 rules 1-6). Pure so the unit tests can pin it directly.
+/// (`E_SPEC` §2 rules 1-6). Pure so the unit tests can pin it directly.
 ///
 /// `env.result` shapes accepted: top-level array (normal), `[]`, `{}` and
 /// absent/null (old-API-version empties, probe-verified) → zero results;
@@ -180,7 +180,7 @@ pub fn parse_search_result(
 
 /// One `matches[]` entry: `line` is int (class members) OR string (routine
 /// lines, probe); a non-numeric string moves to `label` with `line: null`
-/// (E_SPEC §2 rule 3 — degrade, never drop).
+/// (`E_SPEC` §2 rule 3 — degrade, never drop).
 fn normalize_match(m: &Value) -> crate::tools::search::SearchMatch {
     let (line, label) = match m.get("line") {
         None | Some(Value::Null) => (None, None),

@@ -2,7 +2,7 @@
 //! `find_subclasses`, `class_members`, `class_dependencies`. Framework-free
 //! (no rmcp/clap types). The endpoint has NO bind parameters, so every
 //! class name interpolated into SQL passes [`valid_class_name`] BEFORE any
-//! HTTP request is made — refusal means zero calls (E_SPEC §3).
+//! HTTP request is made — refusal means zero calls (`E_SPEC` §3).
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -13,7 +13,7 @@ use crate::iris::IrisClient;
 use crate::iris::sql as sqlapi;
 use crate::tools::names::{valid_class_name, valid_identifier};
 
-/// Query budget per tool call across a whole BFS walk (E_SPEC §3): more
+/// Query budget per tool call across a whole BFS walk (`E_SPEC` §3): more
 /// frontier queries than this sets `truncated` instead of fanning out.
 const FRONTIER_QUERY_BUDGET: usize = 256;
 
@@ -58,7 +58,7 @@ pub struct FindSubclassesArgs {
     pub class: String,
     /// Target namespace (defaults to configured namespace)
     pub namespace: Option<String>,
-    /// Max BFS levels (default: settings graph_depth; 0 is an error, >64 clamps)
+    /// Max BFS levels (default: settings `graph_depth`; 0 is an error, >64 clamps)
     pub depth: Option<u32>,
 }
 
@@ -139,7 +139,8 @@ pub async fn find_subclasses(
                 found.push(GraphNode {
                     name: name.to_string(),
                     parent: super_raw,
-                    level: u32::try_from(level).unwrap_or(u32::MAX),
+                    level,
+                    // (level is already u32)
                 });
             }
         }
@@ -177,7 +178,8 @@ pub enum MembersKind {
     Properties,
     /// Parameters only.
     Parameters,
-    /// XData blocks only (names — the stream data is never selected).
+    /// `XData` blocks only (names — the stream data is never selected).
+    #[serde(rename = "xdata")] // frozen wire string (§4: `xdata`, not `x_data`)
     XData,
 }
 
@@ -200,9 +202,9 @@ pub struct ClassMembersArgs {
 pub struct MemberMethod {
     /// Method name.
     pub name: String,
-    /// ClassMethod flag.
+    /// `ClassMethod` flag.
     pub class_method: bool,
-    /// SqlProc flag.
+    /// `SqlProc` flag.
     pub sql_proc: bool,
     /// Formal spec string.
     pub formal_spec: String,
@@ -236,10 +238,10 @@ pub struct MemberParameter {
     pub origin: String,
 }
 
-/// One XData block (name only — its stream is never queried, issue #17).
+/// One `XData` block (name only — its stream is never queried, issue #17).
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct MemberXData {
-    /// XData block name.
+    /// `XData` block name.
     pub name: String,
 }
 
@@ -252,7 +254,7 @@ pub struct MemberCounts {
     pub properties: usize,
     /// Parameters returned.
     pub parameters: usize,
-    /// XData blocks returned.
+    /// `XData` blocks returned.
     pub xdata: usize,
 }
 
@@ -273,7 +275,7 @@ pub struct ClassMembersResult {
     pub properties: Vec<MemberProperty>,
     /// Parameters (empty when not requested).
     pub parameters: Vec<MemberParameter>,
-    /// XData names (empty when not requested).
+    /// `XData` names (empty when not requested).
     pub xdata: Vec<MemberXData>,
 }
 
@@ -409,7 +411,7 @@ pub struct ClassDependenciesArgs {
     pub namespace: Option<String>,
     /// Which direction to walk (default both)
     pub direction: Option<DependencyDirection>,
-    /// Max BFS levels for used_by (default 1; >64 clamps)
+    /// Max BFS levels for `used_by` (default 1; >64 clamps)
     pub depth: Option<u32>,
 }
 
@@ -418,9 +420,9 @@ pub struct ClassDependenciesArgs {
 pub struct DependencyNode {
     /// Dependency name as written (class, routine, or raw token).
     pub name: String,
-    /// `"class"` | `"routine"` | `"other"` (heuristic, E_SPEC §3).
+    /// `"class"` | `"routine"` | `"other"` (heuristic, `E_SPEC` §3).
     pub kind: String,
-    /// BFS level (1 for depends_on, which is always 1-hop).
+    /// BFS level (1 for `depends_on`, which is always 1-hop).
     pub level: u32,
 }
 
@@ -431,11 +433,11 @@ pub struct ClassDependenciesResult {
     pub class: String,
     /// Effective direction (`"both" | "depends_on" | "used_by"`).
     pub direction: String,
-    /// Effective used_by depth.
+    /// Effective `used_by` depth.
     pub depth: u32,
-    /// True when the used_by walk hit its frontier/query budget.
+    /// True when the `used_by` walk hit its frontier/query budget.
     pub truncated: bool,
-    /// 1-hop DependsOn field entries (empty when direction excludes it).
+    /// 1-hop `DependsOn` field entries (empty when direction excludes it).
     pub depends_on: Vec<DependencyNode>,
     /// Impact walk (empty when direction excludes it).
     pub used_by: Vec<DependencyNode>,
@@ -535,7 +537,7 @@ fn classify_depends_on(raw: &str) -> Vec<DependencyNode> {
     out
 }
 
-/// BFS over `DependsOn [ 'F' OR Super [ 'F'` (impact query, E_SPEC §3).
+/// BFS over `DependsOn [ 'F' OR Super [ 'F'` (impact query, `E_SPEC` §3).
 /// A Super edge counts as a dependency. Same exactness + budget rules as
 /// the subclass walk.
 async fn used_by_walk(
@@ -589,7 +591,8 @@ async fn used_by_walk(
                 found.push(DependencyNode {
                     name: name.to_string(),
                     kind: "class".to_string(),
-                    level: u32::try_from(level).unwrap_or(u32::MAX),
+                    level,
+                    // (level is already u32)
                 });
             }
         }
@@ -627,7 +630,7 @@ fn resolve_depth(arg: Option<u32>, default: u32) -> Result<u32> {
     match arg {
         Some(0) => Err(Error::Config("depth must be >= 1".to_string())),
         Some(d) => Ok(d.min(MAX_DEPTH)),
-        None => Ok(default.max(1).min(MAX_DEPTH)),
+        None => Ok(default.clamp(1, MAX_DEPTH)),
     }
 }
 
@@ -708,7 +711,7 @@ mod tests {
         );
     }
 
-    /// U13 — DependsOn split + classify.
+    /// U13 — `DependsOn` split + classify.
     #[test]
     fn deps_parse_and_classify() {
         let v = classify_depends_on("Foo.Bar,main^Baz,Qux(1)");
@@ -737,7 +740,7 @@ mod tests {
     #[test]
     fn depth_zero_is_config_error() {
         assert!(matches!(resolve_depth(Some(0), 10), Err(Error::Config(_))));
-        assert_eq!(resolve_depth(Some(100), 10), Ok(64));
-        assert_eq!(resolve_depth(None, 10), Ok(10));
+        assert!(matches!(resolve_depth(Some(100), 10), Ok(64)));
+        assert!(matches!(resolve_depth(None, 10), Ok(10)));
     }
 }
