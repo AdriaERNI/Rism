@@ -376,10 +376,6 @@ do not invent new semantics). `search_max_results > 200` is allowed on the wire 
 caps; §2). Env names for the CLI flags themselves ride the existing
 global `--namespace`/`RISM_IRIS_NAMESPACE` — no new ones.
 
-## §5 Settings
-
-(to be filled)
-
 ## §6 Bench protocol (first benchmark in this repo)
 
 Runner: `bench/run_bench.py` (stdlib-only Python ≥3.9, no new Rust deps,
