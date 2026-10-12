@@ -46,7 +46,7 @@ fn annotations_and_task_surface_on_the_wire() {
     let mut m = Mcp::spawn();
     let msg = m.rpc("tools/list", serde_json::json!({}));
     let tools = msg["result"]["tools"].as_array().unwrap().clone();
-    assert_eq!(tools.len(), 25, "tool count contract (Tasks migration)");
+    assert_eq!(tools.len(), 29, "tool count contract (Tasks migration)");
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     // The three custom poll-tools are GONE (full removal, no fallbacks).
     for removed in [
