@@ -126,7 +126,67 @@ Arg-struct unit tests pin deny_unknown_fields for all 4 (sql.rs test pattern).
 
 ## §2 search_code wire + normalization
 
-(to be filled)
+Request (new `src/iris/search.rs`, qs pattern `src/iris/documents.rs:50-61`):
+
+```
+GET {api_url(ns)}/action/search?query={enc}&documents={enc("*.cls,*.mac,*.int")}
+    &regex=1&sys=0&gen=0&case=1&word=1&max=200
+```
+
+- Path ns goes through `api_url()` (`%`→`%25`). Every param VALUE goes
+  through `urlencoding::encode` (existing dep) — query is user-controlled
+  regex text, so encoding is mandatory, not cosmetic.
+- Params are emitted only when `Some`/non-default per §1 table: the wire
+  never sends `case=`/`word=` unless the caller set them (probe: server
+  defaults differ per param — sending explicit values would change results
+  of callers who didn't ask for them).
+- API version: none is pinned in the URL — `api_url` uses the negotiated
+  version (probe: v8 on IRIS 2025.3; `action/search` answered at v2 AND v8;
+  at v1 it returned an empty envelope for a query that v8 found matches —
+  PROBE: `v1 USER action/search?query=Set` → `result:{}` vs v8 → hit. So
+  v2+ is required; negotiation already gives ≥2 on every supported server).
+  Error mapping: HTTP 404 (server without search) → `Error::HttpStatus` as
+  everywhere; do NOT translate to DocNotFound.
+- Empty-vs-missing `result`: probe shows `result:{}` (object) when the
+  server found nothing at old API versions and `result:[]` (array) when it
+  searched and found nothing. Parser: `env.result.get("result")` → treat
+  absent, null, `{}` and `[]` all as zero results; anything else that isn't
+  an array → `Error::InvalidEnvelope`.
+
+Envelope → `SearchResult` normalization (unit-testable pure fn
+`parse_search_result(env, requested_max) -> Result<SearchResult>`):
+
+1. `doc` (string) → entry; missing doc key → InvalidEnvelope.
+2. `matches[]`: each match has optional `member`, optional `attr`,
+   optional `line`, present-or-absent `text` (missing → "").
+3. LINE NORMALIZATION (issue fact: int for class members, string for
+   routine lines; probe confirms both shapes in the wild:
+   `{"line":"5"}` string for `%SYS.Access.int`, absent for .cls member
+   hits): accept `Value::Number` or `Value::String`; parse to `u32`; a
+   non-numeric string (e.g. a label name like `"Description+32"` — probe:
+   `%Net.FtpSession.cls()[Description+32]`) keeps `line: null` and moves the
+   raw string into a `label: string|null` companion field. Never error on
+   unparseable line — degrade, don't drop the match.
+4. `truncated: bool` — true iff the console contains the server's
+   truncation notice (probe: `"Found 2 occurrence/s in 2 file/s. Maximum
+   search limit reached."`) OR `match_count >= requested max` when the
+   notice is absent (belt-and-braces; the marker test string is the
+   constant `"Maximum search limit reached"`).
+5. `server_tally`: LAST console line that starts with "Found " (probe
+   shapes: `Found N occurrence/s in M file/s.` [+ ` Maximum search limit
+   reached.`] or `Not found.`); `null` when no such line. Console line 1 is
+   the echo of the search (`Searching for '...' in '...'`) — kept raw in
+   the structured output? NO — frozen: console is NOT echoed beyond the
+   tally; the CLI/table renderer uses tally+counts only.
+6. Counts `doc_count`/`match_count` are computed client-side from the
+   parsed array (server tally text is display-only — its numbers can
+   exceed/undercount vs the returned array at the cap).
+
+Wiremock pins (§7): URL query order-insensitive matching via
+`query_param` predicates; test asserts encoded forms for `query="a$b.*"`
+(`a%24b.%2A%2A`-safe — assert `%24` present, i.e. encode ran), absent
+`case`/`word` params when options are None, `line` int AND string parsing,
+`{}`-object empty result, truncation flag from console marker.
 
 ## §3 Graph SQL (frozen statements)
 
