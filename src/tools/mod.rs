@@ -6,6 +6,7 @@ pub mod command;
 pub mod compile;
 pub mod debugger;
 pub mod documents;
+pub mod graph;
 pub mod host;
 pub mod jobs;
 pub mod monitor;
