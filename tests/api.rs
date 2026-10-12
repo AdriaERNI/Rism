@@ -660,3 +660,267 @@ async fn search_empty_result_object_or_array() {
     .expect_err("non-array result must fail");
     assert!(matches!(err, rism::Error::InvalidEnvelope(_)), "{err}");
 }
+
+// ═════════════════════════════════════════════════════════════════════
+// graph tools (E_SPEC §3) — U8–U12, U14: guard-before-HTTP + SQL shapes
+// ═════════════════════════════════════════════════════════════════════
+
+/// Exact `query` body matcher.
+fn body_query(sql: String) -> impl Fn(&wiremock::Request) -> bool + Send + Sync {
+    move |req: &wiremock::Request| {
+        let v: serde_json::Value =
+            serde_json::from_slice(&req.body).unwrap_or(serde_json::Value::Null);
+        v.get("query").and_then(|q| q.as_str()) == Some(sql.as_str())
+    }
+}
+
+/// Helper: a POST body whose `query` key contains `needle`.
+fn body_query_contains(needle: &'static str) -> impl Fn(&wiremock::Request) -> bool + Send + Sync {
+    move |req: &wiremock::Request| {
+        let v: serde_json::Value =
+            serde_json::from_slice(&req.body).unwrap_or(serde_json::Value::Null);
+        v.get("query")
+            .and_then(|q| q.as_str())
+            .is_some_and(|q| q.contains(needle))
+    }
+}
+
+fn query_envelope(content: Vec<serde_json::Value>) -> serde_json::Value {
+    json!({
+        "status": {"errors": [], "summary": ""}, "console": [],
+        "result": {"content": content, "more": false, "id": ""}
+    })
+}
+
+// U8 — refusal happens BEFORE any HTTP request reaches the server.
+#[tokio::test]
+async fn subclasses_rejects_unsafe_class_before_http() {
+    let mock = MockServer::start().await;
+    let client = client(&mock);
+    let err = rism::tools::graph::find_subclasses(
+        &client,
+        &rism::tools::graph::FindSubclassesArgs {
+            class: "Bobby'; DROP TABLE x;--".into(),
+            namespace: None,
+            depth: None,
+        },
+    )
+    .await
+    .expect_err("injection must be refused");
+    assert!(matches!(err, rism::Error::Config(_)), "{err}");
+    // Zero requests: no mock mounted at all, so wiremock counts everything.
+    assert_eq!(mock.received_requests().await.unwrap().len(), 0);
+}
+
+// U9 — same gate for class_members.
+#[tokio::test]
+async fn members_rejects_unsafe_class_before_http() {
+    let mock = MockServer::start().await;
+    let client = client(&mock);
+    let err = rism::tools::graph::class_members(
+        &client,
+        &rism::tools::graph::ClassMembersArgs {
+            class: "Bad'Name".into(),
+            namespace: None,
+            kind: None,
+            include_inherited: None,
+        },
+    )
+    .await
+    .expect_err("guard must refuse");
+    assert!(matches!(err, rism::Error::Config(_)), "{err}");
+    assert_eq!(mock.received_requests().await.unwrap().len(), 0);
+}
+
+// U10 — same gate for class_dependencies.
+#[tokio::test]
+async fn deps_rejects_unsafe_class_before_http() {
+    let mock = MockServer::start().await;
+    let client = client(&mock);
+    let err = rism::tools::graph::class_dependencies(
+        &client,
+        &rism::tools::graph::ClassDependenciesArgs {
+            class: "Drop'; --".into(),
+            namespace: None,
+            direction: None,
+            depth: None,
+        },
+    )
+    .await
+    .expect_err("guard must refuse");
+    assert!(matches!(err, rism::Error::Config(_)), "{err}");
+    assert_eq!(mock.received_requests().await.unwrap().len(), 0);
+}
+
+// U11 — the first-level SQL is exactly the frozen contains-walk, and a
+// multi-super row is kept only when the frontier name is an EXACT element
+// (substring over-match guard).
+#[tokio::test]
+async fn subclasses_sql_shape_contains_walk() {
+    let mock = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/atelier/v8/USER/action/query"))
+        .and(body_query(
+            "SELECT Name, Super FROM %Dictionary.ClassDefinition WHERE Super [ 'X' ORDER BY Name"
+                .to_string(),
+        ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(query_envelope(vec![
+                // exact child of X
+                json!({"Name": "Child1", "Super": "X"}),
+                // multi-super: exact element X → kept
+                json!({"Name": "Child2", "Super": "X,Y"}),
+                // substring over-match (X is a prefix of Xyz) → dropped
+                json!({"Name": "OverMatch", "Super": "Xyz"}),
+            ])),
+        )
+        .expect(1)
+        .mount(&mock)
+        .await;
+    let client = client(&mock);
+    let res = rism::tools::graph::find_subclasses(
+        &client,
+        &rism::tools::graph::FindSubclassesArgs {
+            class: "X".into(),
+            namespace: None,
+            depth: Some(1),
+        },
+    )
+    .await
+    .expect("walk");
+    assert_eq!(res.count, 2);
+    assert_eq!(res.subclasses[0].name, "Child1");
+    assert_eq!(res.subclasses[0].level, 1);
+    assert_eq!(res.subclasses[1].name, "Child2");
+    assert_eq!(res.subclasses[1].parent, "X,Y");
+    // depth=1 with non-empty frontier at loop end → truncated
+    assert!(res.truncated);
+    mock.verify().await;
+}
+
+// U12 — Origin filter present/absent per include_inherited; XData has none.
+#[tokio::test]
+async fn members_sql_shape_origin_filter() {
+    let mock = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/atelier/v8/USER/action/query"))
+        .and(body_query_contains("CompiledMethod"))
+        .and(body_query_contains("AND Origin = 'X'"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(query_envelope(vec![])))
+        .expect(1)
+        .mount(&mock)
+        .await;
+    for tbl in ["CompiledProperty", "CompiledParameter"] {
+        let t = tbl.to_string();
+        Mock::given(method("POST"))
+            .and(path("/api/atelier/v8/USER/action/query"))
+            .and(move |req: &wiremock::Request| {
+                let v: serde_json::Value =
+                    serde_json::from_slice(&req.body).unwrap_or(serde_json::Value::Null);
+                v["query"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains(&format!("%Dictionary.{t} "))
+                    && v["query"]
+                        .as_str()
+                        .unwrap_or("")
+                        .contains("AND Origin = 'X'")
+            })
+            .respond_with(ResponseTemplate::new(200).set_body_json(query_envelope(vec![])))
+            .expect(1)
+            .mount(&mock)
+            .await;
+    }
+    Mock::given(method("POST"))
+        .and(path("/api/atelier/v8/USER/action/query"))
+        .and(body_query_contains("CompiledXData"))
+        .and(move |req: &wiremock::Request| {
+            let v: serde_json::Value =
+                serde_json::from_slice(&req.body).unwrap_or(serde_json::Value::Null);
+            !v["query"].as_str().unwrap_or("").contains(" AND Origin = ")
+        })
+        .respond_with(ResponseTemplate::new(200).set_body_json(query_envelope(vec![])))
+        .expect(1)
+        .mount(&mock)
+        .await;
+    let client = client_of(&mock);
+    rism::tools::graph::class_members(
+        &client,
+        &rism::tools::graph::ClassMembersArgs {
+            class: "X".into(),
+            namespace: None,
+            kind: None,
+            include_inherited: None,
+        },
+    )
+    .await
+    .expect("members (own)");
+    mock.verify().await;
+
+    // include_inherited=true → no Origin filter anywhere.
+    let mock2 = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/atelier/v8/USER/action/query"))
+        .and(move |req: &wiremock::Request| {
+            let v: serde_json::Value =
+                serde_json::from_slice(&req.body).unwrap_or(serde_json::Value::Null);
+            !v["query"].as_str().unwrap_or("").contains(" AND Origin = ")
+        })
+        .respond_with(ResponseTemplate::new(200).set_body_json(query_envelope(vec![])))
+        .expect(4)
+        .mount(&mock2)
+        .await;
+    let client2 = client_of(&mock2);
+    rism::tools::graph::class_members(
+        &client2,
+        &rism::tools::graph::ClassMembersArgs {
+            class: "X".into(),
+            namespace: None,
+            kind: None,
+            include_inherited: Some(true),
+        },
+    )
+    .await
+    .expect("members (inherited)");
+    assert_eq!(mock2.received_requests().await.unwrap().len(), 4);
+}
+
+// U14 — the impact query shape + substring drop on a DependsOn hit.
+#[tokio::test]
+async fn used_by_sql_shape_super_merge() {
+    let mock = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/atelier/v8/USER/action/query"))
+        .and(body_query(
+            "SELECT Name, DependsOn, Super FROM %Dictionary.ClassDefinition WHERE DependsOn [ 'X' OR Super [ 'X' ORDER BY Name".to_string(),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(query_envelope(vec![
+            json!({"Name": "User1", "DependsOn": "X", "Super": "%RegisteredObject"}),
+            json!({"Name": "OverMatch", "DependsOn": "Xyz.Other", "Super": ""}),
+            json!({"Name": "User2", "DependsOn": "", "Super": "X,P"}),
+        ])))
+        .expect(1)
+        .mount(&mock)
+        .await;
+    let client = client(&mock);
+    let res = rism::tools::graph::class_dependencies(
+        &client,
+        &rism::tools::graph::ClassDependenciesArgs {
+            class: "X".into(),
+            namespace: None,
+            direction: Some(rism::tools::graph::DependencyDirection::UsedBy),
+            depth: Some(1),
+        },
+    )
+    .await
+    .expect("used_by");
+    assert_eq!(res.used_by.len(), 2, "substring hit Xyz dropped");
+    assert_eq!(res.used_by[0].name, "User1");
+    assert_eq!(res.used_by[1].name, "User2");
+    assert!(
+        res.depends_on.is_empty(),
+        "used_by-only leaves the field []"
+    );
+    assert!(res.truncated, "depth-1 cap with live frontier");
+    mock.verify().await;
+}
