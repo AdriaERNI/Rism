@@ -1427,8 +1427,8 @@ fn surface_is_the_25_tools_the_matrix_covers() {
         .as_array()
         .cloned()
         .unwrap_or_default();
-    c.check(tools.len() == 25, || {
-        format!("matrix assumes 25 tools, tools/list says {}", tools.len())
+    c.check(tools.len() == 29, || {
+        format!("matrix assumes 29 tools, tools/list says {}", tools.len())
     });
     // The exact set this file exercises — a tool added/removed/redenied
     // breaks here first, in the file that promises coverage.
