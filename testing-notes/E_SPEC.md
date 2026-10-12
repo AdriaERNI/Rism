@@ -371,9 +371,177 @@ global `--namespace`/`RISM_IRIS_NAMESPACE` — no new ones.
 
 (to be filled)
 
-## §6 Bench protocol
+## §6 Bench protocol (first benchmark in this repo)
 
-(to be filled)
+Runner: `bench/run_bench.py` (stdlib-only Python ≥3.9, no new Rust deps,
+no new repo deps anywhere) + `bench/README.md` (how to run: dev container
+up, `cargo build --release`, `RISM_IRIS_*` from env or config.toml — the
+script shells out to `target/release/rism` ONLY: `doc put`, `compile`,
+`doc delete`, `docnames`, `sql`, `search` — every measurement goes through
+the shipped CLI so the bench measures the product, not a test harness).
+Corpus downloads land in `bench/.work/` (gitignored) — NEVER commit corpus
+files. Cleanup (docs + scratch classes) runs on EVERY exit path incl.
+`finally` + SIGINT handler; the run prints "CLEANED: N docs deleted".
+
+### Corpus — 4 repos, licenses+sizes VERIFIED LIVE by the specifier via
+`gh api` on 2026-10-12 (all MIT, all <100 ObjectScript source files; file
+counts = `.cls|.mac|.int` under the repo tree at the SHA):
+
+| repo | SHA | src files | license |
+|---|---|---|---|
+| intersystems/Samples-ObjectScript | 8e63f5e7a52281a1ca2840affc5d2d4c1b838089 | 11 | MIT |
+| lscalese/IO-Redirect | 2f13d5b797cdcfbdf6446ac1e07fd6502414f00b | 11 | MIT |
+| ARSBlue/ToolBox-4-Iris | d68e27b1c10db0e134f314c0a07eda7d51f47778 | 40 | MIT |
+| evshvarov/covid-19 | 697157e75ad09ca51513e766c65a8dd3cbca8f8f | 29 | MIT |
+
+Rejected after verification: intersystems/ipm (403 src files — over
+budget), heptad/ruth + intersystems/objectscript + daimtron/* (404 —
+don't exist). Coder re-confirms each SHA is fetchable at run time
+(codeload zip: `https://codeload.github.com/<owner>/<repo>/zip/<sha>`;
+fall back to git clone only if codeload 404s) and appends the per-run
+bytes to `bench/CORPUS.md` (layout: repo | URL | SHA | license | file
+count | bytes | fetch date).
+
+### Loading method (frozen — ONE method)
+
+`rism doc put <name>.<cat>` per file into **USER** (no namespace is
+created or dropped — constitution rule; USER is the CI/live convention and
+probe 2026-10-12 confirms USER holds no user docs by default, so deletion
+is safe), then `rism compile <names...> --flags cuk` in batches of 20. Doc NAME
+transform (deterministic, collision-proof): original path
+`src/IORedirect/Redirect.cls` → doc `BenchIOR.Redirect.cls`
+(`Bench<SHORT>.` prefix + path→dots, SHORT ∈ {SOS,IOR,TBX,COV}); the file's
+class/routine header line is rewritten to match (`Class BenchIOR.Redirect
+`… package prefix ONLY — UDL class name = Bench + short + dot + rest).
+Non-loadable aux files (.inc → `Bench<SHORT>.x.inc` as-is; .mac/.int same
+rule) keep their mask so `*.cls` search stats stay honest.
+COMPILE REALITY: cross-dependencies + missing EnsLib pieces mean some
+classes fail to compile — the bench records per-file compile outcome and
+DOES NOT treat compile failure as load failure: a PRE-FLIGHT probe
+(step: inject a marker into a throwaway doc, put WITHOUT compile, search
+it) decides whether `action/search` sees uncompiled source. If it does
+(expected), search-recall runs over ALL loaded docs; if not, recall runs
+over compiled docs only and RESULTS.md states the split in numbers. The
+probe result is recorded in CORPUS.md (§Probe).
+
+### Markers — 20 unique strings, deterministic transformation
+
+`bench/inject_markers.py` (called by run_bench before load): copies the
+corpus into `bench/.work/export/`, then inserts exactly ONE marker line
+into each of 20 PRE-FIXED target files (list hardcoded in the script →
+deterministic, no RNG):
+
+- format: comment line carrying `RISM-BENCH-M-<NN>` (01..20), file-kind
+  specific so it always compiles as a comment: `.cls` →
+  `// RISM-BENCH-M-NN` (UDL comment; regex-safe pattern
+  `RISM\-BENCH\-M\-\d\d`), `.int`/`.mac` → `; RISM-BENCH-M-NN`
+  (routine line comment; in a .mac the `;`-prefixed line is legal outside
+  macro blocks at EOF). Unique across the corpus.
+- placement rule (deterministic, no parsing of UDL): the marker is
+  appended as a NEW FINAL LINE of each target file (`\n// RISM-BENCH-M-NN`
+  for .cls — legal after `}`; for .int/.mac a comment line at end-of-file
+  is legal too). Final-line placement makes ground truth trivially
+  computable (line = original line count + 1 for routines; for .cls the
+  trailing line has no member and the server may report it without a line
+  number — so ground truth stores `line` = computed value and the bench's
+  HIT rule (b) treats doc+line equality for routines and DOC-level
+  equality when the hit carries a member/label instead of a line —
+  stated in RESULTS so recall is never silently stricter than reality. The injector records (marker, doc name, 1-based line) into
+  `bench/.work/ground_truth.csv` — machine-derived ground truth, not
+  hand-typed.
+- category mix (query design in §Bench-Queries): 12 plain identifiers,
+  4 inside string literals/method bodies (injector puts those as
+  `Set tX = "RISM-BENCH-M-16"` lines — targets chosen from ToolBox util
+  methods), 4 regex-relevant (contain adjacent chars that differ under
+  regex vs literal: e.g. M-17 adjacent text `M-170` in another file as
+  DECOY for substring vs exact matching).
+- DECOYS for precision (NOT part of the 20): 3 extra near-miss strings
+  `RISM-BENCH-N-<NN>` in 3 files + one file carrying BOTH `RISM-BENCH-M-19`
+  and `RISM-BENCH-M-190` (prefix-adjacent). Recall query M-19 must return
+  ONLY the M-19 line+doc when `--whole-word`/exact regex `RISM-BENCH-M-19\b`
+  is used; substring counts are reported separately.
+- 20 markers = 20 recall cases (1 per marker); ground_truth.csv columns:
+  `marker,doc,line,category(plain|literal|adjacent|regex),expect_exact_docs`.
+
+### Queries + metrics
+
+(a) LATENCY — 10 fixed queries (regex ON unless noted), each: 3 warmup +
+30 timed iterations, `time.perf_counter()` around the CLI process. FROZEN:
+the reported number is CLI-process wall ms (includes rism startup —
+honest: that IS what a shell user pays; the MCP-door number is out of
+scope). p50/p95 per query in RESULTS.md. Queries:
+  1. `RISM-BENCH-M-01` (rare, exact)
+  2. `Set` documents=*.cls sys=0 gen=0 (common, capped at 200)
+  3. `\bQuit\b` word-style regex over *.int,*.mac
+  4. `%24SYSTEM` as literal `\%SYSTEM` regex metachar handling (encoded)
+  5. `Error` across *.cls,*.mac,*.int
+  6. `RISM.BENCH.M.06` dot-metachar (matches underscores too — pins the
+     regex semantics vs query 1)
+  7. `Class` sys=0 documents=*.cls (cap cliff — see (d))
+  8. `^Trigger` (pattern)
+  9. `zZ` case-insensitive default probe (server default case)
+ 10. `Bench` (package-prefix scan over the whole corpus)
+rg baseline: `rg --pcre2 -n -g '*.cls' -g '*.mac' -g '*.int' '<same
+pattern>' bench/.work/export/` timed the same way (30 iters, p50/p95,
+ms). Honest reporting rule: rg will almost certainly win latency; RESULTS
+must show the table and say so; the point is the per-query RATIO band
+(e.g. "server search p95 = X ms = N× rg") plus the zero-setup claim.
+
+(b) RECALL: per marker: hit iff search returns the exact doc AND line
+(line normalization §2 applies) — `recall = hits/20`, plus per-category
+(plain/literal/adjacent/regex) table. A missed marker lists what came
+back instead.
+
+(c) PRECISION: per marker query: `precision = correct/(correct+other
+returned matches)` on the same query; decoy queries reported separately
+(`M-19` substring returns M-190 line → precision hit recorded for
+substring mode, exactness shown for \b mode).
+
+(d) TRUNCATION CLIFF: query 7 (`Class`, *.cls, sys=0): assert
+`truncated==true` AND `match_count==200`; rg counts every occurrence R in
+the export dir; RESULTS reports `200/R` coverage + wall ms; then the SAME
+query with `--max 500` (sent as-is; server hard-caps at 200 per issue
+fact) — expected identical payload: pin that too (proves no silent
+paging). If the client accepted >200, that's a contract bug → red bench.
+
+(e) GRAPH CORRECTNESS — scratch classes written by the bench into USER via
+`doc put` + compile (names `BenchGraph*` — deleted at cleanup):
+```
+BenchGraph.A            extends %RegisteredObject; 1 method Own(), 1 prop P1,
+                        1 param CAPTION, 1 XData BLK
+BenchGraph.B            extends BenchGraph.A;      prop P2; method B() calls
+                        $$util^BenchGraphUtil (routine dep)
+BenchGraph.C            extends BenchGraph.B
+BenchGraph.D            extends BenchGraph.B, BenchGraph.C   (multi-super)
+BenchGraph.Mid          extends %RegisteredObject
+BenchGraph.Sub          extends BenchGraph.Mid — name substring-overlap guard:
+                        query for subclasses of `BenchGraph.Mi` must return 0
+                        ([` contains] over-match test — exactness client-side)
+BenchGraphUtil          .int routine, label util
+```
+ground-truth table `bench/graph_truth.csv` (hand-written IN the bench —
+this is the hand-verified ground truth TASK.md asks for): expected
+`find_subclasses(BenchGraph.A, depth=10)` = {B:1, C:2, D:2} — D appears
+once at its FIRST level (BFS, visited-set §3); depth=1 = {B}; members(A,
+inherited=false) = method Own, prop P1, param CAPTION, xdata BLK —
+EXACT set equality each; deps(B).depends_on ⊇ {BenchGraph.A} via Super
+edge + $$util^ routine dep in DependsOn OR compiled edges (record actual,
+assert the SUPER edges + class names at minimum); used_by(B, depth=1) =
+{C, D}; used_by(A, depth=3) = {B, C, D}. Correctness % = assertions
+passed / total (target table in RESULTS.md).
+
+### Cleanup (part of the bench, non-negotiable)
+Delete every `Bench*.cls/.mac/.int/.inc` doc via `rism doc delete`
+(docnames filter `Bench%` enumerates them — post-run assertion: count 0),
+kill any spawned `rism`/`rg` PIDs, remove `bench/.work/`. Leave USER with
+zero Bench* docs. If the pre-flight probe doc (`BenchProbe*`) exists at
+start, delete it first (idempotent rerun).
+
+### RESULTS.md layout (written by the bench at bench/RESULTS.md)
+Header: date, IRIS version (`rism info`), rism git SHA, machine. Sections
+(a)-(e) each = table with units (ms) + one "where rg wins" paragraph.
+docs/code-search.md §Benchmarks = the committed copy of the numbers from
+the lane's run (regenerate, don't hand-copy).
 
 ## §7 Test matrix
 
