@@ -22,6 +22,12 @@ fn client(mock: &MockServer) -> IrisClient {
     IrisClient::new(settings_for(mock.uri().as_str())).expect("client")
 }
 
+/// Same builder under a name a local `let client = client(..)` cannot
+/// shadow — needed by tests that build several clients (search/graph).
+fn client_of(mock: &MockServer) -> IrisClient {
+    client(mock)
+}
+
 // §1 — %SYS must leave as %25SYS on the wire.
 #[tokio::test]
 async fn percent_namespace_is_encoded_in_path() {
@@ -375,4 +381,282 @@ async fn debug_list_processes_maps_jobs() {
     assert_eq!(procs.len(), 1, "namespace filter client-side");
     assert_eq!(procs[0].pid, 4711);
     assert_eq!(procs[0].state, "CMD");
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// search_code (E_SPEC §2) — U3–U5, U7: wire params + envelope parsing
+// ═════════════════════════════════════════════════════════════════════
+
+// U3 — the query and the documents mask go on the wire percent-encoded.
+#[tokio::test]
+async fn search_url_encodes_query_and_masks() {
+    let mock = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/atelier/v8/USER/action/search"))
+        // query "a$b.*c?" — wiremock decodes, so pin the decoded value and
+        // prove urlencoding ran via the RAW url (%24 must be on the wire).
+        .and(query_param("query", "a$b.*c?"))
+        .and(move |req: &wiremock::Request| {
+            let raw = req.url.query().unwrap_or_default();
+            raw.contains("%24") && raw.contains("%2A") && raw.contains("%3F")
+        })
+        // non-default masks join with "," then encode (%2C on the wire)
+        .and(query_param("documents", "*.cls,*.mac"))
+        .and(move |req: &wiremock::Request| {
+            req.url
+                .query()
+                .unwrap_or_default()
+                .contains("%2A.cls%2C%2A.mac")
+        })
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "status": {"errors": [], "summary": ""}, "console": ["Not found."],
+            "result": []
+        })))
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    let client = client(&mock);
+    let res = rism::tools::search::search_code(
+        &client,
+        &rism::tools::search::SearchCodeArgs {
+            query: "a$b.*c?".into(),
+            namespace: None,
+            documents: Some(vec!["*.cls".into(), "*.mac".into()]),
+            regex: None,
+            include_system: None,
+            include_generated: None,
+            case_sensitive: None,
+            whole_word: None,
+            max_results: None,
+        },
+    )
+    .await
+    .expect("search");
+    assert_eq!(res.match_count, 0);
+    mock.verify().await;
+}
+
+// U4 — param presence contract: case/word omitted when None; sys/gen
+// explicit 0/0 with the tools defaults; regex omitted when None.
+#[tokio::test]
+async fn search_bools_omitted_or_zero_one() {
+    let mock = MockServer::start().await;
+    // None case/word: those params must NOT exist at all.
+    Mock::given(method("GET"))
+        .and(path("/api/atelier/v8/USER/action/search"))
+        .and(query_param("sys", "0"))
+        .and(query_param("gen", "0"))
+        .and(query_param("max", "200"))
+        .and(move |req: &wiremock::Request| {
+            let q = req
+                .url
+                .query_pairs()
+                .collect::<std::collections::HashMap<_, _>>();
+            !q.contains_key("case") && !q.contains_key("word") && !q.contains_key("regex")
+        })
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "status": {"errors": [], "summary": ""}, "console": [], "result": []
+        })))
+        .expect(1)
+        .mount(&mock)
+        .await;
+    let client = client(&mock);
+    rism::tools::search::search_code(
+        &client,
+        &rism::tools::search::SearchCodeArgs {
+            query: "x".into(),
+            namespace: None,
+            documents: None,
+            regex: None,
+            include_system: None,
+            include_generated: None,
+            case_sensitive: None,
+            whole_word: None,
+            max_results: None,
+        },
+    )
+    .await
+    .expect("defaults");
+    mock.verify().await;
+
+    // Some(true): case=1&word=1&regex=1 must ride the wire.
+    let mock2 = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/atelier/v8/USER/action/search"))
+        .and(query_param("case", "1"))
+        .and(query_param("word", "1"))
+        .and(query_param("regex", "1"))
+        .and(query_param("sys", "1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "status": {"errors": [], "summary": ""}, "console": [], "result": []
+        })))
+        .expect(1)
+        .mount(&mock2)
+        .await;
+    let cli2 = client_of(&mock2);
+    rism::tools::search::search_code(
+        &cli2,
+        &rism::tools::search::SearchCodeArgs {
+            query: "x".into(),
+            namespace: None,
+            documents: None,
+            regex: Some(true),
+            include_system: Some(true),
+            include_generated: Some(false),
+            case_sensitive: Some(true),
+            whole_word: Some(true),
+            max_results: Some(50),
+        },
+    )
+    .await
+    .expect("flags");
+    mock2.verify().await;
+}
+
+// U5 — console tally extraction + truncation flag from the server marker.
+#[tokio::test]
+async fn search_parses_result_array_tally_truncation() {
+    let mock = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/atelier/v8/USER/action/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "status": {"errors": [], "summary": ""},
+            "console": ["",
+                        "Searching for 'Class' in '*.cls'",
+                        "A.B.cls(Class): Class",
+                        "Found 2 occurrence/s in 2 file/s. Maximum search limit reached."],
+            "result": [
+                {"doc": "A.B.cls", "matches": [{"member": "Class", "text": "Class"}]},
+                {"doc": "C.D.cls", "matches": [{"line": 1, "text": "Class C.D"}]}
+            ]
+        })))
+        .expect(1)
+        .mount(&mock)
+        .await;
+    let client = client(&mock);
+    let res = rism::tools::search::search_code(
+        &client,
+        &rism::tools::search::SearchCodeArgs {
+            query: "Class".into(),
+            namespace: None,
+            documents: None,
+            regex: None,
+            include_system: None,
+            include_generated: None,
+            case_sensitive: None,
+            whole_word: None,
+            max_results: None,
+        },
+    )
+    .await
+    .expect("tally");
+    assert_eq!(
+        res.server_tally.as_deref(),
+        Some("Found 2 occurrence/s in 2 file/s. Maximum search limit reached.")
+    );
+    assert!(res.truncated, "console marker sets truncated");
+    assert_eq!(res.doc_count, 2);
+    assert_eq!(res.match_count, 2);
+    mock.verify().await;
+
+    // No marker, few matches → truncated false.
+    let mock2 = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/atelier/v8/USER/action/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "status": {"errors": [], "summary": ""},
+            "console": ["Found 1 occurrence/s in 1 file/s."],
+            "result": [{"doc": "A.B.cls", "matches": [{"member": "Set", "text": "Set"}]}]
+        })))
+        .mount(&mock2)
+        .await;
+    let cli2 = client_of(&mock2);
+    let res2 = rism::tools::search::search_code(
+        &cli2,
+        &rism::tools::search::SearchCodeArgs {
+            query: "Set".into(),
+            namespace: None,
+            documents: None,
+            regex: None,
+            include_system: None,
+            include_generated: None,
+            case_sensitive: None,
+            whole_word: None,
+            max_results: None,
+        },
+    )
+    .await
+    .expect("no truncation");
+    assert!(!res2.truncated);
+    assert_eq!(
+        res2.server_tally.as_deref(),
+        Some("Found 1 occurrence/s in 1 file/s.")
+    );
+}
+
+// U7 — result shapes: [] , {} (old-API empty), absent → 0 results;
+// any other type → InvalidEnvelope.
+#[tokio::test]
+async fn search_empty_result_object_or_array() {
+    for body in [
+        json!([]),               // searched, nothing
+        json!({}),               // old-API empty (probe)
+        serde_json::Value::Null, // absent
+    ] {
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/atelier/v8/USER/action/search"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "status": {"errors": [], "summary": ""}, "console": [], "result": body
+            })))
+            .mount(&mock)
+            .await;
+        let cli = client_of(&mock);
+        let res = rism::tools::search::search_code(
+            &cli,
+            &rism::tools::search::SearchCodeArgs {
+                query: "x".into(),
+                namespace: None,
+                documents: None,
+                regex: None,
+                include_system: None,
+                include_generated: None,
+                case_sensitive: None,
+                whole_word: None,
+                max_results: None,
+            },
+        )
+        .await
+        .expect("empty must not error");
+        assert_eq!(res.match_count, 0);
+        assert!(res.results.is_empty());
+    }
+    // string payload → InvalidEnvelope
+    let mock = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/atelier/v8/USER/action/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "status": {"errors": [], "summary": ""}, "console": [], "result": "wat"
+        })))
+        .mount(&mock)
+        .await;
+    let cli = client_of(&mock);
+    let err = rism::tools::search::search_code(
+        &cli,
+        &rism::tools::search::SearchCodeArgs {
+            query: "x".into(),
+            namespace: None,
+            documents: None,
+            regex: None,
+            include_system: None,
+            include_generated: None,
+            case_sensitive: None,
+            whole_word: None,
+            max_results: None,
+        },
+    )
+    .await
+    .expect_err("non-array result must fail");
+    assert!(matches!(err, rism::Error::InvalidEnvelope(_)), "{err}");
 }

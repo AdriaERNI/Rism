@@ -12,6 +12,7 @@ pub mod monitor;
 mod names;
 pub mod repl;
 pub mod scoring;
+pub mod search;
 pub mod serverinfo;
 pub mod sql;
 pub mod testing;

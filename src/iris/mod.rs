@@ -7,6 +7,7 @@ pub mod dbgp;
 pub mod documents;
 pub mod http;
 pub mod monitor;
+pub mod search;
 pub mod serverinfo;
 pub mod sql;
 pub mod terminal;
