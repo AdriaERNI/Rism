@@ -667,10 +667,11 @@ async fn search_empty_result_object_or_array() {
 
 /// Exact `query` body matcher.
 fn body_query(sql: String) -> impl Fn(&wiremock::Request) -> bool + Send + Sync {
+    let needle = sql;
     move |req: &wiremock::Request| {
         let v: serde_json::Value =
             serde_json::from_slice(&req.body).unwrap_or(serde_json::Value::Null);
-        v.get("query").and_then(|q| q.as_str()) == Some(sql.as_str())
+        v.get("query").and_then(|q| q.as_str()) == Some(needle.as_str())
     }
 }
 
@@ -685,7 +686,7 @@ fn body_query_contains(needle: &'static str) -> impl Fn(&wiremock::Request) -> b
     }
 }
 
-fn query_envelope(content: Vec<serde_json::Value>) -> serde_json::Value {
+fn query_envelope(content: &[serde_json::Value]) -> serde_json::Value {
     json!({
         "status": {"errors": [], "summary": ""}, "console": [],
         "result": {"content": content, "more": false, "id": ""}
@@ -764,16 +765,14 @@ async fn subclasses_sql_shape_contains_walk() {
             "SELECT Name, Super FROM %Dictionary.ClassDefinition WHERE Super [ 'X' ORDER BY Name"
                 .to_string(),
         ))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(query_envelope(vec![
-                // exact child of X
-                json!({"Name": "Child1", "Super": "X"}),
-                // multi-super: exact element X → kept
-                json!({"Name": "Child2", "Super": "X,Y"}),
-                // substring over-match (X is a prefix of Xyz) → dropped
-                json!({"Name": "OverMatch", "Super": "Xyz"}),
-            ])),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(query_envelope(&[
+            // exact child of X
+            json!({"Name": "Child1", "Super": "X"}),
+            // multi-super: exact element X → kept
+            json!({"Name": "Child2", "Super": "X,Y"}),
+            // substring over-match (X is a prefix of Xyz) → dropped
+            json!({"Name": "OverMatch", "Super": "Xyz"}),
+        ])))
         .expect(1)
         .mount(&mock)
         .await;
@@ -806,7 +805,7 @@ async fn members_sql_shape_origin_filter() {
         .and(path("/api/atelier/v8/USER/action/query"))
         .and(body_query_contains("CompiledMethod"))
         .and(body_query_contains("AND Origin = 'X'"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(query_envelope(vec![])))
+        .respond_with(ResponseTemplate::new(200).set_body_json(query_envelope(&[])))
         .expect(1)
         .mount(&mock)
         .await;
@@ -826,7 +825,7 @@ async fn members_sql_shape_origin_filter() {
                         .unwrap_or("")
                         .contains("AND Origin = 'X'")
             })
-            .respond_with(ResponseTemplate::new(200).set_body_json(query_envelope(vec![])))
+            .respond_with(ResponseTemplate::new(200).set_body_json(query_envelope(&[])))
             .expect(1)
             .mount(&mock)
             .await;
@@ -839,7 +838,7 @@ async fn members_sql_shape_origin_filter() {
                 serde_json::from_slice(&req.body).unwrap_or(serde_json::Value::Null);
             !v["query"].as_str().unwrap_or("").contains(" AND Origin = ")
         })
-        .respond_with(ResponseTemplate::new(200).set_body_json(query_envelope(vec![])))
+        .respond_with(ResponseTemplate::new(200).set_body_json(query_envelope(&[])))
         .expect(1)
         .mount(&mock)
         .await;
@@ -866,7 +865,7 @@ async fn members_sql_shape_origin_filter() {
                 serde_json::from_slice(&req.body).unwrap_or(serde_json::Value::Null);
             !v["query"].as_str().unwrap_or("").contains(" AND Origin = ")
         })
-        .respond_with(ResponseTemplate::new(200).set_body_json(query_envelope(vec![])))
+        .respond_with(ResponseTemplate::new(200).set_body_json(query_envelope(&[])))
         .expect(4)
         .mount(&mock2)
         .await;
@@ -894,7 +893,7 @@ async fn used_by_sql_shape_super_merge() {
         .and(body_query(
             "SELECT Name, DependsOn, Super FROM %Dictionary.ClassDefinition WHERE DependsOn [ 'X' OR Super [ 'X' ORDER BY Name".to_string(),
         ))
-        .respond_with(ResponseTemplate::new(200).set_body_json(query_envelope(vec![
+        .respond_with(ResponseTemplate::new(200).set_body_json(query_envelope(&[
             json!({"Name": "User1", "DependsOn": "X", "Super": "%RegisteredObject"}),
             json!({"Name": "OverMatch", "DependsOn": "Xyz.Other", "Super": ""}),
             json!({"Name": "User2", "DependsOn": "", "Super": "X,P"}),
