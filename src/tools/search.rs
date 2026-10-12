@@ -32,7 +32,7 @@ pub struct SearchCodeArgs {
     pub case_sensitive: Option<bool>,
     /// Whole-word match (only sent when set; server default applies otherwise)
     pub whole_word: Option<bool>,
-    /// Max matches (default: settings search_max_results; server hard-caps at 200)
+    /// Max matches (default: settings `search_max_results`; server hard-caps at 200)
     pub max_results: Option<u32>,
 }
 
@@ -113,7 +113,7 @@ pub async fn search_code(client: &IrisClient, args: &SearchCodeArgs) -> Result<S
     let env = api::search(client, &ns, &params).await?;
     let mut res = api::parse_search_result(&env, max)?;
     res.namespace = ns;
-    res.query = args.query.clone();
+    res.query.clone_from(&args.query);
     res.documents = documents;
     Ok(res)
 }

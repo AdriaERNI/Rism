@@ -1,5 +1,5 @@
 //! Shared name-validation predicates. Moved verbatim from
-//! `src/tools/testing.rs` (E_SPEC §3) so every interpolation site —
+//! `src/tools/testing.rs` (`E_SPEC` §3) so every interpolation site —
 //! tests, graph SQL — shares ONE definition of the security predicate.
 
 /// Class-name allowlist (package.Class form, optional leading %).
