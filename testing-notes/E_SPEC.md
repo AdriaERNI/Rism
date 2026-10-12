@@ -309,7 +309,63 @@ All graph queries run via `sql::query(client, ns, sql, settings.sql_max_rows)`
 
 ## §4 CLI grammar
 
-(to be filled)
+New `Commands` variants in `src/cli/mod.rs` (pattern: `Sql { query, max_rows }`
+at :46), dispatched in `src/main.rs` — BOTH wildcard arms get the new cases
+(constitution: `Commands::Mcp` handled above; add `Commands::Search`/
+`Commands::Graph` next to the `Commands::Sql` arm which converts args →
+`tools::…` directly).
+
+```
+rism search <PATTERN>
+    [--documents <MASK>[,MASK...]]   (repeatable or comma list; default
+                                      "*.cls,*.mac,*.int")
+    [--no-regex]                     (default regex ON; the flag flips
+                                      regex=Some(false); takes no values)
+    [--system]                       -> include_system=true
+    [--generated]                    -> include_generated=true
+    [--case-sensitive]               -> case_sensitive=true
+    [--whole-word]                   -> whole_word=true
+    [--max <N>]                      -> max_results=Some(N)
+    [--namespace <NS>]               (global flag already exists; use it)
+
+rism graph subclasses <CLASS>  [--depth <N>] [--namespace <NS>]
+rism graph members    <CLASS>  [--kind <all|methods|properties|parameters|xdata>]
+                               [--include-inherited] [--namespace <NS>]
+rism graph deps       <CLASS>  [--direction <depends-on|used-by|both>]
+                               [--depth <N>] [--namespace <NS>]
+```
+`Graph` is a `#[command(subcommand)] GraphCommands` enum (Doc/Test/Debug
+pattern); `Search` is a flat variant. Defaults map 1:1 to §1 defaults
+(omit → `None` → tool resolves via settings). `--kind`/`--direction` use
+`value_enum` (clap snake_case values; `depends-on`/`used-by` accept the
+kebab spellings clap derives from the variant names — freeze:
+`depends_on`, `used_by`, `both`, `all`, `methods`, `properties`,
+`parameters`, `xdata` as the literal accepted strings).
+
+Output: same `--format table|json` global parity as every other arm —
+`table` renders search as `doc | member/line | text` rows (one row per
+match, `truncated` and tally echoed after the table as a footer line) and
+graph as one row per entry; `json` prints the §1 structured value with
+`serde_json::to_string_pretty` (Sql/Doc arm convention — coder follows
+`src/cli/render.rs` helpers; no new rendering framework).
+
+## §5 Settings
+
+`src/settings.rs` adds two fields (`#[serde(default)]` block, env tier
+follows the existing `RISM_*` if-let chain):
+
+| field | type | default | config.toml key | env |
+|---|---|---|---|---|
+| `search_max_results` | `u32` | 200 | `search_max_results` (root, like `sql_max_rows`) | `RISM_SEARCH_MAX_RESULTS` |
+| `graph_depth` | `u32` | 10 | `graph_depth` | `RISM_GRAPH_DEPTH` |
+
+Precedence unchanged: CLI flag > env > config.toml > default. Env parse
+behavior mirrors the existing numeric env handlers in
+`Settings::load_with_env` (`RISM_IRIS_API_VERSION` /
+`RISM_TERMINAL_MAX_OUTPUT_CHARS` — coder: copy their failure path exactly;
+do not invent new semantics). `search_max_results > 200` is allowed on the wire (server
+caps; §2). Env names for the CLI flags themselves ride the existing
+global `--namespace`/`RISM_IRIS_NAMESPACE` — no new ones.
 
 ## §5 Settings
 
