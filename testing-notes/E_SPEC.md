@@ -46,20 +46,19 @@ server hard-caps at 200 (issue fact) and the response marks `truncated`
 
 `class: String` (required, `valid_class_name` gate), `namespace:
 Option<String>`, `depth: Option<u32>` — max BFS levels, `Some(1)` = direct
-children only, default `settings.graph_depth` = 10, values > 64 clamp to 64
-(0 → error `Config("depth must be >= 1")`). Uses the transitive table
-function for the flat name list + a bounded `Super IN (...)` walk for
-per-level assignment (§3). No `include_self` — result excludes `class`
-itself.
+children only, default `settings.graph_depth` = 10; `Some(0)` →
+`Error::Config("depth must be >= 1")`; values > 64 clamp to 64.
+Algorithm: bounded `Super [ 'F'` walk (§3). No `include_self` — the
+result excludes `class` itself.
 
 ### class_members — `src/tools/graph.rs::ClassMembersArgs`
 
 `class: String` (gate), `namespace: Option<String>`,
 `kind: Option<MembersKind>` where
 `pub enum MembersKind { All, Methods, Properties, Parameters, XData }`
-(serde rename_all = "snake_case"; default `All` — decided: XData INCLUDED in
-the enum because `%Dictionary.CompiledXData` is queryable (probe: returns
-parent/Name rows), even though its `Data` stream is not),
+(serde rename_all = "snake_case"; default `All`. XData is IN the enum:
+`%Dictionary.CompiledXData` names are queryable (probe), only its `Data`
+stream is not — the entry carries name only),
 `include_inherited: Option<bool>` default `false` → `true` drops the
 `Origin = class` filter (§3). No depth field.
 
@@ -81,10 +80,13 @@ search_code:
   "server_tally": "Found 1 occurrence/s in 1 file/s.",
   "truncated": false, "doc_count": 1, "match_count": 1,
   "results": [ { "doc": "My.Cls.cls",
-      "matches": [ {"member": "Set", "attr": null, "line": null, "text": "Set"},
-                   {"member": null, "attr": null, "line": 5, "text": "Quit x"} ] } ] }
+      "matches": [ {"member": "Set", "attr": null, "line": null, "label": null, "text": "Set"},
+                   {"member": null, "attr": null, "line": 5, "label": null, "text": "Quit x"} ] } ] }
 ```
-`line` is ALWAYS `u32|null` after normalization (§2); `attr` appears only
+`line` is ALWAYS `u32|null` after normalization (§2); `label` (string|null,
+always present in the schema) holds the raw non-numeric line token, e.g.
+`"Description+32"`, when a routine/member line can't parse as u32; `attr`
+appears only
 for class members (e.g. `"Description"`); `member` is the member name for
 class-file hits and `null` for routine-line hits, where `line` is the
 1-based routine line.
@@ -105,7 +107,7 @@ class_members:
                     "return_type": "%Status", "sql_proc": false, "origin": "X"} ],
   "properties": [ {"name": "P", "type": "%%String", "collection": "",
                     "origin": "X"} ],
-  "parameters": [ {"name": "CAPTION", "default": "\"\"", "type": "", "origin": "X"} ],
+  "parameters": [ {"name": "CAPTION", "type": null, "origin": "X"} ],
   "xdata":      [ {"name": "XML"} ] }
 ```
 `origin` = declaring class (server column; with `include_inherited=false`
@@ -174,10 +176,9 @@ Envelope → `SearchResult` normalization (unit-testable pure fn
    constant `"Maximum search limit reached"`).
 5. `server_tally`: LAST console line that starts with "Found " (probe
    shapes: `Found N occurrence/s in M file/s.` [+ ` Maximum search limit
-   reached.`] or `Not found.`); `null` when no such line. Console line 1 is
-   the echo of the search (`Searching for '...' in '...'`) — kept raw in
-   the structured output? NO — frozen: console is NOT echoed beyond the
-   tally; the CLI/table renderer uses tally+counts only.
+   reached.`] or `Not found.`). The other console lines (the
+   `Searching for '...' in '...'` echo) are NOT kept in the structured
+   output — frozen: tally + counts only; the table renderer uses those.
 6. Counts `doc_count`/`match_count` are computed client-side from the
    parsed array (server tally text is display-only — its numbers can
    exceed/undercount vs the returned array at the cap).
@@ -190,7 +191,121 @@ Wiremock pins (§7): URL query order-insensitive matching via
 
 ## §3 Graph SQL (frozen statements)
 
-(to be filled)
+All graph SQL goes through `crate::iris::sql::query` (POST
+`action/query` — body key `query`; already implemented). The endpoint has
+NO bind parameters (issue fact), so every interpolated class name passes
+`valid_class_name()` BEFORE the SQL string is built — same rule as
+`run_tests`. `action/search` never interpolates a class name; its only
+gate is URL-encoding (§2).
+
+**`valid_class_name()` relocation (decision):** move the fn verbatim from
+`src/tools/testing.rs:26` to a new `src/tools/names.rs` as
+`pub(crate) fn`, and add `pub(crate) use crate::tools::names::valid_class_name;`
+inside testing.rs so existing call sites/tests don't churn. Rationale:
+shared single definition beats duplication (drift risk in a security
+predicate); it's wire-invisible so no ledger entry is needed. Move
+`valid_identifier` alongside (used by the dependency classifier below).
+
+`%Dictionary` facts (all probed live 2026-10-12, USER, IRIS 2025.3,
+Atelier v8):
+- `ClassDefinition` cols include `Name, Super, DependsOn`. `Super` is a
+  comma-separated list for multiple inheritance (probe:
+  `%CPT.JS.Analyse.Function` → `"%RegisteredObject,%CPT.JS.Analyse.Clonable"`,
+  no spaces). `Extends`/`Derived` DO NOT exist (issue fact).
+- The contains operator `[` works in WHERE (probe: `Super [ 'X'` and
+  `DependsOn [ '.'` both returned rows). It is SUBSTRING based:
+  `Super [ 'EnsLib.EDI.SEF.Node'` also matches a class whose Super is
+  `EnsLib.EDI.SEF.NodeList` (probe) — hence the exact-match client filter
+  in every walk below.
+- Table functions: `SELECT Name FROM
+  %Dictionary.ClassDefinition_SubclassOf('X')` = TRANSITIVE descendants,
+  single `Name` column, no parent/level column; `TOP n` and
+  `WHERE Name [ 'pfx'` work (probed). `_SuperclassOf` = transitive
+  ancestors. NOT used by the tools (no level info); noted for the ledger.
+- `CompiledClass` has an `Ancestry` column but it read empty for user
+  classes (probe) — the contract never relies on it.
+- Member tables: `%Dictionary.CompiledMethod(parent, Name, ClassMethod,
+  SqlProc, FormalSpec, ReturnType, Origin)`, `%Dictionary.CompiledProperty
+  (parent, Name, Type, Collection, Origin)` (probe: Type fully-qualified,
+  e.g. `%Library.String`), `%Dictionary.CompiledParameter(parent, Name,
+  Type, Origin)` (Type often empty — nullable in the response; the raw
+  default lives in column `_Default`, NOT selected; response has no
+  `default` field), `%Dictionary.CompiledXData(parent, Name)` — never
+  SELECT its stream cols (issue fact: unreadable). `Origin` = declaring
+  class; own members have `Origin = class` (probe: a system class's
+  method list filtered by `Origin = <itself>` returned rows;
+  `EnsLib.EDI.SEF.Location`'s methods all originate elsewhere).
+  `%Dictionary.CompiledMember` / `CompiledProcedure` DO NOT exist
+  (probe: SQLCODE -30).
+
+Placeholder legend: `{C}`/`{F}` = class name that passed
+`valid_class_name()` (no `'`, `;`, spaces — injection-free by
+construction); rows returned by the server are re-validated before being
+re-interpolated as frontier values.
+
+### find_subclasses — depth-bounded BFS
+
+```sql
+SELECT Name, Super FROM %Dictionary.ClassDefinition
+ WHERE Super [ '{F}'
+ ORDER BY Name
+```
+one query per frontier name, level by level, start frontier = `[C]`.
+Algorithm (frozen): visited = {C}; for level in 1..=depth: next = ∅; for
+each F in frontier: run the query; keep rows where `Super.split(',')`
+contains F EXACTLY (substring over-match guard; multi-superclass edges
+included); each kept name not in visited joins `next` with
+`{name, super: <full Super string>, level}`; visited += name.
+frontier = next; empty → done, `truncated=false`. Non-empty frontier when
+the loop ends → `truncated=true`. Frontier names failing
+`valid_class_name()` are dropped with a `tracing::warn!` (server-sourced
+is NOT trusted). Query budget: at most 256 frontier queries per call;
+exceeding it sets `truncated=true`.
+
+### class_members — one query per requested table (kind picks which run)
+
+```sql
+SELECT Name, ClassMethod, SqlProc, FormalSpec, ReturnType, Origin
+  FROM %Dictionary.CompiledMethod    WHERE parent = '{C}'{O} ORDER BY Name
+SELECT Name, Type, Collection, Origin
+  FROM %Dictionary.CompiledProperty  WHERE parent = '{C}'{O} ORDER BY Name
+SELECT Name, Type, Origin
+  FROM %Dictionary.CompiledParameter WHERE parent = '{C}'{O} ORDER BY Name
+SELECT Name FROM %Dictionary.CompiledXData WHERE parent = '{C}' ORDER BY Name
+```
+`{O}` = ` AND Origin = '{C}'` when `include_inherited` is false/omitted;
+empty string when true. `parent = '{C}'` is exact id equality — no
+over-match risk. kind=all runs all four. XData rows are the class's own
+declarations (no Origin filter, no origin field in the entry).
+CompilerGenerated/Internal members ARE returned; `private` is NOT exposed.
+
+### class_dependencies
+
+depends_on (always 1 hop — raw dictionary field, no walk):
+```sql
+SELECT DependsOn FROM %Dictionary.ClassDefinition WHERE Name = '{C}'
+```
+Client: split raw text on `,`, trim, drop empties, strip a trailing
+`(...)` member suffix, classify each entry: passes `valid_class_name()`
+and contains `.` → `"class"`; passes `valid_identifier()` → `"routine"`;
+else `"other"`. Empty field (probe: common) → empty array, not an error.
+
+used_by (impact query; `depth` applies here):
+```sql
+SELECT Name, DependsOn, Super FROM %Dictionary.ClassDefinition
+ WHERE DependsOn [ '{F}' OR Super [ '{F}'
+ ORDER BY Name
+```
+BFS exactly like subclasses (same frontier re-validation, same
+substring→exact client verification by re-splitting both fields; a
+`Super` edge counts as a dependency — a subclass depends on its
+superclass even when DependsOn omits it, which probe shows is frequent).
+Default depth 1. Same 256-query budget. `truncated` = leftover frontier,
+budget hit, or `has_more` on any query.
+
+All graph queries run via `sql::query(client, ns, sql, settings.sql_max_rows)`
+(1000 default).
+
 
 ## §4 CLI grammar
 
