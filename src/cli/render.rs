@@ -483,13 +483,13 @@ pub fn render_debug_attach(info: &DebugSessionInfo, format: OutputFormat) {
 }
 
 /// Render search hits: one row per match (`doc | member/line | text`)
-/// plus the tally/truncation footer (E_SPEC §4).
+/// plus the tally/truncation footer (`E_SPEC` §4).
 pub fn render_search(res: &crate::tools::search::SearchResult, format: OutputFormat) {
     render_json(
         &serde_json::to_value(res).unwrap_or_default(),
         format,
         || {
-            println!("{:<44} {:<18} {}", "DOC", "MEMBER/LINE", "TEXT");
+            println!("{:<44} {:<18} TEXT", "DOC", "MEMBER/LINE");
             println!(
                 "{}",
                 "-".repeat(
@@ -537,7 +537,7 @@ pub fn render_subclasses(res: &crate::tools::graph::FindSubclassesResult, format
         &serde_json::to_value(res).unwrap_or_default(),
         format,
         || {
-            println!("{:<44} {:<44} {}", "SUBCLASS", "SUPER", "LEVEL");
+            println!("{:<44} {:<44} LEVEL", "SUBCLASS", "SUPER");
             for n in &res.subclasses {
                 println!("{:<44} {:<44} {}", n.name, n.parent, n.level);
             }
