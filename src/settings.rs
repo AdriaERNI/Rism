@@ -68,7 +68,8 @@ pub struct Settings {
     pub timeout_secs: u64,
     /// Default SQL max rows.
     pub sql_max_rows: u32,
-    /// Default max hits for `search_code` (server hard-caps at 200).
+    /// Default max hits for `search_code` (`max` param; the 2025.3 server
+    /// honours higher values, older builds cap at 200 — issue #17).
     pub search_max_results: u32,
     /// Default BFS depth for the graph tools (`find_subclasses`).
     pub graph_depth: u32,

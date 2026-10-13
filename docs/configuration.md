@@ -24,6 +24,8 @@ iris_namespace = "USER"
 iris_api_version = 0        # 0 = negotiate from GET /api/atelier/
 timeout_secs   = 30
 sql_max_rows   = 1000
+search_max_results = 200  # default max hits for search_code / rism search
+graph_depth    = 10       # default BFS depth for rism graph subclasses
 terminal_max_output_chars = 100000
 workspace_root = "/home/you/code"  # absolute path (no `~` expansion); root for read_file/list_files
 debug_tools_enabled = true
@@ -58,6 +60,8 @@ mcp_host = "127.0.0.1"      # http door bind; loopback only without the flag
 | `RISM_WORKSPACE` | root for host file tools | *(unset = disabled)* |
 | `RISM_DEBUG_TOOLS` | `0` hides the 9 `debug_*` tools | `1` |
 | `RISM_TERMINAL_MAX_OUTPUT_CHARS` | bound on terminal output retained per command (garbage keeps default) | `100000` |
+| `RISM_SEARCH_MAX_RESULTS` | default `max` for `search_code` / `rism search` (garbage keeps default) | `200` |
+| `RISM_GRAPH_DEPTH` | default BFS `depth` for `find_subclasses` / `rism graph subclasses` (garbage keeps default) | `10` |
 | `RISM_MCP_TRANSPORT` | `rism mcp` door: `stdio` or `http` (+ streamable-http aliases; `sse` is rejected, never mapped) | `stdio` |
 | `RISM_MCP_PORT` | http door port (`0` = ephemeral; actual port on the stderr ready line) | `3000` |
 
@@ -70,7 +74,8 @@ directory (or the `cwd` parameter) with or without a workspace. There is no
 ## Defaults
 
 Everything unset gives: `http://localhost:52773`, `_SYSTEM`/`SYS`, `USER`, API
-negotiation, 30 s timeout, SQL capped at 1 000 rows, terminal output capped at
+negotiation, 30 s timeout, SQL capped at 1 000 rows, search capped at 200
+hits per call, graph walks bounded at depth 10, terminal output capped at
 100 000 chars, debugger enabled, host file tools disabled until you set a
 workspace root.
 

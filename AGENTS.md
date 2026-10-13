@@ -7,7 +7,7 @@ Format: https://agents.md — canonical repo instructions for coding agents.
 
 Rism is a Rust rewrite of Prism: a CLI **and** MCP server for InterSystems
 IRIS development over the Atelier REST API (zero server-side uploads).
-25 tools, one core in `src/tools/`, two doors (`rism <cmd>` CLI,
+29 tools, one core in `src/tools/`, two doors (`rism <cmd>` CLI,
 `rism mcp` stdio or streamable-HTTP). Depth: [docs/index.md](docs/index.md).
 
 ## Build & test
@@ -53,7 +53,7 @@ pinned toolchains miss (e.g. `unused_async`, renamed
 - `src/tools/` is framework-free: each capability exists exactly once
   there, no clap/rmcp/axum types. `src/cli/` and `src/mcp/` are thin
   adapters over it.
-- Wire names are frozen: the 25 `#[tool]` names in `src/mcp/mod.rs` and
+- Wire names are frozen: the 29 `#[tool]` names in `src/mcp/mod.rs` and
   their JSON field names. Adding/removing/renaming one silently is a
   contract break — the CI probe counts tools via `inputSchema` matches.
 - Lints are lints: `#![forbid(unsafe_code)]`, `deny(clippy::unwrap_used,
