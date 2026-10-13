@@ -25,7 +25,7 @@ the issue text was written against a branch counting differently).
 This PR: 25 → 29 visible tools. Drift surface that must move 25→29:
 README.md ×2, docs/ai-agents.md ×2, docs/cli-reference.md ×2,
 docs/getting-started.md, docs/index.md ×3, docs/mcp-tools.md header, and
-`tests/http_door.rs`'s `assert_eq!(...count(), 25, "25 tools")` (+
+`tests/http_door.rs`'s `assert_eq!(...count(), 25, "25-tool count")` (+
 `http_door_stateless.rs` if it pins a number). docs/mcp-tools.md gets 4
 new `###` sections (its 13 sections are grouped per-family, so the
 section-count drift gate reads the new headings).

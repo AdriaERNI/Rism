@@ -34,7 +34,7 @@ which order, and the risks. Lane: coder → tester → reviewer → docs.
 | `tests/http_door.rs` (+stateless if pinned) | 25→29 count |
 | `README.md`, `docs/{ai-agents,cli-reference,getting-started,index,mcp-tools,configuration}.md` | 25→29 everywhere + new tool sections + settings keys + nav entry for code-search.md |
 | `mkdocs.yml` | nav: Code search & references |
-| `AGENTS.md` | counts (grep `25 tools`) |
+| `AGENTS.md` | counts (grep `25`) |
 | `.gitignore` | `bench/.work/` |
 
 ## §C Build order (coder checkpoints — commit each row)

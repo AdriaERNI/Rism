@@ -66,7 +66,7 @@ out for this PR: there is no server xref machinery to read (issue #17)
 and building an index duplicates the metadata scan above. Sketch:
 hash-checked per-namespace incremental index in the Rism data dir,
 populated by a full `action/search` sweep + `class_members` walk, with
-the Tier 1/2 tools staying the source of truth on conflict. Not
+the Tier-1/Tier-2 surfaces staying the source of truth on conflict. Not
 implemented; no flag, no format.
 
 ## Benchmarks

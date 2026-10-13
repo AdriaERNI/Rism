@@ -45,7 +45,7 @@ MEASURED:
 Repro: `--host ip6-localhost --port 0` (ip6-localhost = ::1, loopback, in the
 stock /etc/hosts) → `Error: configuration error: refusing to bind the HTTP MCP
 door to 'ip6-localhost' without --allow-all-interfaces: … every host on the
-network could drive all 25 tools`. And `--host ip6-localhost
+network could drive all its then-25-tool surface`. And `--host ip6-localhost
 --allow-all-interfaces` BINDS FINE on `[::1]:34137` printing the all-network
 warning banner. `--host hermes-agent` (127.0.1.1, loopback per /etc/hosts on
 this box) → same refusal.
