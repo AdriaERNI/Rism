@@ -62,7 +62,7 @@ Keep `serve(settings)` = stdio untouched; add `serve_http(settings, HttpConfig)`
   when `--allow-all-interfaces` (or a non-loopback --host with the flag) →
   `.disable_allowed_hosts()` (or `with_allowed_hosts(host, "localhost")`) and
   print a loud stderr WARNING banner: no auth on this door, every local (or
-  network, with the flag) process can drive all 25 tools.
+  network, with the flag) process can drive all of its then-25-tool surface.
 - Bind 0.0.0.0 / non-loopback host WITHOUT `--allow-all-interfaces`: refuse at
   startup, stderr error, non-zero exit. Port already in use: clean io-error
   exit, never a panic, never a hang.

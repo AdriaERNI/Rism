@@ -68,6 +68,11 @@ pub struct Settings {
     pub timeout_secs: u64,
     /// Default SQL max rows.
     pub sql_max_rows: u32,
+    /// Default max hits for `search_code` (`max` param; the 2025.3 server
+    /// honours higher values, older builds cap at 200 — issue #17).
+    pub search_max_results: u32,
+    /// Default BFS depth for the graph tools (`find_subclasses`).
+    pub graph_depth: u32,
     /// Terminal output bound (chars); 0 = unlimited.
     pub terminal_max_output_chars: usize,
     /// Local workspace root for host-side file tools (empty = disabled).
@@ -97,6 +102,8 @@ impl Default for Settings {
             iris_api_version: 0,
             timeout_secs: 30,
             sql_max_rows: 1_000,
+            search_max_results: 200,
+            graph_depth: 10,
             terminal_max_output_chars: 100_000,
             workspace_root: String::new(),
             debug_tools_enabled: true,
@@ -192,6 +199,24 @@ impl Settings {
                 self.terminal_max_output_chars = n;
             }
         }
+        if let Ok(v) = std::env::var("RISM_SEARCH_MAX_RESULTS") {
+            // same failure path as the numeric handlers above: garbage keeps
+            // the config/default value (E_SPEC §5)
+            if let Some(n) = Self::parse_env_u32(&v) {
+                self.search_max_results = n;
+            }
+        }
+        if let Ok(v) = std::env::var("RISM_GRAPH_DEPTH") {
+            if let Some(n) = Self::parse_env_u32(&v) {
+                self.graph_depth = n;
+            }
+        }
+    }
+
+    /// Trimmed u32 env value; `None` on garbage (pure-fn form so tests pin
+    /// the parse without `set_var`, mirroring [`Self::parse_env_usize`]).
+    fn parse_env_u32(v: &str) -> Option<u32> {
+        v.trim().parse::<u32>().ok()
     }
 
     /// Trimmed positive-integer env value; `None` on garbage (keeps
@@ -348,5 +373,29 @@ mod tests {
         assert_eq!(Settings::parse_env_usize(" 100000 "), Some(100_000));
         assert_eq!(Settings::parse_env_usize("0"), Some(0));
         assert_eq!(Settings::parse_env_usize(" \t7\n"), Some(7));
+    }
+
+    /// U16 — search/graph settings defaults + the env parse path (pure-fn
+    /// form, mirrors the `terminal_max_output_chars` test above).
+    #[test]
+    fn settings_search_graph_defaults_and_env() {
+        let s = Settings::default();
+        assert_eq!(s.search_max_results, 200);
+        assert_eq!(s.graph_depth, 10);
+        // a config.toml without the new keys keeps these defaults
+        let old: Settings = toml::from_str("iris_namespace = \"USER\"").unwrap();
+        assert_eq!(old.search_max_results, 200);
+        assert_eq!(old.graph_depth, 10);
+        // an explicit config tier parses
+        let cfg: Settings = toml::from_str("search_max_results = 50\ngraph_depth = 3\n").unwrap();
+        assert_eq!(cfg.search_max_results, 50);
+        assert_eq!(cfg.graph_depth, 3);
+        // env parse path: garbage keeps the config/default (None), numbers
+        // (incl. >200 pass-through, server caps) parse
+        assert_eq!(Settings::parse_env_u32(" 500 "), Some(500));
+        assert_eq!(Settings::parse_env_u32("not-a-number"), None);
+        assert_eq!(Settings::parse_env_u32("-1"), None);
+        assert_eq!(Settings::parse_env_u32("4294967296"), None);
+        assert_eq!(Settings::parse_env_u32("0"), Some(0));
     }
 }

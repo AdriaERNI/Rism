@@ -7,6 +7,10 @@ use crate::settings::McpTransport;
 use crate::tools::documents::{
     DeleteDocumentArgs, GetDocumentArgs, ListDocumentsArgs, PutDocumentArgs,
 };
+use crate::tools::graph::{
+    ClassDependenciesArgs, ClassMembersArgs, DependencyDirection, FindSubclassesArgs, MembersKind,
+};
+use crate::tools::search::SearchCodeArgs;
 use crate::tools::sql::ExecuteSqlArgs;
 
 pub mod render;
@@ -50,6 +54,35 @@ pub enum Commands {
         #[arg(long)]
         max_rows: Option<u32>,
     },
+    /// Text/regex search over server source documents
+    Search {
+        /// Pattern (regex unless --no-regex)
+        pattern: String,
+        /// Document masks (repeatable or comma list; default *.cls,*.mac,*.int)
+        #[arg(long, value_delimiter = ',')]
+        documents: Vec<String>,
+        /// Disable regex (literal text search)
+        #[arg(long)]
+        no_regex: bool,
+        /// Include system documents
+        #[arg(long)]
+        system: bool,
+        /// Include generated documents
+        #[arg(long)]
+        generated: bool,
+        /// Case-sensitive match
+        #[arg(long)]
+        case_sensitive: bool,
+        /// Whole-word match
+        #[arg(long)]
+        whole_word: bool,
+        /// Max matches (server hard-caps at 200)
+        #[arg(long)]
+        max: Option<u32>,
+    },
+    /// Class reference graph (subclasses / members / deps)
+    #[command(subcommand)]
+    Graph(GraphCommands),
     /// Document operations (list/get/put/compile/delete)
     #[command(subcommand)]
     Doc(DocCommands),
@@ -108,7 +141,7 @@ pub enum Commands {
     /// Serve as an MCP server. Default door: stdio (byte-identical to every
     /// released version). `--transport http` opens a streamable-HTTP door at
     /// /mcp - NO authentication on that door: every local process can drive
-    /// all 25 tools. Binds 127.0.0.1 unless --host/--allow-all-interfaces.
+    /// all 29 tools. Binds 127.0.0.1 unless --host/--allow-all-interfaces.
     Mcp {
         /// Transport door: `stdio` (default) or `http`; aliases
         /// `streamable-http` / `streamable_http` (env: `RISM_MCP_TRANSPORT`)
@@ -159,6 +192,94 @@ impl McpConfig {
         !matches!(self.transport, Some(McpTransport::Http))
             && (self.port.is_some() || self.host.is_some())
     }
+}
+
+/// Graph subcommands (issue #17 Tier 2).
+#[derive(Subcommand, Debug)]
+pub enum GraphCommands {
+    /// List subclasses of a class (bounded BFS)
+    Subclasses {
+        /// Class name
+        class: String,
+        /// Max BFS levels (default: settings `graph_depth`)
+        #[arg(long)]
+        depth: Option<u32>,
+    },
+    /// List a class's members
+    Members {
+        /// Class name
+        class: String,
+        /// Which members to list
+        #[arg(long, value_parser = parse_kind_arg, default_value = "all")]
+        kind: KindArg,
+        /// Include inherited members
+        #[arg(long)]
+        include_inherited: bool,
+    },
+    /// Class dependency edges
+    Deps {
+        /// Class name
+        class: String,
+        /// Which direction(s)
+        #[arg(long, value_parser = parse_direction_arg, default_value = "both")]
+        direction: DirectionArg,
+        /// Max BFS levels for `used_by` (default 1)
+        #[arg(long)]
+        depth: Option<u32>,
+    },
+}
+
+/// `--kind` parser: accepts the frozen `snake_case` strings (§4) plus
+/// clap's kebab derivations, so `depends_on`/`depends-on` both work.
+fn parse_kind_arg(s: &str) -> std::result::Result<KindArg, String> {
+    match s.replace('-', "_").as_str() {
+        "all" => Ok(KindArg::All),
+        "methods" => Ok(KindArg::Methods),
+        "properties" => Ok(KindArg::Properties),
+        "parameters" => Ok(KindArg::Parameters),
+        "xdata" => Ok(KindArg::Xdata),
+        other => Err(format!(
+            "'{other}' is not a kind (all, methods, properties, parameters, xdata)"
+        )),
+    }
+}
+
+/// `--direction` parser (same dual-spelling rule as `--kind`).
+fn parse_direction_arg(s: &str) -> std::result::Result<DirectionArg, String> {
+    match s.replace('-', "_").as_str() {
+        "depends_on" => Ok(DirectionArg::DependsOn),
+        "used_by" => Ok(DirectionArg::UsedBy),
+        "both" => Ok(DirectionArg::Both),
+        other => Err(format!(
+            "'{other}' is not a direction (depends_on, used_by, both)"
+        )),
+    }
+}
+
+/// clap mirror of [`MembersKind`] (cli stays the only clap-aware layer).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum KindArg {
+    /// All member tables
+    All,
+    /// Methods only
+    Methods,
+    /// Properties only
+    Properties,
+    /// Parameters only
+    Parameters,
+    /// `XData` block names only
+    Xdata,
+}
+
+/// clap mirror of [`DependencyDirection`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum DirectionArg {
+    /// What the class uses
+    DependsOn,
+    /// Who uses the class
+    UsedBy,
+    /// Both directions
+    Both,
 }
 
 /// Debug subcommands. CLI sessions are self-contained: each command opens,
@@ -301,6 +422,8 @@ impl Commands {
             }),
             Self::Mcp { .. }
             | Self::Doc(_)
+            | Self::Search { .. }
+            | Self::Graph(_)
             | Self::Compile { .. }
             | Self::Info
             | Self::Exec { .. }
@@ -310,6 +433,103 @@ impl Commands {
             | Self::Shell { .. }
             | Self::Cat { .. }
             | Self::Ls { .. } => None,
+        }
+    }
+
+    /// Shared args for [`crate::tools::search::search_code`], or None when
+    /// the command isn't `search`. Flag presence maps 1:1 to §1 defaults:
+    /// unset flags stay `None` so the tools layer resolves via settings.
+    #[must_use]
+    pub fn to_search(&self, ns_override: &Option<String>) -> Option<SearchCodeArgs> {
+        match self {
+            Self::Search {
+                pattern,
+                documents,
+                no_regex,
+                system,
+                generated,
+                case_sensitive,
+                whole_word,
+                max,
+            } => Some(SearchCodeArgs {
+                query: pattern.clone(),
+                namespace: ns_override.clone(),
+                documents: if documents.is_empty() {
+                    None
+                } else {
+                    Some(documents.clone())
+                },
+                regex: if *no_regex { Some(false) } else { None },
+                include_system: if *system { Some(true) } else { None },
+                include_generated: if *generated { Some(true) } else { None },
+                case_sensitive: if *case_sensitive { Some(true) } else { None },
+                whole_word: if *whole_word { Some(true) } else { None },
+                max_results: *max,
+            }),
+            _ => None,
+        }
+    }
+
+    /// Search/graph commands as one [`CodeCall`] for main dispatch.
+    #[must_use]
+    pub fn to_code(&self, ns_override: &Option<String>) -> Option<CodeCall> {
+        match self {
+            Self::Search { .. } => self.to_search(ns_override).map(CodeCall::Search),
+            Self::Graph(_) => self.to_graph(ns_override).map(CodeCall::Graph),
+            _ => None,
+        }
+    }
+
+    /// Shared args for the graph tools, or None when the command isn't
+    /// `graph`. The three graph entry points share no args struct, so this
+    /// hands back the enum of conversions for main dispatch.
+    #[must_use]
+    pub fn to_graph(&self, ns_override: &Option<String>) -> Option<GraphCall> {
+        match self {
+            Self::Graph(g) => Some(match g {
+                GraphCommands::Subclasses { class, depth } => GraphCall::Subclasses {
+                    args: FindSubclassesArgs {
+                        class: class.clone(),
+                        namespace: ns_override.clone(),
+                        depth: *depth,
+                    },
+                },
+                GraphCommands::Members {
+                    class,
+                    kind,
+                    include_inherited,
+                } => GraphCall::Members {
+                    args: ClassMembersArgs {
+                        class: class.clone(),
+                        namespace: ns_override.clone(),
+                        kind: Some(match kind {
+                            KindArg::All => MembersKind::All,
+                            KindArg::Methods => MembersKind::Methods,
+                            KindArg::Properties => MembersKind::Properties,
+                            KindArg::Parameters => MembersKind::Parameters,
+                            KindArg::Xdata => MembersKind::XData,
+                        }),
+                        include_inherited: if *include_inherited { Some(true) } else { None },
+                    },
+                },
+                GraphCommands::Deps {
+                    class,
+                    direction,
+                    depth,
+                } => GraphCall::Deps {
+                    args: ClassDependenciesArgs {
+                        class: class.clone(),
+                        namespace: ns_override.clone(),
+                        direction: Some(match direction {
+                            DirectionArg::DependsOn => DependencyDirection::DependsOn,
+                            DirectionArg::UsedBy => DependencyDirection::UsedBy,
+                            DirectionArg::Both => DependencyDirection::Both,
+                        }),
+                        depth: *depth,
+                    },
+                },
+            }),
+            _ => None,
         }
     }
 
@@ -377,6 +597,8 @@ impl Commands {
             }),
             Self::Sql { .. }
             | Self::Mcp { .. }
+            | Self::Search { .. }
+            | Self::Graph(_)
             | Self::Compile { .. }
             | Self::Info
             | Self::Exec { .. }
@@ -388,6 +610,35 @@ impl Commands {
             | Self::Ls { .. } => None,
         }
     }
+}
+
+/// A dispatched search/graph call.
+#[derive(Debug)]
+pub enum CodeCall {
+    /// search
+    Search(SearchCodeArgs),
+    /// graph family
+    Graph(GraphCall),
+}
+
+/// A dispatched graph call.
+#[derive(Debug)]
+pub enum GraphCall {
+    /// subclasses
+    Subclasses {
+        /// Shared args.
+        args: FindSubclassesArgs,
+    },
+    /// members
+    Members {
+        /// Shared args.
+        args: ClassMembersArgs,
+    },
+    /// deps
+    Deps {
+        /// Shared args.
+        args: ClassDependenciesArgs,
+    },
 }
 
 /// A dispatched document call (content filled from file at exec time).

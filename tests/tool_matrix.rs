@@ -1,4 +1,4 @@
-//! Live contract matrix over ALL 25 MCP tools via the stdio door — the
+//! Live contract matrix over ALL 29 MCP tools via the stdio door — the
 //! permanent proof for issue #16 (F1 overflow clamp, F2 chars-vs-bytes,
 //! F3 background timeout 0) plus ≥2 observable cases per tool.
 //!
@@ -1419,7 +1419,7 @@ fn debugger_lifecycle_chain() {
 
 #[test]
 #[ignore = "requires live IRIS (RISM_IRIS_BASE_URL + config.toml)"]
-fn surface_is_the_25_tools_the_matrix_covers() {
+fn surface_is_the_29_tools_the_matrix_covers() {
     let mut m = Mcp::spawn();
     let mut c = Case::new();
     let msg = m.rpc("tools/list", json!({}));
@@ -1427,8 +1427,8 @@ fn surface_is_the_25_tools_the_matrix_covers() {
         .as_array()
         .cloned()
         .unwrap_or_default();
-    c.check(tools.len() == 25, || {
-        format!("matrix assumes 25 tools, tools/list says {}", tools.len())
+    c.check(tools.len() == 29, || {
+        format!("matrix assumes 29 tools, tools/list says {}", tools.len())
     });
     // The exact set this file exercises — a tool added/removed/redenied
     // breaks here first, in the file that promises coverage.
@@ -1458,6 +1458,10 @@ fn surface_is_the_25_tools_the_matrix_covers() {
         "debug_stack",
         "debug_breakpoints",
         "debug_stop",
+        "search_code",
+        "find_subclasses",
+        "class_members",
+        "class_dependencies",
     ];
     let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
     for want in covered {
@@ -1613,5 +1617,421 @@ fn joint_multibyte_straddle_holds_on_both_doors() {
         || "task final_result must equal the sync payload on the joint straddle".to_string(),
     );
     probe_alive(&mut c, &mut m, "f5-joint-healthy");
+    c.finish();
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 16. E-tier live (issue #17): search_code + the 3 graph tools (L1–L6)
+//     Fixture classes are process-id suffixed (RismCI.G1<uniq>) so a
+//     parallel matrix sibling can never collide with them; cleanup runs
+//     on every path via delete_fixtures BEFORE finish, same discipline
+//     as every other case in this file.
+// ─────────────────────────────────────────────────────────────────────
+
+/// Process-unique suffix for live fixtures (TASK rule: never assume the
+/// corpus is free of a name we might create).
+fn uniq() -> String {
+    format!("{}", std::process::id())
+}
+
+fn graph_class_src(name: &str, super_: &str, extra: &[String]) -> Vec<String> {
+    let mut v = vec![
+        format!("Class {name} Extends {super_}"),
+        "{".into(),
+        String::new(),
+        "Method Own() As %Status".into(),
+        "{".into(),
+        "    quit $$$OK".into(),
+        "}".into(),
+        String::new(),
+        "Property P1 As %String;".into(),
+        String::new(),
+        "Parameter CAPTION = \"x\";".into(),
+        String::new(),
+        "XData BLK".into(),
+        "{".into(),
+        "    <blk/>".into(),
+        "}".into(),
+    ];
+    v.extend_from_slice(extra);
+    v.push("}".into());
+    v
+}
+
+#[test]
+#[ignore = "requires live IRIS (RISM_IRIS_BASE_URL + config.toml)"]
+fn search_code_finds_inserted_marker() {
+    // L1 — put+compile a doc with a unique marker; search finds the doc
+    // AND the member; the marker doc is gone on every exit path.
+    let mut m = Mcp::spawn();
+    let mut c = Case::new();
+    let u = uniq();
+    let cls = format!("RismCI.Search{u}.cls");
+    pre_clean(&mut m, &[&cls]);
+    let cleanup = vec![cls.clone()];
+    let src = vec![
+        format!("Class RismCI.Search{u} Extends %RegisteredObject"),
+        "{".into(),
+        String::new(),
+        format!("ClassMethod RismCIMkr{u}() As %Status"),
+        "{".into(),
+        format!("    set t = \"RismCILiveMkr{u}\""),
+        "    quit $$$OK".into(),
+        "}".into(),
+        "}".into(),
+    ];
+    c.ok(
+        &mut m,
+        "put_and_compile",
+        json!({"name": &cls, "content": src, "ignore_conflict": true}),
+    );
+    // regex mode (server default) scans the metadata/member index: the
+    // unique METHOD name must hit with member attribution (probe
+    // 2026-10-13: regex=1 does NOT scan body text — see bench notes).
+    let r = c.ok(
+        &mut m,
+        "search_code",
+        json!({"query": format!("RismCIMkr{u}"), "namespace": "USER"}),
+    );
+    c.check(r["doc_count"] == json!(1), || format!("L1 doc_count: {r}"));
+    let doc = &r["results"][0];
+    c.check(doc["doc"] == json!(&cls), || format!("L1 doc name: {doc}"));
+    c.check(
+        doc["matches"].as_array().is_some_and(|ms| {
+            ms.iter()
+                .any(|m| m["member"] == json!(format!("RismCIMkr{u}")))
+        }),
+        || format!("L1 member attribution: {doc}"),
+    );
+    // literal mode (regex=false) scans raw source: the STRING LITERAL body
+    // marker hits in the same doc (probe: line numbers are member-relative).
+    let r = c.ok(
+        &mut m,
+        "search_code",
+        json!({"query": format!("RismCILiveMkr{u}"), "regex": false, "namespace": "USER"}),
+    );
+    c.check(r["doc_count"] == json!(1), || {
+        format!("L1 literal scan: {r}")
+    });
+    c.check(
+        r["results"][0]["matches"][0]["text"]
+            .as_str()
+            .is_some_and(|t| t.contains(&format!("RismCILiveMkr{u}"))),
+        || format!("L1 literal text: {}", r["results"][0]),
+    );
+    // miss path: a nonsense marker returns zero, no error
+    let r = c.ok(
+        &mut m,
+        "search_code",
+        json!({"query": format!("RismCIMiss{u}zz"), "namespace": "USER"}),
+    );
+    c.check(r["match_count"] == json!(0), || format!("L1 miss: {r}"));
+    delete_fixtures(&mut c, &mut m, &cleanup);
+    c.finish();
+}
+
+#[test]
+#[ignore = "requires live IRIS (RISM_IRIS_BASE_URL + config.toml)"]
+fn search_code_cap_and_empty() {
+    // L2 — >200 hits on system docs: truncated=true, match_count<=200;
+    // nonsense regex → clean answer or a tool error, never a panic.
+    // Query probe 2026-10-13: `%RegisteredObject` over *.cls sys=1 returns
+    // exactly 200 matches in 181 docs + "Maximum search limit reached."
+    // ("Quit" returns 0 in regex mode — regex scans metadata, not body).
+    let mut m = Mcp::spawn();
+    let mut c = Case::new();
+    let r = c.ok(
+        &mut m,
+        "search_code",
+        json!({"query": "%RegisteredObject", "include_system": true, "documents": ["*.cls"]}),
+    );
+    c.check(r["truncated"] == json!(true), || {
+        format!("L2 truncated: {r}")
+    });
+    let mc = r["match_count"].as_u64().unwrap_or(0);
+    c.check((1..=200).contains(&mc), || format!("L2 cap: {mc}"));
+    // nonsense regex (unbalanced paren) — server answers an error text or
+    // zero hits; either way the door must ANSWER (isError is acceptable).
+    let (is_err, parsed, text) = m.call("search_code", json!({"query": "(", "max_results": 5}));
+    c.check(
+        !is_err || text.contains("ERROR") || text.contains("regex"),
+        || format!("L2 nonsense regex must answer with a nameable error: {text}"),
+    );
+    let _ = parsed;
+    c.finish();
+}
+
+#[test]
+#[ignore = "requires live IRIS (RISM_IRIS_BASE_URL + config.toml)"]
+fn find_subclasses_live_chain() {
+    // L3 — G1 <- G2 <- G3, G4 <- (G2, G3): depth=1 → {G2}; depth=10 →
+    // {G2:1, G3:2, G4:2} exact.
+    let mut m = Mcp::spawn();
+    let mut c = Case::new();
+    let u = uniq();
+    let names: Vec<String> = ["G1", "G2", "G3", "G4"]
+        .iter()
+        .map(|s| format!("RismCI.{s}{u}.cls"))
+        .collect();
+    let all: Vec<&str> = names.iter().map(String::as_str).collect();
+    pre_clean(&mut m, &all);
+    let g1 = format!("RismCI.G1{u}");
+    let g2 = format!("RismCI.G2{u}");
+    let g3 = format!("RismCI.G3{u}");
+    let g4 = format!("RismCI.G4{u}");
+    for (cls, src) in [
+        (&names[0], graph_class_src(&g1, "%RegisteredObject", &[])),
+        (&names[1], graph_class_src(&g2, &g1, &[])),
+        (&names[2], graph_class_src(&g3, &g2, &[])),
+        (
+            &names[3],
+            graph_class_src(&g4, &format!("({g2}, {g3})"), &[]),
+        ),
+    ] {
+        c.ok(
+            &mut m,
+            "put_and_compile",
+            json!({"name": cls, "content": src, "ignore_conflict": true}),
+        );
+    }
+    let r = c.ok(
+        &mut m,
+        "find_subclasses",
+        json!({"class": g1, "depth": 1, "namespace": "USER"}),
+    );
+    let set: Vec<(String, u64)> = r["subclasses"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|n| {
+                    (
+                        n["name"].as_str().unwrap_or_default().to_string(),
+                        n["level"].as_u64().unwrap_or(0),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    c.check(
+        set.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>() == vec![g2.clone()],
+        || format!("L3 depth=1 must be exactly {{G2}}: {set:?}"),
+    );
+    let r = c.ok(
+        &mut m,
+        "find_subclasses",
+        json!({"class": g1, "depth": 10, "namespace": "USER"}),
+    );
+    let mut set: Vec<(String, u64)> = r["subclasses"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|n| {
+                    (
+                        n["name"].as_str().unwrap_or_default().to_string(),
+                        n["level"].as_u64().unwrap_or(0),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    set.sort();
+    let mut want = vec![(g2.clone(), 1u64), (g3.clone(), 2), (g4.clone(), 2)];
+    want.sort();
+    c.check(set == want, || {
+        format!("L3 BFS chain exact: got {set:?} want {want:?}")
+    });
+    c.check(r["truncated"] == json!(false), || {
+        format!("L3 exhausted walk must not truncate: {r}")
+    });
+    delete_fixtures(&mut c, &mut m, &names);
+    c.finish();
+}
+
+#[test]
+#[ignore = "requires live IRIS (RISM_IRIS_BASE_URL + config.toml)"]
+fn class_members_live() {
+    // L4 — own members exact; inherited %RegisteredObject pollution absent
+    // by default; include_inherited=true ⊇ its own method.
+    let mut m = Mcp::spawn();
+    let mut c = Case::new();
+    let u = uniq();
+    let cls = format!("RismCI.G1{u}.cls");
+    pre_clean(&mut m, &[&cls]);
+    let g1 = format!("RismCI.G1{u}");
+    c.ok(
+        &mut m,
+        "put_and_compile",
+        json!({"name": &cls, "content": graph_class_src(&g1, "%RegisteredObject", &[]), "ignore_conflict": true}),
+    );
+    let r = c.ok(
+        &mut m,
+        "class_members",
+        json!({"class": g1, "namespace": "USER"}),
+    );
+    let names_of = |arr: &serde_json::Value, key: &str| -> Vec<String> {
+        arr.as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x[key].as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    c.check(
+        names_of(&r["methods"], "name") == vec!["Own".to_string()],
+        || format!("L4 own methods exact: {r}"),
+    );
+    c.check(
+        names_of(&r["properties"], "name") == vec!["P1".to_string()],
+        || format!("L4 own properties exact: {r}"),
+    );
+    c.check(
+        names_of(&r["parameters"], "name") == vec!["CAPTION".to_string()],
+        || format!("L4 own parameters exact: {r}"),
+    );
+    c.check(
+        names_of(&r["xdata"], "name") == vec!["BLK".to_string()],
+        || format!("L4 own xdata exact: {r}"),
+    );
+    let r2 = c.ok(
+        &mut m,
+        "class_members",
+        json!({"class": g1, "include_inherited": true, "namespace": "USER"}),
+    );
+    let inh = names_of(&r2["methods"], "name");
+    c.check(inh.len() >= 2 && inh.contains(&"Own".to_string()), || {
+        format!("L4 inherited must be a superset: {inh:?}")
+    });
+    c.check(
+        r2["methods"]
+            .as_array()
+            .is_some_and(|a| a.iter().any(|x| x["origin"] != serde_json::Value::Null)),
+        || "L4 inherited rows carry origin".to_string(),
+    );
+    delete_fixtures(&mut c, &mut m, &[cls]);
+    c.finish();
+}
+
+#[test]
+#[ignore = "requires live IRIS (RISM_IRIS_BASE_URL + config.toml)"]
+fn class_dependencies_live() {
+    // L5 — G2 depends_on ⊇ {G1} via the Super edge; used_by(G1, depth=1)
+    // includes G2 (may include other server classes referencing it —
+    // fixture names are unique, so ⊇-assert per spec).
+    let mut m = Mcp::spawn();
+    let mut c = Case::new();
+    let u = uniq();
+    let c1 = format!("RismCI.G1{u}.cls");
+    let c2 = format!("RismCI.G2{u}.cls");
+    pre_clean(&mut m, &[&c1, &c2]);
+    let g1 = format!("RismCI.G1{u}");
+    let g2 = format!("RismCI.G2{u}");
+    c.ok(
+        &mut m,
+        "put_and_compile",
+        json!({"name": &c1, "content": graph_class_src(&g1, "%RegisteredObject", &[]), "ignore_conflict": true}),
+    );
+    c.ok(
+        &mut m,
+        "put_and_compile",
+        json!({"name": &c2, "content": graph_class_src(&g2, &g1, &[]), "ignore_conflict": true}),
+    );
+    let r = c.ok(
+        &mut m,
+        "class_dependencies",
+        json!({"class": g2, "direction": "depends_on", "namespace": "USER"}),
+    );
+    let deps = names_of_str(&r["depends_on"]);
+    c.check(deps.contains(&g1), || {
+        format!("L5 depends_on ⊇ {{G1}}: {deps:?}")
+    });
+    let r = c.ok(
+        &mut m,
+        "class_dependencies",
+        json!({"class": g1, "direction": "used_by", "depth": 1, "namespace": "USER"}),
+    );
+    let users = names_of_str(&r["used_by"]);
+    c.check(users.contains(&g2), || {
+        format!("L5 used_by(G1,1) ⊇ {{G2}}: {users:?}")
+    });
+    delete_fixtures(&mut c, &mut m, &[c1, c2]);
+    c.finish();
+}
+
+fn names_of_str(arr: &serde_json::Value) -> Vec<String> {
+    arr.as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x["name"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+#[ignore = "requires live IRIS (RISM_IRIS_BASE_URL + config.toml)"]
+fn search_regex_and_case_flags_live() {
+    // L6 — case_sensitive true vs false differ on a zZ fixture; whole-word
+    // guard: `Rism` must not hit `RismCI…` word-bounded. Probe 2026-10-13:
+    // case/word flags act in LITERAL mode (regex=false) — regex mode only
+    // scans metadata names, where case is normalized away. Fixture body
+    // carries a `zZ<uniq>` string literal.
+    let mut m = Mcp::spawn();
+    let mut c = Case::new();
+    let u = uniq();
+    let cls = format!("RismCI.Case{u}.cls");
+    pre_clean(&mut m, &[&cls]);
+    let name = format!("RismCI.Case{u}");
+    let src = vec![
+        format!("Class {name} Extends %RegisteredObject"),
+        "{".into(),
+        String::new(),
+        "ClassMethod M() As %Status".into(),
+        "{".into(),
+        format!("    set s = \"zZ{u}\""),
+        "    quit $$$OK".into(),
+        "}".into(),
+        "}".into(),
+    ];
+    c.ok(
+        &mut m,
+        "put_and_compile",
+        json!({"name": &cls, "content": src, "ignore_conflict": true}),
+    );
+    let q = format!("zz{u}");
+    let ci = c.ok(
+        &mut m,
+        "search_code",
+        json!({"query": q, "regex": false, "case_sensitive": false, "namespace": "USER"}),
+    );
+    let cs = c.ok(
+        &mut m,
+        "search_code",
+        json!({"query": q, "regex": false, "case_sensitive": true, "namespace": "USER"}),
+    );
+    c.check(
+        ci["match_count"].as_u64().unwrap_or(0) >= 1
+            && cs["match_count"].as_u64().unwrap_or(9) == 0,
+        || format!("L6 case flags must differ (ci={ci} cs={cs})"),
+    );
+    // whole-word: query `Rism` (a real substring inside RismCI.* tokens)
+    // with word=1 must never match a token that merely CONTAINS Rism.
+    let ww = c.ok(
+        &mut m,
+        "search_code",
+        json!({"query": "Rism", "regex": false, "whole_word": true, "namespace": "USER", "max_results": 50}),
+    );
+    let inside = ww["results"].as_array().is_some_and(|a| {
+        a.iter().any(|d| {
+            d["matches"].as_array().is_some_and(|ms| {
+                ms.iter().any(|x| {
+                    let t = x["text"].as_str().unwrap_or_default();
+                    t.contains("RismCI")
+                })
+            })
+        })
+    });
+    c.check(!inside, || format!("L6 whole-word hit inside RismCI: {ww}"));
+    delete_fixtures(&mut c, &mut m, &[cls]);
     c.finish();
 }

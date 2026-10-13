@@ -1,0 +1,12 @@
+check,expected
+subclasses(BenchGraph.A,depth=1),{BenchGraph.B:1}
+subclasses(BenchGraph.A,depth=10),{BenchGraph.B:1, BenchGraph.C:2, BenchGraph.D:2}
+subclasses(BenchGraph.Mi,depth=10),{} (substring-over-match guard: Mi is not a class)
+members(BenchGraph.A,inherited=false),methods=[Own] properties=[P1] parameters=[CAPTION] xdata=[BLK]
+members(BenchGraph.C,inherited=false),methods=[Own] only
+members(BenchGraph.C,inherited=true),methods=[Own(origin=BenchGraph.C), B(origin=BenchGraph.B), ...]
+deps(BenchGraph.B,direction=depends_on),includes BenchGraph.A (Super edge)
+deps(BenchGraph.A,direction=used_by,depth=1),{BenchGraph.B}
+deps(BenchGraph.A,direction=used_by,depth=3),{BenchGraph.B, BenchGraph.C, BenchGraph.D}
+deps(BenchGraph.B,direction=used_by,depth=1),{BenchGraph.C, BenchGraph.D}
+guard(graph subclasses "A'; DROP"),error (valid_class_name refusal, zero HTTP)

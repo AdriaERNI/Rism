@@ -48,6 +48,7 @@ nav:
   - Configuration: configuration.md
   - CLI Reference: cli-reference.md
   - MCP Tools: mcp-tools.md
+  - Code Search: code-search.md
   - AI Agents: ai-agents.md
   - Debugger: debugger.md
   - Development: development.md

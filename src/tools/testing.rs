@@ -20,25 +20,7 @@ use crate::iris::IrisClient;
 use crate::iris::sql as sqlapi;
 use crate::iris::terminal;
 
-/// Class-name allowlist (package.Class form, optional leading %).
-/// The query endpoint has no bind parameters, so interpolation must be
-/// validated — same rule Prism enforces.
-fn valid_class_name(name: &str) -> bool {
-    let mut chars = name.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    (first.is_ascii_alphabetic() || first == '%')
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_')
-}
-
-fn valid_identifier(name: &str) -> bool {
-    let mut chars = name.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    first.is_ascii_alphabetic() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-}
+pub(crate) use crate::tools::names::{valid_class_name, valid_identifier};
 
 fn ns_of(client: &IrisClient, ns: Option<&String>) -> String {
     ns.cloned()
