@@ -34,6 +34,9 @@ Practical rules:
   member's routine section, not the file — treat `member` + `text` as
   the position, not `line`, for `.cls` docs.
 - `case_sensitive` / `whole_word` only take effect in literal mode.
+- An empty `query` is rejected server-side (HTTP 400 on `action/search`)
+  — `search_code` surfaces the error rather than returning everything;
+  `max=0` answers `Not found.` with zero matches and `truncated=false`.
 - Metacharacters: in regex mode your query is a server regex (an
   unbalanced `(` answers as an error); in literal mode `-` and `$` are
   plain text. The bench marker `RISM-BENCH-M-01` therefore needs

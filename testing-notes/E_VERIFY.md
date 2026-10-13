@@ -20,12 +20,12 @@ Build 226U, Atelier v8, localhost:52773, USER), creds
 
 | gate | command | result |
 |---|---|---|
-| fmt | `cargo fmt --check` | PENDING |
-| clippy host | `cargo clippy --all-targets -- -D warnings` | PENDING |
-| clippy 1.99.0 | `rustup run 1.99.0 cargo clippy --all-targets -- -D warnings` | PENDING |
-| unit+wiremock | `cargo test -q` | PENDING |
-| live --ignored | `cargo test --test tool_matrix -- --ignored --test-threads=1` | PENDING |
-| docs | `mkdocs build --strict` | PENDING (if docs touched) |
+| fmt | `cargo fmt --check` | clean (exit 0) |
+| clippy host | `cargo clippy --all-targets -- -D warnings` | 0 warnings |
+| clippy 1.99.0 | `rustup run 1.99.0 cargo clippy --all-targets -- -D warnings` | 0 warnings |
+| unit+wiremock | `cargo test -q` | exit 0 — lib 83 + api 23 + background_jobs 1(+17 ign) + http_door 7(+1 ign) + cli_transport 2 + http_door_stateless 3 + doctest + tool_matrix 23-ignored; 0 failed (one ERROR log line is the connection-close race test's expected stderr) |
+| live `--ignored` | `cargo test --test tool_matrix -- --ignored --test-threads=1` | `test result: ok. 23 passed; 0 failed; 0 ignored` in 10.1 s |
+| docs | `mkdocs build --strict` (material via uv) | built, 0 warnings/errors (only the vendor "Warning from the Material team" banner — not a build warning) |
 
 ## 3. Bench re-run (`bench_ref_` namespace-prefix rule)
 
