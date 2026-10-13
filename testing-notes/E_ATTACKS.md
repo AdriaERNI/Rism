@@ -10,7 +10,7 @@ the guard message (a connection error would prove an HTTP attempt happened);
 (iii) the code path: `guard()` in `src/tools/graph.rs` runs before any
 `IrisClient` method. Repro script: `bench/attack_refusal.py` (committed).
 
-## A. Injection (SQL-ish + path-ish class names) × Tier-2 tools
+## A. Injection (SQL-ish + path-ish class names) × the Tier-2 surface
 
 Target surface: `find_subclasses`, `class_members`, `class_dependencies`
 (3 Tier-2 graph tools — `search_code` carries no class-name interpolation,
@@ -71,7 +71,7 @@ regexp pattern` — no crash, no silent success.
 | docs/mcp-tools.md | "Rism serves **29 tools**"; `###` sections for all 4 new tools (17 `###` sections + grouped debugger table); debugger family = 9 rows |
 | instructions budget | 1386 chars < 2048; lists all 29 names incl. the 4 new |
 | count pins | `tests/http_door.rs:180`, `tests/http_door_stateless.rs:179`, tool_matrix surface test — re-ran green |
-| drift gate (python port `bench/drift_port.py` of the Windows-CI `analyze-docs-drift.ps1`) | **0 fails after fix** — **BUG FIXED**: 7 tracked *.md carried "25 tools"/"1/2 tools" prose the `(\d+)\s+tools` regex mismatches against 29 → windows-installer CI `consistency` job would FAIL this PR. Rephrased to non-claiming forms (then-25-tool count / Tier-1/Tier-2 surfaces); port scoped to `git ls-files` like a CI checkout. Commit `fix docs-drift gate` |
+| drift gate (python port `bench/drift_port.py` of the Windows-CI `analyze-docs-drift.ps1`) | **0 fails after fix** — **BUG FIXED**: 7 tracked *.md carried then-25-tool / Tier-1-2-surface prose the `(\d+)\s+tools` regex mismatches against 29 → windows-installer CI `consistency` job would FAIL this PR. Rephrased to non-claiming forms (then-25-tool count / Tier-1/Tier-2 surfaces); port scoped to `git ls-files` like a CI checkout. Commit `fix docs-drift gate` |
 
 ## E. Bench fairness (rerun mechanics)
 

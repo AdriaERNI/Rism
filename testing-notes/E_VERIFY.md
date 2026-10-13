@@ -108,4 +108,26 @@ left + noted for the certifier.
 
 ## 5. Bugs found & fixed by this lane
 
-PENDING (row per fix: symptom, root cause, fix commit, gate re-run).
+| # | symptom | root cause | fix | re-verify |
+|---|---|---|---|---|
+| B1 | `packaging/mcp_probe.sh` HTTP-door leg FAILs: "HTTP door expected a 29-tool count, got 29" | coder step9 changed the message string 25→29 but left the numeric test `[ "$n" -eq 25 ]` — a cp artifact of the 25-era line | changed `-eq 25` → `-eq 29` (commit `fix mcp_probe.sh HTTP-door count`) | `bash packaging/mcp_probe.sh` → 4 legs OK, `HTTP door answered (29-tool count, SQL clean), SIGTERM exit 0`, exit 0 |
+| B2 | Windows-CI `consistency` job (`analyze-docs-drift.ps1`) FAILs this PR: 7 tracked *.md claim a 25-tool count (and docs/code-search.md "Tier 1/2 surfaces" reads as a two-tool claim) against code's 29 | coder updated the 29-count SURFACE (README/mcp-tools/probe) but never ran the docs-drift regex over historical/testing-notes prose + the "1/2" slash-form | rephrased 6 tracked files to non-claiming forms (then-25-tool count / Tier-1/Tier-2 surfaces) preserving history; added `bench/drift_port.py` (1:1 python port of the PS gate, scoped to `git ls-files` like a CI checkout) | `python3 bench/drift_port.py` → **DRIFT FAILURES: 0** (commit `fix docs-drift gate`) |
+| B3 | bench (c) precision reads 20/21 (95%) — the "extra" doc is the SPECIFIER's stale `RismCI.Probe5.cls` carrying the literal `// RISM-BENCH-M-01` | pre-existing container fixture, never this lane's; docname-filter hygiene was never applied to it | deleted the 5 stale `RismCI.Probe*` classes (verified unreferenced by any test/CI first — §1) | rerun precision **20/20 = 100%** (corpus-only, honest) |
+| B4 | docs/code-search.md left two live behaviors undocumented (empty query, max=0) | spec assumed only the ≥1 path | added the two probed sentences (commit b9ba74a) | live probes re-confirmed; `mkdocs build --strict` green |
+
+No product-code bugs surfaced: the four tools, the guards, the wire
+normalization and the CLI graph all behaved exactly as pinned across two
+independent passes. Both fixed bugs are TEST/CI-surface bugs (a probe
+desync + a drift-gate blind spot) that the coder's gates did not cover —
+the drift gate only runs in Windows CI, which the lane never executed.
+
+## 6. Verdict (refactorer lane)
+
+EVERYTHING AGREES. 4 new tools + wire contract + CLI + settings: correct,
+guards airtight (45/45 refusals zero-HTTP), bench re-run matches the coder
+(recall 20/20, precision clean 20/20, graph 11/11, cliff 200/199+500),
+surface 29==29 both doors. Two CI-surface bugs found + fixed (B1 probe,
+B2 drift gate). Container left clean: zero Bench*/BenchRef*/RismCI*/RismRef*
+docs; the one `arsblue.datatype.DateTimeFormat` original-name remnant is
+documented (§3.1), not this bench's fixture. Ready for architect review →
+single PR fold.
