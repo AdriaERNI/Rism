@@ -193,7 +193,7 @@ sid=$(printf '%s' "$resp" | tr -d '\r' | awk 'tolower($1)=="mcp-session-id:"{pri
 http_post '{"jsonrpc":"2.0","method":"notifications/initialized"}' "$sid" \
   | grep -qi '202' || { echo "MCP probe: initialized notification not 202"; kill $http_pid 2>/dev/null; exit 1; }
 n=$(http_post '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' "$sid" | grep -o '"inputSchema"' | wc -l)
-[ "$n" -eq 25 ] || { echo "MCP probe: HTTP door expected 29 tools, counted $n"; kill $http_pid 2>/dev/null; exit 1; }
+[ "$n" -eq 29 ] || { echo "MCP probe: HTTP door expected 29 tools, counted $n"; kill $http_pid 2>/dev/null; exit 1; }
 http_post '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"execute_sql","arguments":{"query":"select 1 as ok"}}}' "$sid" \
   | grep -q '"isError":false' || { echo "MCP probe: HTTP execute_sql did not answer cleanly"; kill $http_pid 2>/dev/null; exit 1; }
 # SIGTERM must exit the door cleanly (row D kill contract) — assert the REAL
