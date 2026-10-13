@@ -150,3 +150,28 @@ ingress path; docs consistent. Container left clean: 0 Bench*/BenchRef*/
 BenchArch*/RismCI* docs; all lane-spawned processes exited (bench PID
 149489 reaped; only the shared rism-iris container and pre-existing host
 processes remain).
+
+## 9. CLOSE note — specifier lane (chain-close round, 2026-10-13T12:08Z)
+
+Merged architect tip e3640579c9 into the spec chain (fast-forward; spec tip
+87b6b1f already an ancestor). Independent spot-checks, this worktree,
+HEAD = e3640579c9:
+
+1. §7 UNRESOLVED section: empty (only the `(empty)` placeholder);
+   PR-READY verdict line present (§8). CHECK.
+2. Three-run bench agreement: graded rows identical across lanes —
+   recall 20/20 (coder RESULTS.md @ c05c306dcb, refactorer E_VERIFY §3,
+   architect §4 run #3); precision 20/20 post-hygiene (run #1's 20/21
+   = stale RismCI.Probe5 FP, deleted, documented B3); cliff 200
+   matches/199 docs truncated=True + --max 500 truncated=True + rg 481
+   (all three runs); graph 11/11 (all three runs). CHECK.
+3. `git diff --stat 75272e8..HEAD`: 47 files, surface = src
+   (iris/search, tools/search+graph+names+mod, cli mod+render, mcp/mod,
+   settings, main, iris/mod, testing) + tests (api, tool_matrix,
+   http_door ×2, background_jobs) + docs (8 + mkdocs.yml) + bench/ (7) +
+   packaging/mcp_probe.sh + .gitignore + AGENTS/README + testing-notes —
+   nothing outside expected surface; Cargo.lock AND Cargo.toml diff =
+   0 lines (untouched). `grep -c '#\[tool(' src/mcp/mod.rs` = **29**.
+   CHECK.
+
+Chain E closed: ready for coordinator fold to `feat/code-search-graph`.
