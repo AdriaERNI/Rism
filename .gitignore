@@ -58,3 +58,6 @@ docs/llms-full.txt
 
 /target
 /site/
+
+# Bench corpus downloads + transformed export (NEVER commit corpus files)
+bench/.work/
