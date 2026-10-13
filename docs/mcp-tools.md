@@ -1,6 +1,6 @@
 # MCP Tools
 
-Rism serves **25 tools** over JSON-RPC 2.0 on two doors (`rism mcp`):
+Rism serves **29 tools** over JSON-RPC 2.0 on two doors (`rism mcp`):
 **stdio** (default) and **streamable-HTTP** (`rism mcp --transport http`,
 at `/mcp`). Parameters marked
 `*` are required. Namespace-scoped tools accept an optional `namespace`
@@ -191,6 +191,60 @@ otherwise the process working directory.
 | `read_file` | `path`\* — text; binary detected and rejected |
 | `list_files` | `path`, `pattern` (glob), `max_results` |
 | `run_shell` | `command`\*, `cwd`, `timeout_secs` (default 30 s, clamped to [1, 3600]) — `bash` on Unix, PowerShell on Windows |
+
+## Code search
+
+### `search_code` — `query`*
+
+Server-side text/regex search over source documents via the Atelier
+`action/search` endpoint — no local checkout needed. `query` is
+URL-encoded and treated as a regex by default; `regex: false` switches to
+a literal full-text scan. Optional: `namespace`, `documents` (masks,
+default `["*.cls","*.mac","*.int"]`), `include_system`,
+`include_generated`, `case_sensitive` / `whole_word` (sent only when
+set), `max_results` (default `search_max_results` = 200; the server
+honours higher values on IRIS 2025.3 and flags `truncated` when it
+stopped at `max`). Hits come back grouped per
+document with member/attribute/line attribution (`line` normalized to a
+number; label-style tokens land in `label`). **Scan semantics**
+(probed on IRIS 2025.3): regex mode scans class *metadata* (member and
+attribute names); body text — comments, string literals — is only found
+in literal mode (`regex: false`). See [Code Search](code-search.md).
+
+## Class graph
+
+`%Dictionary`-backed reference graph (SQL only — no new endpoints).
+Class names are validated before any HTTP call: an unsafe name is
+refused with a config error and zero requests made.
+
+### `find_subclasses` — `class`*
+
+Bounded BFS over `ClassDefinition.Super` edges. `depth` counts levels
+(1 = direct children only; default `graph_depth` = 10, max 64). Each hit
+carries `{name, super, level}` (level = BFS distance); the queried class
+itself is excluded; `truncated` marks a depth/budget-capped walk.
+
+### `class_members` — `class`*
+
+Own compiled members from `%Dictionary.CompiledMethod/Property/
+Parameter/XData`: methods (with `class_method`, `sql_proc`,
+`formal_spec`, `return_type`, `origin`), properties (`type`,
+`collection`), parameters (`type` — the raw default is not exposed),
+XData names. `kind` narrows to `methods` / `properties` / `parameters` /
+`xdata` (default `all`); `include_inherited: true` drops the
+`Origin = class` filter (inherited rows then carry their declaring
+class in `origin`).
+
+### `class_dependencies` — `class`*
+
+Dependency edges in either direction. `direction` ∈ `depends_on` /
+`used_by` / `both` (default `both`). `depends_on` is the 1-hop
+dictionary view: the raw `DependsOn` field split + classified
+(`class` / `routine` / `other`), merged with the exact `Super` list
+(a superclass is a dependency even when `DependsOn` omits it — probed:
+on 2025.3 `DependsOn` is empty for pure-inheritance classes).
+`used_by` is the impact query: bounded BFS over `DependsOn`/`Super`
+back-references, `depth` (default 1, max 64) applies to this walk only.
 
 ## Typical agent flows
 

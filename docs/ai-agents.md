@@ -2,12 +2,12 @@
 
 How to wire Rism into an AI-agent client, what the agent sees on the wire,
 and the security posture of each door. Rism serves the same
-[25 tools](mcp-tools.md) over both MCP doors — the client decides which one
+[29 tools](mcp-tools.md) over both MCP doors — the client decides which one
 it spawns or reaches.
 
 ## What Rism exposes
 
-- **25 tools** over JSON-RPC 2.0 — documents, SQL, terminal, tests,
+- **29 tools** over JSON-RPC 2.0 — documents, SQL, terminal, tests,
   debugger, monitoring, host files ([MCP Tools](mcp-tools.md)).
 - **Two doors**: `rism mcp` (stdio, the default) and
   `rism mcp --transport http` (streamable-HTTP at `/mcp`).
