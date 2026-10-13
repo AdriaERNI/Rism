@@ -61,3 +61,6 @@ docs/llms-full.txt
 
 # Bench corpus downloads + transformed export (NEVER commit corpus files)
 bench/.work/
+
+# Python bytecode from bench scripts
+__pycache__/
