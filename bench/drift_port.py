@@ -5,11 +5,17 @@ docs-drift gate) so this lane can run the SAME logic without pwsh. Checks
 appears in docs/mcp-tools.md; (3) config-path promises; (4) semver.
 Exit 0 = 0 drift failures."""
 import re
+import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 fail = 0
+# the PS gate runs on a CI checkout, where swarmforge/ (gitignored) and
+# target/ do not exist — replicate that scope with git ls-files
+tracked = set(
+    subprocess.run(["git", "-C", str(ROOT), "ls-files"], capture_output=True, text=True).stdout.split()
+)
 
 
 def ok(msg):
@@ -43,7 +49,8 @@ ok(f"#[tool] definitions found: {n}")
 #    "(9 tools)" section counts — the PS regex excludes a paren-preceded num.
 claims = []
 for f in ROOT.rglob("*.md"):
-    if "target" in f.parts or ".work" in f.parts or "node_modules" in f.parts:
+    rel = str(f.relative_to(ROOT))
+    if rel not in tracked:  # matches the CI checkout (untracked files absent)
         continue
     t = f.read_text(errors="replace")
     for m in re.finditer(r"(?<!\()\b(\d+)\s+tools\b", t):

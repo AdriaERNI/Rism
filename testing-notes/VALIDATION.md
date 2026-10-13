@@ -31,7 +31,7 @@ gitignored; SPEC.md commit is sanctioned by SPEC §9.4).
 - docker IRIS `rism-iris` Up (healthy); `curl -u _SYSTEM:SYS
   http://localhost:52773/api/atelier/` → 200.
 - `env -i HOME=$HOME PATH=$PWD/target/debug:/usr/bin:/bin bash packaging/mcp_probe.sh`
-  → 4x "MCP probe OK" incl. new HTTP leg ("25 tools, SQL clean, SIGTERM exit 0"), exit 0.
+  → 4x "MCP probe OK" incl. new HTTP leg ("25-tool count, SQL clean, SIGTERM exit 0"), exit 0.
 - `cargo test -q -- --ignored` → 17 passed (live matrix incl. `http_door.rs`
   live-binary roundtrip), 0 failed, exit 0.
 

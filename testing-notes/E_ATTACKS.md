@@ -7,7 +7,7 @@ tests/api.rs:263) and, for the CLI/MCP doors, by the same unit path the
 doors call into (`src/tools/graph.rs` guards run before any `IrisClient`
 call).
 
-## A. Injection (SQL-ish + path-ish class names) × 4 Tier-2 tools
+## A. Injection (SQL-ish + path-ish class names) × the 4 Tier-2 surfaces
 
 Target surface: `find_subclasses`, `class_members`, `class_dependencies`
 (Tier-2) + `search_code` (query travels URL-encoded). 3 doors each:
