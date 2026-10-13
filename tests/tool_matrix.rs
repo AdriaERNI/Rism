@@ -1644,13 +1644,13 @@ fn graph_class_src(name: &str, super_: &str, extra: &[String]) -> Vec<String> {
         "    quit $$$OK".into(),
         "}".into(),
         String::new(),
-        "Property P1 As %String".into(),
+        "Property P1 As %String;".into(),
         String::new(),
-        "Parameter CAPTION = \"x\"".into(),
+        "Parameter CAPTION = \"x\";".into(),
         String::new(),
-        "XData BLK As XML".into(),
+        "XData BLK".into(),
         "{".into(),
-        "    <xml/>".into(),
+        "    <blk/>".into(),
         "}".into(),
     ];
     v.extend_from_slice(extra);
@@ -1673,7 +1673,7 @@ fn search_code_finds_inserted_marker() {
         format!("Class RismCI.Search{u} Extends %RegisteredObject"),
         "{".into(),
         String::new(),
-        "ClassMethod MarkerHit() As %Status".into(),
+        format!("ClassMethod RismCIMkr{u}() As %Status"),
         "{".into(),
         format!("    set t = \"RismCILiveMkr{u}\""),
         "    quit $$$OK".into(),
@@ -1685,17 +1685,40 @@ fn search_code_finds_inserted_marker() {
         "put_and_compile",
         json!({"name": &cls, "content": src, "ignore_conflict": true}),
     );
+    // regex mode (server default) scans the metadata/member index: the
+    // unique METHOD name must hit with member attribution (probe
+    // 2026-10-13: regex=1 does NOT scan body text — see bench notes).
     let r = c.ok(
         &mut m,
         "search_code",
-        json!({"query": format!("RismCILiveMkr{u}"), "namespace": "USER"}),
+        json!({"query": format!("RismCIMkr{u}"), "namespace": "USER"}),
     );
     c.check(r["doc_count"] == json!(1), || format!("L1 doc_count: {r}"));
     let doc = &r["results"][0];
     c.check(doc["doc"] == json!(&cls), || format!("L1 doc name: {doc}"));
-    c.check(doc["matches"][0]["member"] == json!("MarkerHit"), || {
-        format!("L1 member attribution: {doc}")
+    c.check(
+        doc["matches"].as_array().is_some_and(|ms| {
+            ms.iter()
+                .any(|m| m["member"] == json!(format!("RismCIMkr{u}")))
+        }),
+        || format!("L1 member attribution: {doc}"),
+    );
+    // literal mode (regex=false) scans raw source: the STRING LITERAL body
+    // marker hits in the same doc (probe: line numbers are member-relative).
+    let r = c.ok(
+        &mut m,
+        "search_code",
+        json!({"query": format!("RismCILiveMkr{u}"), "regex": false, "namespace": "USER"}),
+    );
+    c.check(r["doc_count"] == json!(1), || {
+        format!("L1 literal scan: {r}")
     });
+    c.check(
+        r["results"][0]["matches"][0]["text"]
+            .as_str()
+            .is_some_and(|t| t.contains(&format!("RismCILiveMkr{u}"))),
+        || format!("L1 literal text: {}", r["results"][0]),
+    );
     // miss path: a nonsense marker returns zero, no error
     let r = c.ok(
         &mut m,
@@ -1712,12 +1735,15 @@ fn search_code_finds_inserted_marker() {
 fn search_code_cap_and_empty() {
     // L2 — >200 hits on system docs: truncated=true, match_count<=200;
     // nonsense regex → clean answer or a tool error, never a panic.
+    // Query probe 2026-10-13: `%RegisteredObject` over *.cls sys=1 returns
+    // exactly 200 matches in 181 docs + "Maximum search limit reached."
+    // ("Quit" returns 0 in regex mode — regex scans metadata, not body).
     let mut m = Mcp::spawn();
     let mut c = Case::new();
     let r = c.ok(
         &mut m,
         "search_code",
-        json!({"query": "Quit", "include_system": true, "documents": ["*.int"]}),
+        json!({"query": "%RegisteredObject", "include_system": true, "documents": ["*.cls"]}),
     );
     c.check(r["truncated"] == json!(true), || {
         format!("L2 truncated: {r}")
@@ -1757,7 +1783,10 @@ fn find_subclasses_live_chain() {
         (&names[0], graph_class_src(&g1, "%RegisteredObject", &[])),
         (&names[1], graph_class_src(&g2, &g1, &[])),
         (&names[2], graph_class_src(&g3, &g2, &[])),
-        (&names[3], graph_class_src(&g4, &format!("{g2}, {g3}"), &[])),
+        (
+            &names[3],
+            graph_class_src(&g4, &format!("({g2}, {g3})"), &[]),
+        ),
     ] {
         c.ok(
             &mut m,
@@ -1943,7 +1972,10 @@ fn names_of_str(arr: &serde_json::Value) -> Vec<String> {
 #[ignore = "requires live IRIS (RISM_IRIS_BASE_URL + config.toml)"]
 fn search_regex_and_case_flags_live() {
     // L6 — case_sensitive true vs false differ on a zZ fixture; whole-word
-    // guard: `Rism` must not hit `RismCI…` word-bounded.
+    // guard: `Rism` must not hit `RismCI…` word-bounded. Probe 2026-10-13:
+    // case/word flags act in LITERAL mode (regex=false) — regex mode only
+    // scans metadata names, where case is normalized away. Fixture body
+    // carries a `zZ<uniq>` string literal.
     let mut m = Mcp::spawn();
     let mut c = Case::new();
     let u = uniq();
@@ -1970,24 +2002,24 @@ fn search_regex_and_case_flags_live() {
     let ci = c.ok(
         &mut m,
         "search_code",
-        json!({"query": q, "case_sensitive": false, "namespace": "USER"}),
+        json!({"query": q, "regex": false, "case_sensitive": false, "namespace": "USER"}),
     );
     let cs = c.ok(
         &mut m,
         "search_code",
-        json!({"query": q, "case_sensitive": true, "namespace": "USER"}),
+        json!({"query": q, "regex": false, "case_sensitive": true, "namespace": "USER"}),
     );
     c.check(
         ci["match_count"].as_u64().unwrap_or(0) >= 1
             && cs["match_count"].as_u64().unwrap_or(9) == 0,
         || format!("L6 case flags must differ (ci={ci} cs={cs})"),
     );
-    // whole-word: query `Rism` (a real substring everywhere) with word=1
-    // must never match INSIDE RismCI.Case<uniq> tokens.
+    // whole-word: query `Rism` (a real substring inside RismCI.* tokens)
+    // with word=1 must never match a token that merely CONTAINS Rism.
     let ww = c.ok(
         &mut m,
         "search_code",
-        json!({"query": "Rism", "whole_word": true, "namespace": "USER", "max_results": 50}),
+        json!({"query": "Rism", "regex": false, "whole_word": true, "namespace": "USER", "max_results": 50}),
     );
     let inside = ww["results"].as_array().is_some_and(|a| {
         a.iter().any(|d| {

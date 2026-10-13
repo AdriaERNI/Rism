@@ -469,8 +469,13 @@ pub async fn class_dependencies(
         direction,
         DependencyDirection::DependsOn | DependencyDirection::Both
     ) {
+        // Deviation (E_BUILD §D3): E_SPEC §3 froze `SELECT DependsOn …`;
+        // live probe 2026-10-13 shows IRIS 2025.3 leaves DependsOn EMPTY
+        // for inheritance-only classes, while §3's own rule says a Super
+        // edge counts as a dependency — so the same row also selects
+        // Super and its exact elements are merged (deduped) into the list.
         let sql = format!(
-            "SELECT DependsOn FROM %Dictionary.ClassDefinition WHERE Name = '{}'",
+            "SELECT DependsOn, Super FROM %Dictionary.ClassDefinition WHERE Name = '{}'",
             args.class
         );
         let rows = rows(client, &ns, &sql).await?;
@@ -480,6 +485,24 @@ pub async fn class_dependencies(
             .and_then(Value::as_str)
             .unwrap_or_default();
         depends_on = classify_depends_on(raw);
+        let super_raw = rows
+            .first()
+            .and_then(|r| r.get("Super"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        for entry in super_raw.split(',').map(str::trim) {
+            if entry.is_empty()
+                || !valid_class_name(entry)
+                || depends_on.iter().any(|d| d.name == entry)
+            {
+                continue;
+            }
+            depends_on.push(DependencyNode {
+                name: entry.to_string(),
+                kind: "class".to_string(),
+                level: 1,
+            });
+        }
     }
 
     if matches!(
