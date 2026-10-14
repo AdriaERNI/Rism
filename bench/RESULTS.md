@@ -27,9 +27,11 @@
 
 rg wins per-query latency (direct filesystem scan, tiny corpus, no
 process-startup equivalent cost); the point of the table is the ratio
-band: the server search costs a fixed ~1 rism-startup + 1 HTTP round
-trip and returns the SERVER's view of every namespace document, not
-just a checked-out tree.
+band: each CLI call is a fixed rism-startup + 2 HTTP round trips
+(auth + action; proxy-verified) and returns the SERVER's view of
+every namespace document, not just a checked-out tree. The ratio
+band itself is machine-specific (same binary measured up to 93x on
+a busier container).
 
 ## (b) Recall — 20 markers (literal-mode scan; see D2 for why)
 

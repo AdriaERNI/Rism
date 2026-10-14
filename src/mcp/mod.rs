@@ -319,7 +319,7 @@ impl RismMcp {
     }
 
     #[tool(
-        description = "Text/regex search over server source documents (*.cls, *.mac, *.int by default) via the Atelier search endpoint. Returns hits grouped by document with line/member normalization; truncated=true when the server's 200-match cap was hit.",
+        description = "Text/regex search over server source documents (*.cls, *.mac, *.int by default) via the Atelier search endpoint. Returns hits grouped by document with line/member normalization; truncated=true when the scan stopped at the requested max.",
         annotations(title = "Search Code", read_only_hint = true, destructive_hint = false)
     )]
     async fn search_code(

@@ -29,8 +29,9 @@ pub struct SearchParams {
     pub case_sensitive: Option<bool>,
     /// `word` param — only sent when `Some`.
     pub whole_word: Option<bool>,
-    /// `max` param — values above 200 pass through unchanged; the server
-    /// hard-caps (issue #17 fact).
+    /// `max` param — values above 200 pass through unchanged; older
+    /// builds cap the scan at 200 (issue #17), while 2025.3 honours the
+    /// value as sent and flags its own limit notice in the console.
     pub max: Option<u32>,
 }
 

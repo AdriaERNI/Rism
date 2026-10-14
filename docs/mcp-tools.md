@@ -215,7 +215,10 @@ in literal mode (`regex: false`). See [Code Search](code-search.md).
 
 `%Dictionary`-backed reference graph (SQL only — no new endpoints).
 Class names are validated before any HTTP call: an unsafe name is
-refused with a config error and zero requests made.
+refused with a config error and zero requests made. The `namespace`
+parameter rides the URL path, so it is validated by the same rule
+(letters/digits/`_`/`-`, optional leading `%`) — an unsafe namespace is
+also refused before any request.
 
 ### `find_subclasses` — `class`*
 
@@ -230,10 +233,16 @@ Own compiled members from `%Dictionary.CompiledMethod/Property/
 Parameter/XData`: methods (with `class_method`, `sql_proc`,
 `formal_spec`, `return_type`, `origin`), properties (`type`,
 `collection`), parameters (`type` — the raw default is not exposed),
-XData names. `kind` narrows to `methods` / `properties` / `parameters` /
+XData names. These are the four CLASS-member tables only: Queries,
+Triggers, Indices and Procedures are NOT listed (they exist on many
+classes — find them with `search 'Query Q1' --no-regex` or
+`execute_sql` on `%Dictionary.CompiledQuery/CompiledTrigger/…`).
+`kind` narrows to `methods` / `properties` / `parameters` /
 `xdata` (default `all`); `include_inherited: true` drops the
 `Origin = class` filter (inherited rows then carry their declaring
-class in `origin`).
+class in `origin`, when the dictionary reports one). A name with no
+`%Dictionary` row — typo or alias (`%RegisteredObject` →
+`%Library.RegisteredObject`) — is an error, not zero counts.
 
 ### `class_dependencies` — `class`*
 
@@ -243,8 +252,12 @@ dictionary view: the raw `DependsOn` field split + classified
 (`class` / `routine` / `other`), merged with the exact `Super` list
 (a superclass is a dependency even when `DependsOn` omits it — probed:
 on 2025.3 `DependsOn` is empty for pure-inheritance classes).
-`used_by` is the impact query: bounded BFS over `DependsOn`/`Super`
-back-references, `depth` (default 1, max 64) applies to this walk only.
+`used_by` walks `DependsOn`/`Super` back-references (bounded BFS,
+`depth` — default 1, max 64 — applies to this walk only). It is an
+IMPACT HINT, not complete: 2025.3 does not record body call sites
+(`##class(X).M()`) in `DependsOn`, so classes that only CALL X are
+missed — pair it with `search '##class(X)' --no-regex` to find those
+call sites too.
 
 ## Typical agent flows
 

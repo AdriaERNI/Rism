@@ -4,9 +4,10 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::iris::IrisClient;
 use crate::iris::search as api;
+use crate::tools::names::valid_namespace;
 
 /// Default document masks when the caller does not choose any (issue #17:
 /// classes, macros, routines).
@@ -32,7 +33,8 @@ pub struct SearchCodeArgs {
     pub case_sensitive: Option<bool>,
     /// Whole-word match (only sent when set; server default applies otherwise)
     pub whole_word: Option<bool>,
-    /// Max matches (default: settings `search_max_results`; server hard-caps at 200)
+    /// Max matches (default: settings `search_max_results` = 200; newer
+    /// servers honour higher values — `truncated` flags a capped scan)
     pub max_results: Option<u32>,
 }
 
@@ -92,10 +94,19 @@ pub async fn search_code(client: &IrisClient, args: &SearchCodeArgs) -> Result<S
         .namespace
         .clone()
         .unwrap_or_else(|| client.settings().iris_namespace.clone());
-    let documents = args
+    // F-09: the namespace interpolates raw into the URL path segment —
+    // refuse unsafe values before any HTTP request, same policy as the
+    // graph tools' class-name guard.
+    if !valid_namespace(&ns) {
+        return Err(Error::Config(format!(
+            "invalid namespace (URL path guard): {ns}"
+        )));
+    }
+    let documents: Vec<String> = args
         .documents
         .clone()
-        .filter(|d| !d.is_empty())
+        .map(|d| d.into_iter().filter(|s| !s.is_empty()).collect())
+        .filter(|d: &Vec<String>| !d.is_empty())
         .unwrap_or_else(|| DEFAULT_DOCUMENTS.iter().map(|s| (*s).to_string()).collect());
     let max = args
         .max_results

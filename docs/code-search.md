@@ -37,6 +37,22 @@ Practical rules:
 - An empty `query` is rejected server-side (HTTP 400 on `action/search`)
   — `search_code` surfaces the error rather than returning everything;
   `max=0` answers `Not found.` with zero matches and `truncated=false`.
+- `truncated` is true when the server printed its "Maximum search limit
+  reached" notice **or** the client-side match count reached the requested
+  `max` — so a query whose true total exactly equals `max` also flags
+  `truncated` (conservative; re-run with a higher `--max` to confirm you
+  saw everything).
+- Default masks are `*.cls`, `*.mac`, `*.int`. Macro `$def` definitions
+  live in `*.inc` and CSP pages in `*.csp` — neither is searched unless
+  you pass `--documents '*.inc'` (or `'*.csp'`, combinable with the
+  defaults: `--documents '*.cls,*.inc'`). The engine does scan them when
+  masked; under the defaults a `Not found.` for a macro name is a mask
+  miss, not an absence.
+- Literal mode scans the body sections of each document (methods,
+  properties, XData, comments, string literals). UDL **header** lines —
+  `Class X Extends Y`, `Include Foo`, `ProcedureBlock`, class keywords —
+  are not part of that text; they are searchable in regex (metadata)
+  mode via attributes like `Super` and `IncludeCode`.
 - Metacharacters: in regex mode your query is a server regex (an
   unbalanced `(` answers as an error); in literal mode `-` and `$` are
   plain text. The bench marker `RISM-BENCH-M-01` therefore needs
@@ -58,9 +74,21 @@ substring-based, so every walk re-validates each edge client-side
 `depends_on` merges the raw `DependsOn` field with the exact `Super`
 list: on 2025.3, inheritance-only classes keep `DependsOn` empty even
 when their bodies reference the superclass — a superclass IS a
-dependency (dictionary semantics, verified live). Class names are
+dependency (dictionary semantics, verified live). Names that have no
+`%Dictionary.ClassDefinition` row (a typo, or a class ALIAS such as
+`%RegisteredObject` — the dictionary keys on the real name
+`%Library.RegisteredObject`) answer an honest not-found instead of
+misleading zero members; query the canonical name. Class names are
 allowlisted (`valid_class_name`) before any request; unsafe names are
-refused with zero HTTP calls.
+refused with zero HTTP calls. Namespaces ride the URL path, so they get
+their own allowlist on the same rule (letters/digits/`_`/`-`, optional
+leading `%`): an unsafe namespace is refused before any request too.
+`used_by` is a graph edge over the dictionary `DependsOn`/`Super` fields
+only: 2025.3 does NOT populate `DependsOn` from body references
+(`##class(X).M()` calls), so a class used exclusively inside method
+bodies is invisible to BOTH directions. For impact analysis across body
+call sites, ALSO run `search '##class(X)' --no-regex` (literal scan) —
+that combination is the honest full picture until a Tier-3 xref index.
 
 ## Tier 3 — design only (deferred)
 
@@ -82,7 +110,7 @@ headline numbers (CLI wall ms incl. process start):
 | metric | value |
 |---|---|
 | recall (20 markers, literal mode) | 20/20 = 100% |
-| precision (aggregate, decoy-adjusted) | 20/21 = 95% |
+| precision (aggregate, decoy-adjusted) | 20/20 = 100% (re-run at PR head; the earlier 20/21 counted a stale container fixture, since deleted — see F_FINDINGS F-02) |
 | graph checks vs hand truth | 11/11 = 100% |
 | rare-query latency p50/p95 | 289 / 303 ms |
 | broad-query latency p50/p95 | 715–760 ms (server-side scan dominates) |
