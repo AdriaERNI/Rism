@@ -11,7 +11,7 @@ use serde_json::Value;
 use crate::error::{Error, Result};
 use crate::iris::IrisClient;
 use crate::iris::sql as sqlapi;
-use crate::tools::names::{valid_class_name, valid_identifier};
+use crate::tools::names::{valid_class_name, valid_identifier, valid_namespace};
 
 /// Query budget per tool call across a whole BFS walk (`E_SPEC` §3): more
 /// frontier queries than this sets `truncated` instead of fanning out.
@@ -25,12 +25,45 @@ fn ns_of(client: &IrisClient, ns: Option<&String>) -> String {
         .unwrap_or_else(|| client.settings().iris_namespace.clone())
 }
 
+/// F-03: `%Dictionary.Compiled*` keys are the REAL class name, so an alias
+/// (`%RegisteredObject`) has no rows at all — returning zero-counts for it
+/// reads as "class has no members". 2025.3 has no SQL-visible alias column,
+/// so we cannot rewrite alias → canonical server-side; instead a all-zero
+/// member read (and an empty `depends_on` row) is cross-checked against
+/// `ClassDefinition` so an unknown/alias name answers an honest not-found
+/// with a canonical-name hint instead of silent zeros. The existence query's
+/// interpolated name is guarded by the same `valid_class_name` call.
+async fn class_exists(client: &IrisClient, ns: &str, class: &str) -> Result<bool> {
+    let sql = format!("SELECT Name FROM %Dictionary.ClassDefinition WHERE Name = '{class}'");
+    Ok(!rows(client, ns, &sql).await?.is_empty())
+}
+
+/// Shared honest-not-found text for the F-03 zero-result cross-check.
+fn not_found_msg(class: &str, ns: &str) -> Error {
+    Error::Config(format!(
+        "class '{class}' not found in namespace '{ns}' (no %Dictionary.ClassDefinition row; \
+         if this is a class alias such as %RegisteredObject, query the canonical name, \
+         e.g. %Library.RegisteredObject)"
+    ))
+}
+
 /// Guard every class-name ingress: SQL is string-built (no binds), so an
 /// unsafe name is a hard [`Error::Config`] BEFORE any HTTP request.
 fn guard(class: &str) -> Result<()> {
     if !valid_class_name(class) {
         return Err(Error::Config(format!(
             "invalid class name (interpolation guard): {class}"
+        )));
+    }
+    Ok(())
+}
+
+/// F-09: same zero-HTTP refusal for the namespace, which interpolates raw
+/// into the URL path segment (`api_url`) rather than into SQL.
+fn guard_ns(ns: &str) -> Result<()> {
+    if !valid_namespace(ns) {
+        return Err(Error::Config(format!(
+            "invalid namespace (URL path guard): {ns}"
         )));
     }
     Ok(())
@@ -89,6 +122,7 @@ pub async fn find_subclasses(
 ) -> Result<FindSubclassesResult> {
     guard(&args.class)?;
     let ns = ns_of(client, args.namespace.as_ref());
+    guard_ns(&ns)?;
     let depth = resolve_depth(args.depth, client.settings().graph_depth)?;
 
     let mut visited: Vec<String> = vec![args.class.clone()];
@@ -154,6 +188,12 @@ pub async fn find_subclasses(
     // deeper levels exist that we did not visit → truncated (E_SPEC §3).
     if !truncated && !exhausted && !frontier.is_empty() {
         truncated = true;
+    }
+
+    // F-03: an empty walk is either a leaf class or a name the dictionary
+    // never keys on (alias/typo) — answer honestly which.
+    if found.is_empty() && !class_exists(client, &ns, &args.class).await? {
+        return Err(not_found_msg(&args.class, &ns));
     }
 
     Ok(FindSubclassesResult {
@@ -291,6 +331,7 @@ pub async fn class_members(
     let ns = ns_of(client, args.namespace.as_ref());
     let kind = args.kind.unwrap_or_default();
     let include_inherited = args.include_inherited.unwrap_or(false);
+    guard_ns(&ns)?;
     let origin_filter = if include_inherited {
         String::new()
     } else {
@@ -359,6 +400,19 @@ pub async fn class_members(
                 name: str_field(&row, "Name"),
             });
         }
+    }
+
+    // F-03: an all-zero read means either a genuinely empty class or a name
+    // the Compiled* tables never key on (alias like %RegisteredObject, or a
+    // typo). Distinguish them via ClassDefinition: no row -> honest
+    // not-found instead of misleading zeros.
+    if methods.is_empty()
+        && properties.is_empty()
+        && parameters.is_empty()
+        && xdata.is_empty()
+        && !class_exists(client, &ns, &args.class).await?
+    {
+        return Err(not_found_msg(&args.class, &ns));
     }
 
     Ok(ClassMembersResult {
@@ -453,6 +507,7 @@ pub async fn class_dependencies(
 ) -> Result<ClassDependenciesResult> {
     guard(&args.class)?;
     let ns = ns_of(client, args.namespace.as_ref());
+    guard_ns(&ns)?;
     let direction = args.direction.unwrap_or_default();
     // depends_on is always 1 hop; depth only bounds the used_by walk.
     let depth = match args.depth {
@@ -512,6 +567,15 @@ pub async fn class_dependencies(
         let (nodes, trunc) = used_by_walk(client, &ns, &args.class, depth).await?;
         used_by = nodes;
         truncated = trunc;
+    }
+
+    // F-03: both lists empty on a name with no dictionary row -> the class
+    // (alias/typo) does not exist; say so instead of returning empty edges.
+    if depends_on.is_empty()
+        && used_by.is_empty()
+        && !class_exists(client, &ns, &args.class).await?
+    {
+        return Err(not_found_msg(&args.class, &ns));
     }
 
     Ok(ClassDependenciesResult {

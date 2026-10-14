@@ -24,6 +24,20 @@ pub(crate) fn valid_identifier(name: &str) -> bool {
     first.is_ascii_alphabetic() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// Namespace allowlist (`%SYS`/`USER`/`MY-APP` shapes): the namespace rides
+/// UNENCODED into the URL path (`src/iris/http.rs::api_url` only pre-encodes
+/// `%`), so it gets the same client-side guard as class names — refuse before
+/// any request instead of trusting path normalization (`F_FINDINGS` F-09).
+pub(crate) fn valid_namespace(ns: &str) -> bool {
+    let rest = ns.strip_prefix('%').unwrap_or(ns);
+    let mut chars = rest.chars();
+    let Some(first) = chars.next() else {
+        return false; // "" or bare "%" — no real namespace has an empty tail
+    };
+    first.is_ascii_alphabetic()
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::missing_panics_doc)]
 mod tests {
@@ -41,5 +55,28 @@ mod tests {
         assert!(valid_identifier("TestAdd"));
         assert!(!valid_identifier("Test Add"));
         assert!(!valid_identifier("1Test"));
+    }
+
+    /// F-09 pin — the namespace predicate accepts every real IRIS name
+    /// shape and refuses every path/param metachar seen in H-10..H-13.
+    #[test]
+    fn namespace_allowlist_shape() {
+        assert!(valid_namespace("USER"));
+        assert!(valid_namespace("%SYS"));
+        assert!(valid_namespace("MY-APP"));
+        assert!(valid_namespace("Ensemble_1"));
+        assert!(!valid_namespace(""));
+        assert!(!valid_namespace("A' OR 1=1--"));
+        assert!(!valid_namespace("USER&x=1"));
+        assert!(!valid_namespace("../../"));
+        assert!(!valid_namespace("../admin"));
+        assert!(!valid_namespace("USER/%2e%2e"));
+        // `%` must be followed by a letter (%SYS shape): a bare `%`,
+        // `%%`, or `%41` (pre-encoded garbage) is a client-side refusal,
+        // not a server round trip.
+        assert!(!valid_namespace("%41"));
+        assert!(!valid_namespace("%%"));
+        assert!(!valid_namespace("%"));
+        assert!(!valid_namespace("USER/"));
     }
 }

@@ -76,7 +76,7 @@ pub enum Commands {
         /// Whole-word match
         #[arg(long)]
         whole_word: bool,
-        /// Max matches (server hard-caps at 200)
+        /// Max matches (default: settings `search_max_results` = 200)
         #[arg(long)]
         max: Option<u32>,
     },

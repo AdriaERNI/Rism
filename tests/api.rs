@@ -798,6 +798,9 @@ async fn subclasses_sql_shape_contains_walk() {
 }
 
 // U12 — Origin filter present/absent per include_inherited; XData has none.
+// F-03 adds an existence cross-check query ONLY when all four tables come
+// back empty; these mocks return rows for one table so the walk is not
+// re-triggered — the empty-read branch is pinned separately (U19).
 #[tokio::test]
 async fn members_sql_shape_origin_filter() {
     let mock = MockServer::start().await;
@@ -805,7 +808,9 @@ async fn members_sql_shape_origin_filter() {
         .and(path("/api/atelier/v8/USER/action/query"))
         .and(body_query_contains("CompiledMethod"))
         .and(body_query_contains("AND Origin = 'X'"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(query_envelope(&[])))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(query_envelope(&[json!({"Name": "M1"})])),
+        )
         .expect(1)
         .mount(&mock)
         .await;
@@ -866,7 +871,23 @@ async fn members_sql_shape_origin_filter() {
             !v["query"].as_str().unwrap_or("").contains(" AND Origin = ")
         })
         .respond_with(ResponseTemplate::new(200).set_body_json(query_envelope(&[])))
+        .with_priority(10)
         .expect(4)
+        .mount(&mock2)
+        .await;
+    // F-03: all four tables empty triggers the existence cross-check; the
+    // class exists → zeros are reported honestly (no error). Default
+    // priority 0 beats the catch-all above.
+    Mock::given(method("POST"))
+        .and(path("/api/atelier/v8/USER/action/query"))
+        .and(body_query(
+            "SELECT Name FROM %Dictionary.ClassDefinition WHERE Name = 'X'".to_string(),
+        ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(query_envelope(&[json!({"Name": "X"})])),
+        )
+        .up_to_n_times(1)
+        .expect(1)
         .mount(&mock2)
         .await;
     let client2 = client_of(&mock2);
@@ -881,7 +902,8 @@ async fn members_sql_shape_origin_filter() {
     )
     .await
     .expect("members (inherited)");
-    assert_eq!(mock2.received_requests().await.unwrap().len(), 4);
+    // 4 table reads + 1 existence cross-check (all-zero result branch).
+    assert_eq!(mock2.received_requests().await.unwrap().len(), 5);
 }
 
 // U14 — the impact query shape + substring drop on a DependsOn hit.
@@ -921,5 +943,142 @@ async fn used_by_sql_shape_super_merge() {
         "used_by-only leaves the field []"
     );
     assert!(res.truncated, "depth-1 cap with live frontier");
+    mock.verify().await;
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// F-fix round (PR #22 review) — U19..U21
+// ═════════════════════════════════════════════════════════════════════
+
+// U19 — F-03 regression: a name with no %Dictionary row (alias like
+// %RegisteredObject, or a typo) must answer an honest not-found, NOT
+// misleading all-zero members. All four Compiled* reads empty + no
+// existence row → Error::Config.
+#[tokio::test]
+async fn members_unknown_class_is_honest_not_found() {
+    let mock = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/atelier/v8/USER/action/query"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(query_envelope(&[])))
+        .mount(&mock)
+        .await;
+    let client = client(&mock);
+    let err = rism::tools::graph::class_members(
+        &client,
+        &rism::tools::graph::ClassMembersArgs {
+            class: "Not.A.Class".into(),
+            namespace: None,
+            kind: None,
+            include_inherited: None,
+        },
+    )
+    .await
+    .expect_err("zeros with no dictionary row must be an honest error");
+    assert!(
+        matches!(&err, rism::Error::Config(m) if m.contains("not found") && m.contains("alias")),
+        "{err}"
+    );
+    // 5th request is the existence cross-check.
+    let seen = mock.received_requests().await.unwrap();
+    assert_eq!(seen.len(), 5, "4 tables + existence check");
+}
+
+// U20 — F-09 regression: the namespace rides the URL path unencoded, so an
+// unsafe namespace is refused client-side with ZERO HTTP requests, on every
+// new surface (search + all three graph tools).
+#[tokio::test]
+async fn hostile_namespace_refused_before_http() {
+    for ns in ["A' OR 1=1--", "../admin", "USER&x=1", "", "%2e%2e"] {
+        let mock = MockServer::start().await;
+        let client = client(&mock);
+        let e1 = rism::tools::search::search_code(
+            &client,
+            &rism::tools::search::SearchCodeArgs {
+                query: "x".into(),
+                namespace: Some(ns.to_string()),
+                documents: None,
+                regex: None,
+                include_system: None,
+                include_generated: None,
+                case_sensitive: None,
+                whole_word: None,
+                max_results: None,
+            },
+        )
+        .await
+        .expect_err("ns guard must refuse");
+        assert!(
+            matches!(&e1, rism::Error::Config(m) if m.contains("invalid namespace")),
+            "{e1}"
+        );
+        let e2 = rism::tools::graph::find_subclasses(
+            &client,
+            &rism::tools::graph::FindSubclassesArgs {
+                class: "X".into(),
+                namespace: Some(ns.to_string()),
+                depth: Some(1),
+            },
+        )
+        .await
+        .expect_err("graph ns guard");
+        assert!(matches!(e2, rism::Error::Config(_)), "{e2}");
+        assert_eq!(
+            mock.received_requests().await.unwrap().len(),
+            0,
+            "zero HTTP for ns {ns:?}"
+        );
+    }
+    // %SYS stays legal (regression against over-tightening the predicate).
+    let mock = MockServer::start().await;
+    let client = client(&mock);
+    let _ = rism::tools::graph::find_subclasses(
+        &client,
+        &rism::tools::graph::FindSubclassesArgs {
+            class: "X".into(),
+            namespace: Some("%SYS".into()),
+            depth: Some(1),
+        },
+    )
+    .await;
+    // may fail later on the mock body, but must NOT be a Config guard error
+    // and must have made ≥1 request.
+    assert!(
+        !mock.received_requests().await.unwrap().is_empty(),
+        "%SYS must pass the guard"
+    );
+}
+
+// U21 — F-04 regression: `--documents ''` (CLI empty string) falls back to
+// the default masks instead of sending documents= (server HTTP 400).
+#[tokio::test]
+async fn empty_document_string_falls_back_to_defaults() {
+    let mock = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/atelier/v8/USER/action/search"))
+        .and(query_param("documents", "*.cls,*.mac,*.int"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "status": {"errors": [], "summary": ""}, "console": [], "result": []
+        })))
+        .expect(1)
+        .mount(&mock)
+        .await;
+    let client = client(&mock);
+    let res = rism::tools::search::search_code(
+        &client,
+        &rism::tools::search::SearchCodeArgs {
+            query: "x".into(),
+            namespace: None,
+            documents: Some(vec![String::new()]),
+            regex: None,
+            include_system: None,
+            include_generated: None,
+            case_sensitive: None,
+            whole_word: None,
+            max_results: None,
+        },
+    )
+    .await
+    .expect("empty mask falls back");
+    assert_eq!(res.documents, vec!["*.cls", "*.mac", "*.int"]);
     mock.verify().await;
 }
