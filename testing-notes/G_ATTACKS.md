@@ -29,21 +29,43 @@ run, then reloaded; nothing reused from earlier sessions):
 5 docs scanned. Live-suite (`find_references_live_recall`) passes 3×3
 consecutive cold runs; full matrix 24/24 below.
 
-### `Do ^` honesty check (extra fixture, this session)
+### `Do ^` honesty check (extra fixtures, this session)
 
-A class with `Do ^FProbeG.Mid` in both a method body and a trigger body:
-both edges come back RESOLVED (`via=routine_do`, correct member
-attribution) — and a routine query against the same server surfaces them.
-No unresolved-bucket leakage: computed/trigger carriers were already
-resolved through the SQL narrowing queries; the unresolved bucket carries
-only the dynamic/oref/macro classes, each with its hint.
+A class with `Do ^FProbeG.Mid` in a method body AND a trigger body: both
+edges RESOLVED (`via=routine_do`, correct member attribution `M1`/`tg1`).
+A `Do ^Routine` embedded INSIDE a `SqlComputeCode` block: RESOLVED
+(`via=routine_do`, attributed to property `PX`) — the SQL narrowing query
+surfaces the carrier doc even though literal search alone would not. The
+unresolved bucket carries only the dynamic/oref/macro classes, each with
+its hint: no leakage in either direction.
 
 ## 2. Public-corpus false-positive sweep
 
 80 docs from the four bench repos (pinned SHAs, CORPUS.md transform)
-loaded; `find_references` run against the most-referenced needles:
+loaded; `find_references` run against the most-referenced needles. An
+edge counts as a true positive when its line carries a literal
+occurrence of the target (or the frozen class-target `..` rule inside
+the class's own doc, or a dictionary `super` fact):
 
-(precision table below; sweep re-run with a per-edge classifier in progress at commit time — filled by the next commit)
+| target | resolved | unresolved | truncated | edge classes | false positives | ms |
+|---|---|---|---|---|---|---|
+| `%SQL.Statement` | 200 | 0 | yes (500-doc cap) | 105 self_dot · 95 literal | **0** | 1654 |
+| `%Stream.GlobalCharacter` | 89 | 0 | no | 22 self_dot · 64 literal · 3 super | **0** | 1526 |
+| `arsblue.datatype.DateTimeFormat` | 46 | 25 | no | 29 self_dot · 17 literal; all 25 unresolved carry `dynamic_string` | **0** | 1655 |
+| `BenchCOV.Installer` (Bench-defined) | 0 | 0 | no | — | **0** | 2064 |
+
+Aggregate resolved precision: **335/335 = 100%** — zero false positives
+under any classification. The `dynamic_string` bucket on the real-world
+macro-heavy class is the intended honesty channel (quoted names in
+string args), not FP. Crash sweep:
+
+| realism probe | verdict |
+|---|---|
+| CRLF line endings | parses; edge resolved at the right line |
+| CR embedded INSIDE one content line | server refuses the store (`ERROR #16020`) — never reaches the scanner |
+| unicode + tab-heavy line | resolved |
+| 10k-line routine | found at line 9998, no timeout |
+| control chars in strings | answered, no hang, no crash |
 
 ## 3. Perf (re-measured after the refactor)
 

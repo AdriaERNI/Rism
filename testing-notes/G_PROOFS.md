@@ -76,3 +76,30 @@ After every run (verified twice, incl. the manual proof harness):
 routines (`*.0.obj`/`*.1.int` artifacts) die with the ClassDefinition
 delete; the StudioOpenDialog listing lags deletions by ~1 s (cache), so
 census checks re-poll rather than read once.
+
+---
+
+## Delta — cold re-proof after the scanner/stage refactor (2026-10-15)
+
+Behavior-neutral rewrites landed since the table above (scanner passes 1–5
+split into per-rule helpers, `find_references` stages extracted,
+`class_members` census kind queries extracted). Full re-proof from cold:
+
+| row | shipped | this re-run | delta |
+|---|---|---|---|
+| E1 E2 E6 resolved (member query) | PASS | PASS (6 resolved edges, same docs/lines/via) | 0 |
+| E7 E8 resolved (trigger/computed) | PASS | PASS (`trigger` L25, `computed` L29) | 0 |
+| E9 surfaced | PASS | PASS (Macros.mac `class_call` L3 + EdgeR `macro` hint) | 0 |
+| E4 E5 E10 unresolved w/ hints | PASS | PASS (`dynamic_string` ×2, `oref_call`) | 0 |
+| E3 resolved (`^FProbeG.Mid`) | PASS | PASS (`routine_do` L5) | 0 |
+| class query: E1 E2 E6 + super | PASS | PASS (+Sub `super` edge, inherited `..`) | 0 |
+| decoy: 0 resolved | PASS | PASS (unresolved `dynamic_string` only) | 0 |
+| census kinds vs execute_sql | PASS | PASS — 8/8 kinds agree with the Oracle filtered the same Origin rule; `--include-inherited` parent-only 245=245 | 0 |
+| member p95 (in-process, 3×3 cold suite) | 1413 ms | 1427 / 1521 / 1636 ms (one session-start cold-cache run at 2111 ms documented in G_ATTACKS G-01) | ≤ gate 2000 |
+| CLI warm member / routine / class | 1055–1325 / 920–973 / 963–1243 | 1154–1202 / 1009–1095 / 1078–1101 | ≤ gate |
+| teardown census 0 | PASS | PASS (both queries, re-poll) | 0 |
+| live matrix 24/24 | PASS | PASS (`--test-threads=8`) | 0 |
+
+Public-corpus precision sweep, crash realism probes, `.inc` storage-quirk
+probe, guards-before-HTTP and the 30-tool surface re-count: see
+G_ATTACKS.md (same server + corpus).
