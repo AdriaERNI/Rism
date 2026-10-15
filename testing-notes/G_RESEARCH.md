@@ -72,8 +72,8 @@ recall logic to be re-implemented as a bench (G_SPEC §6).
   4. Live build test: `cargo add objectscript-core@0.1.9` in a clean crate
     built OK (2m03s, host has gcc) — feasibility yes, policy no.
   Worth recording: this crate proves the TREE-SITTER route exists
-  (InterSystems' own objectscript-lsp uses it); if a future mission ships a
-  sidecar/optional-feature parser, this is the substrate, not a new parser.
+  (InterSystems' own objectscript-lsp uses it); if a heavier parser-based
+  design is ever revisited, this is the substrate, not a new parser.
 
 ### 2. `%Dictionary.CompiledMethod.Rtn` / `RtnLabel` as a body source
 

@@ -152,7 +152,7 @@ SQL (verified live): `SELECT Name, FormalSpec, SqlName, SqlView, Type FROM
 ## 5. Recall protocol + perf gates (measured; gate = PASS/FAIL in G_PROOFS)
 
 Fixture set: the 10 planted edges + decoy from G_RESEARCH (FProbeG.* docs,
-`FProbeG_`-prefixed per mission → keep exact names used in probes so numbers
+`FProbeG*`-prefixed → keep exact names used in probes so numbers
 reconcile; load/compile/teardown in the live test, cleanup verified to 0).
 
 Required recall of `find_references` on the fixtures:
@@ -165,7 +165,7 @@ Required recall of `find_references` on the fixtures:
 | workaround baseline (recorded, not shipped as the answer) | 5/10 exact-literal, 9/10 name-word |
 | precision | decoy comment-line hit appears ONLY as unresolved(dynamic_string) or is excluded by string-lexer state — zero resolved decoy edges allowed |
 
-Perf (same gates as the mission; measured on rism-iris USER, 1,577 user
+Perf (project gates; measured on rism-iris USER, 1,577 user
 classes / 5,916 docs incl. system):
 - `find_references` with member: < 2.0 s wall p95 (3 runs) — prototype
   measured 0.6–1.3 s.
