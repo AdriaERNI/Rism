@@ -64,7 +64,7 @@ recall logic to be re-implemented as a bench by the coder (G_SPEC §6).
   include **`cc ^1.0` (build)** → the grammars are C code compiled at build.
 - Fit verdict: **REFUTED as an in-tree substrate.**
   1. It pulls `tree-sitter` + 3 grammar crates that compile C — breaks the
-     mission gate "pure-Rust deps, no unsafe, no C" (constitution §Deps).
+     stated design constraint "pure-Rust deps, no unsafe, no C".
   2. Its API is file/URL-workspace oriented (`ProjectState`/`walkdir`);
      server-sourced content would need an adapter layer anyway.
   3. `tower-lsp`, `petgraph`, `rayon`, `evalexpr`, `parking_lot` — five
@@ -77,7 +77,7 @@ recall logic to be re-implemented as a bench by the coder (G_SPEC §6).
 
 ### 2. `%Dictionary.CompiledMethod.Rtn` / `RtnLabel` as a body source
 
-- Claim (coordinator lead / docs): compiled routine/label fields may expose
+- Claim (research lead / docs): compiled routine/label fields may expose
   method bodies as queryable text.
 - Probe: `SELECT TOP 5 Name, RtnLabel FROM %Dictionary.CompiledMethod`
   → `RtnLabel` = `Label^Routine.N` pointers (195,902 non-null rows), no body
@@ -131,7 +131,7 @@ recall logic to be re-implemented as a bench by the coder (G_SPEC §6).
 
 ### 6. vscode-objectscript documentIndex / language-server xrefs
 
-- Claim (coordinator lead): documentIndex is CLIENT-side workspace index
+- Claim (research lead): documentIndex is CLIENT-side workspace index
   only; the language server resolves via %Dictionary SQL +
   `RoutineMgr_StudioOpenDialog` table functions.
 - Probe (server): `GET USER/xref`, `USER/action/xref`,

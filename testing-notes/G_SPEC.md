@@ -1,4 +1,4 @@
-# G_SPEC — frozen contract for the reference graph + partials (mission G)
+# G_SPEC — frozen contract for the reference graph + partials
 
 Decides everything the coder must NOT re-litigate. Evidence:
 testing-notes/G_RESEARCH.md (live probes, 2026-10-14, rism-iris 2025.3).
