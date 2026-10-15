@@ -1,6 +1,6 @@
 # MCP Tools
 
-Rism serves **29 tools** over JSON-RPC 2.0 on two doors (`rism mcp`):
+Rism serves **30 tools** over JSON-RPC 2.0 on two doors (`rism mcp`):
 **stdio** (default) and **streamable-HTTP** (`rism mcp --transport http`,
 at `/mcp`). Parameters marked
 `*` are required. Namespace-scoped tools accept an optional `namespace`
@@ -200,7 +200,7 @@ Server-side text/regex search over source documents via the Atelier
 `action/search` endpoint — no local checkout needed. `query` is
 URL-encoded and treated as a regex by default; `regex: false` switches to
 a literal full-text scan. Optional: `namespace`, `documents` (masks,
-default `["*.cls","*.mac","*.int"]`), `include_system`,
+default `["*.cls","*.mac","*.int","*.inc"]`), `include_system`,
 `include_generated`, `case_sensitive` / `whole_word` (sent only when
 set), `max_results` (default `search_max_results` = 200; the server
 honours higher values on IRIS 2025.3 and flags `truncated` when it
@@ -213,7 +213,8 @@ in literal mode (`regex: false`). See [Code Search](code-search.md).
 
 ## Class graph
 
-`%Dictionary`-backed reference graph (SQL only — no new endpoints).
+`%Dictionary`-backed reference graph (SQL + a parse-on-fetch scanner — no
+new endpoints).
 Class names are validated before any HTTP call: an unsafe name is
 refused with a config error and zero requests made. The `namespace`
 parameter rides the URL path, so it is validated by the same rule
@@ -230,19 +231,38 @@ itself is excluded; `truncated` marks a depth/budget-capped walk.
 ### `class_members` — `class`*
 
 Own compiled members from `%Dictionary.CompiledMethod/Property/
-Parameter/XData`: methods (with `class_method`, `sql_proc`,
-`formal_spec`, `return_type`, `origin`), properties (`type`,
+Parameter/XData/Query/Trigger/Index`: methods (with `class_method`,
+`sql_proc`, `formal_spec`, `return_type`, `origin`), properties (`type`,
 `collection`), parameters (`type` — the raw default is not exposed),
-XData names. These are the four CLASS-member tables only: Queries,
-Triggers, Indices and Procedures are NOT listed (they exist on many
-classes — find them with `search 'Query Q1' --no-regex` or
-`execute_sql` on `%Dictionary.CompiledQuery/CompiledTrigger/…`).
-`kind` narrows to `methods` / `properties` / `parameters` /
-`xdata` (default `all`); `include_inherited: true` drops the
-`Origin = class` filter (inherited rows then carry their declaring
+XData names, queries (`formal_spec`, `sql_name`, `sql_view`, `type`),
+triggers (`event`, `time`, `code_mode`), indices (`type`, `properties`).
+`kind=all` covers every structural table plus queries/triggers/indices;
+`kind` also narrows to `queries` / `triggers` / `indices` /
+`procedures` (the last reads `CompiledMethod WHERE SqlProc = 1` — no
+`CompiledProcedure` table exists on 2025.3). `include_inherited: true`
+drops the `Origin = class` filter (inherited rows then carry their declaring
 class in `origin`, when the dictionary reports one). A name with no
 `%Dictionary` row — typo or alias (`%RegisteredObject` →
 `%Library.RegisteredObject`) — is an error, not zero counts.
+
+### `find_references` — `target`*
+
+Call-graph references to `"Package.Class.Member"`, `"Package.Class"`, or
+`"^Routine"`. IRIS 2025.3 has no server cross-reference store, so the tool
+narrows candidate docs with a literal `action/search` + `%Dictionary` SQL
+over the embedded-code columns, fetches each doc ONCE, and classifies call
+sites with a built-in source scanner: resolved `edges`
+(`{doc, member, line, text, via}` — `via` ∈ `class_call`, `self_call`,
+`routine_do`, `super`, `computed`, `trigger`) plus an honest `unresolved`
+bucket (`oref_call`, `dynamic_string`, `macro` hints) that is never
+silently dropped. `include_system` (slower — a system-wide scan measured
+above the 2 s gate) and `include_generated` (compiled `.int` docs:
+macro-expanded call sites but heavy generated noise) default to false;
+`max_results` defaults to `search_max_results`. A class/member target with
+no dictionary row answers an honest not-found. Routine edges are found by
+`^Routine` targets only — a member query never contains a `Do ^` edge by
+construction. See [Code Search](code-search.md) for what the scanner
+catches and what stays impossible.
 
 ### `class_dependencies` — `class`*
 
@@ -256,8 +276,8 @@ on 2025.3 `DependsOn` is empty for pure-inheritance classes).
 `depth` — default 1, max 64 — applies to this walk only). It is an
 IMPACT HINT, not complete: 2025.3 does not record body call sites
 (`##class(X).M()`) in `DependsOn`, so classes that only CALL X are
-missed — pair it with `search '##class(X)' --no-regex` to find those
-call sites too.
+missed — `find_references` is the complete body-call-site answer; the
+literal `search '##class(X)' --no-regex` remains the fast text check.
 
 ## Typical agent flows
 

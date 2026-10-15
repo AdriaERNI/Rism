@@ -26,6 +26,7 @@ use rism::tools::host::{
     ListFilesArgs, ReadFileArgs, RunShellArgs, list_files, read_file, run_shell,
 };
 use rism::tools::monitor::{MonitorArgs, monitor_system};
+use rism::tools::refs::find_references;
 use rism::tools::search::search_code;
 use rism::tools::serverinfo::{GetServerInfoArgs, get_server_info};
 use rism::tools::sql::execute_sql;
@@ -229,6 +230,9 @@ async fn dispatch_graph(client: &IrisClient, call: GraphCall, format: OutputForm
         }
         GraphCall::Deps { args } => {
             render::render_deps(&class_dependencies(client, &args).await?, format);
+        }
+        GraphCall::Refs { args } => {
+            render::render_refs(&find_references(client, &args).await?, format);
         }
     }
     Ok(())

@@ -36,6 +36,7 @@ use crate::tools::host::{
 };
 use crate::tools::jobs;
 use crate::tools::monitor::{MonitorArgs, monitor_system};
+use crate::tools::refs::{FindReferencesArgs, find_references};
 use crate::tools::search::{SearchCodeArgs, search_code};
 use crate::tools::serverinfo::{GetServerInfoArgs, get_server_info};
 use crate::tools::sql::{ExecuteSqlArgs, execute_sql};
@@ -319,7 +320,7 @@ impl RismMcp {
     }
 
     #[tool(
-        description = "Text/regex search over server source documents (*.cls, *.mac, *.int by default) via the Atelier search endpoint. Returns hits grouped by document with line/member normalization; truncated=true when the scan stopped at the requested max.",
+        description = "Text/regex search over server source documents (*.cls, *.mac, *.int, *.inc by default) via the Atelier search endpoint. Returns hits grouped by document with line/member normalization; truncated=true when the scan stopped at the requested max.",
         annotations(title = "Search Code", read_only_hint = true, destructive_hint = false)
     )]
     async fn search_code(
@@ -345,7 +346,7 @@ impl RismMcp {
     }
 
     #[tool(
-        description = "List a class's compiled members (methods, properties, parameters, XData names) from %Dictionary.Compiled*; include_inherited=true widens beyond the class's own declarations.",
+        description = "List a class's compiled members from %Dictionary.Compiled*: methods (with class_method, sql_proc, formal_spec, return_type, origin), properties, parameters, XData names, plus the census kinds queries / triggers / indices (kind=all includes them); kind=procedures lists the SqlProc=1 methods. include_inherited=true widens beyond the class's own declarations.",
         annotations(
             title = "Class Members",
             read_only_hint = true,
@@ -357,6 +358,21 @@ impl RismMcp {
         Parameters(args): Parameters<ClassMembersArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         Ok(map_json(class_members(&self.client, &args).await))
+    }
+
+    #[tool(
+        description = "Find source references to a target: \"Package.Class.Member\", \"Package.Class\", or \"^Routine\". Narrows candidate docs with a literal search + %Dictionary SQL, then classifies every call site in the fetched source (##class calls, ..-self, Do ^routine, Super rows, computed/trigger code). Resolved edges and an honest unresolved bucket (oref/dynamic-string/macro hints); include_system/include_generated widen the scan (slower). No server xref needed.",
+        annotations(
+            title = "Find References",
+            read_only_hint = true,
+            destructive_hint = false
+        )
+    )]
+    async fn find_references(
+        &self,
+        Parameters(args): Parameters<FindReferencesArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        Ok(map_json(find_references(&self.client, &args).await))
     }
 
     #[tool(
@@ -621,11 +637,11 @@ impl ServerHandler for RismMcp {
             // Wire-visible model briefing (< 2048 chars — some clients
             // truncate). Every tool name must match the #[tool] fns exactly;
             // the prose is hints, not enforcement. Mission-D ledger row M15.
-            "Rism: 29 tools for InterSystems IRIS via the Atelier API. What for: SQL \
+            "Rism: 30 tools for InterSystems IRIS via the Atelier API. What for: SQL \
              (execute_sql); documents (list_documents, get_document, put_document, \
              put_and_compile, compile_documents, delete_document); code search \
              (search_code - regex over source docs); class graph (find_subclasses, \
-             class_members, class_dependencies); terminal \
+             class_members, class_dependencies, find_references); terminal \
              (execute_command); %UnitTest (list_tests, run_tests, get_test_results); \
              server info (get_server_info); metrics (monitor_system); local host files \
              (read_file, list_files, run_shell - act on Rism's machine, not IRIS); DBGP \

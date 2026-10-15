@@ -24,6 +24,30 @@ pub(crate) fn valid_identifier(name: &str) -> bool {
     first.is_ascii_alphabetic() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// Routine-name allowlist for `find_references` targets: letters/digits/
+/// `_`/`-`/`.`, at most 255 chars, never a caret (the grammar's leading `^`
+/// is stripped by the target parser BEFORE this check, so a caret here means
+/// the name cannot have come from the `^Routine` form).
+pub(crate) fn valid_routine_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 255
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+}
+
+/// Member-name allowlist (method/property/query/trigger form): letter or
+/// `%` first, then alphanumerics/`_`/`%` (IRIS member names may contain
+/// `%`, e.g. `%New`). Used by the `Class.Member` target grammar split.
+pub(crate) fn valid_member_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '%')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '%')
+}
+
 /// Namespace allowlist (`%SYS`/`USER`/`MY-APP` shapes): the namespace rides
 /// UNENCODED into the URL path (`src/iris/http.rs::api_url` only pre-encodes
 /// `%`), so it gets the same client-side guard as class names — refuse before

@@ -48,7 +48,7 @@ sign-off item: none needed; urlencoding was already a dependency).
 | clippy 1.99.0 | `rustup run 1.99.0 cargo clippy --all-targets -- -D warnings` | 0 warnings |
 | unit + wiremock | `cargo test -q` | all binaries `ok, 0 failed` (83 lib + 23 api + 7 http_door + 3 stateless + 2 cli_transport + 1 background_jobs(+17 ign); the one ERROR log line is the connection-close race test's expected stderr) |
 | live `--ignored` | `cargo test --test tool_matrix -- --ignored --test-threads=1` | `23 passed; 0 failed` in 10.7 s (IRIS 2025.3, container healthy) |
-| probe | `PATH=target/release:$PATH bash packaging/mcp_probe.sh` | 4 legs OK: stdio 29 tools, background stream, extension-key, **`HTTP door answered (29 tools, SQL clean)`**, exit 0 |
+| probe | `PATH=target/release:$PATH bash packaging/mcp_probe.sh` | 4 legs OK: stdio (29 tools), background stream, extension-key, **`HTTP door answered (29 tools, SQL clean)`**, exit 0 |
 | docs | `uvx --from mkdocs-material mkdocs build --strict` | built, 0 warnings/errors |
 | drift (port) | `python3 bench/drift_port.py` | **DRIFT FAILURES: 0** |
 | instructions budget | live `initialize` read-back | 1386 chars < 2048, all 29 names incl. the 4 new |

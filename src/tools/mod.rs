@@ -11,6 +11,7 @@ pub mod host;
 pub mod jobs;
 pub mod monitor;
 mod names;
+pub mod refs;
 pub mod repl;
 pub mod scoring;
 pub mod search;

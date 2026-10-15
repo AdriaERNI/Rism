@@ -32,7 +32,7 @@ Flags: `--max-rows <N>` (default 1000).
 
 ### `rism search <PATTERN>`
 Server-side text/regex search over source documents (`*.cls`, `*.mac`,
-`*.int` unless masked). Regex by default; `--no-regex` switches to a
+`*.int`, `*.inc` unless masked). Regex by default; `--no-regex` switches to a
 literal full-text scan (body text — comments, string literals — is only
 visible in this mode on IRIS 2025.3; regex mode scans member/attribute
 names — see [Code Search](code-search.md)).
@@ -58,7 +58,8 @@ Bounded BFS over `%Dictionary` Super edges (`depth` default
 
 ### `rism graph members <CLASS> [--kind K] [--include-inherited]`
 Own (or inherited-inclusive) compiled members. `--kind` ∈ `all`
-(default) / `methods` / `properties` / `parameters` / `xdata`.
+(default) / `methods` / `properties` / `parameters` / `xdata` /
+`queries` / `triggers` / `indices` / `procedures`.
 
 ### `rism graph deps <CLASS> [--direction D] [--depth N]`
 Dependency edges: `--direction` ∈ `depends_on` / `used_by` / `both`
@@ -66,9 +67,20 @@ Dependency edges: `--direction` ∈ `depends_on` / `used_by` / `both`
 max 64). Class names pass the same allowlist as the MCP tools — an
 unsafe name is refused before any request.
 
+### `rism graph refs <TARGET> [--namespace NS] [--system] [--generated] [--max N]`
+Call-graph references to `Package.Class.Member`, `Package.Class`, or
+`^Routine` (JSON mirrors `find_references`). The table shows
+`doc(member:line) via — text` per resolved edge and flags the
+`unresolved` bucket with `?hint`. `--system` widens the scan to system
+docs (slow — measured above the 2 s gate, which is why it is opt-in);
+`--generated` adds compiled `.int` docs. Names pass the same allowlists
+as the MCP tool — an unsafe name is refused with zero HTTP calls.
+
 ```bash
 rism graph subclasses EnsLib.HL7.Adapter.28 --depth 3 --format json
 rism graph deps MyApp.Service --direction used_by --depth 2
+rism graph refs MyApp.Service.DoWork
+rism graph refs ^MyRoutine --format json
 ```
 
 ## Documents
@@ -201,7 +213,7 @@ units included. `--raw` adds the raw metric vector to the scored table.
 ## MCP server
 
 ### `rism mcp`
-Serve JSON-RPC 2.0 (all 29 tools). Used by MCP clients. No flags = **stdio**,
+Serve JSON-RPC 2.0 (all 30 tools). Used by MCP clients. No flags = **stdio**,
 byte-identical to every released version. `RISM_DEBUG_TOOLS=0` removes the 9
 `debug_*` tools from discovery.
 
@@ -225,7 +237,7 @@ ignored. Precedence: CLI flag > env > `config.toml` (`mcp_transport`,
 
 !!! danger "No auth on the HTTP door"
     `rism mcp --transport http` has **no authentication**: every process that
-    can reach the bound address can drive all 29 tools, including `run_shell`,
+    can reach the bound address can drive all 30 tools, including `run_shell`,
     file tools, and the debugger. Bind loopback only unless you fully own the
     network boundary. Origin is validated when present (RFC 6454 match on the
     door's own origin — the exact bound port is pinned); native clients may

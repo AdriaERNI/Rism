@@ -10,6 +10,7 @@ use crate::tools::documents::{
 use crate::tools::graph::{
     ClassDependenciesArgs, ClassMembersArgs, DependencyDirection, FindSubclassesArgs, MembersKind,
 };
+use crate::tools::refs::FindReferencesArgs;
 use crate::tools::search::SearchCodeArgs;
 use crate::tools::sql::ExecuteSqlArgs;
 
@@ -58,7 +59,7 @@ pub enum Commands {
     Search {
         /// Pattern (regex unless --no-regex)
         pattern: String,
-        /// Document masks (repeatable or comma list; default *.cls,*.mac,*.int)
+        /// Document masks (repeatable or comma list; default *.cls,*.mac,*.int,*.inc)
         #[arg(long, value_delimiter = ',')]
         documents: Vec<String>,
         /// Disable regex (literal text search)
@@ -80,7 +81,7 @@ pub enum Commands {
         #[arg(long)]
         max: Option<u32>,
     },
-    /// Class reference graph (subclasses / members / deps)
+    /// Class reference graph (subclasses / members / deps / refs)
     #[command(subcommand)]
     Graph(GraphCommands),
     /// Document operations (list/get/put/compile/delete)
@@ -141,7 +142,7 @@ pub enum Commands {
     /// Serve as an MCP server. Default door: stdio (byte-identical to every
     /// released version). `--transport http` opens a streamable-HTTP door at
     /// /mcp - NO authentication on that door: every local process can drive
-    /// all 29 tools. Binds 127.0.0.1 unless --host/--allow-all-interfaces.
+    /// all 30 tools. Binds 127.0.0.1 unless --host/--allow-all-interfaces.
     Mcp {
         /// Transport door: `stdio` (default) or `http`; aliases
         /// `streamable-http` / `streamable_http` (env: `RISM_MCP_TRANSPORT`)
@@ -227,6 +228,20 @@ pub enum GraphCommands {
         #[arg(long)]
         depth: Option<u32>,
     },
+    /// Source references to a class, member, or routine
+    Refs {
+        /// Target: Class.Member, Class, or ^Routine
+        target: String,
+        /// Include system documents (slower)
+        #[arg(long)]
+        system: bool,
+        /// Include generated/compiled .int docs (noisier)
+        #[arg(long)]
+        generated: bool,
+        /// Max edges (default: settings `search_max_results`)
+        #[arg(long)]
+        max: Option<u32>,
+    },
 }
 
 /// `--kind` parser: accepts the frozen `snake_case` strings (§4) plus
@@ -238,8 +253,12 @@ fn parse_kind_arg(s: &str) -> std::result::Result<KindArg, String> {
         "properties" => Ok(KindArg::Properties),
         "parameters" => Ok(KindArg::Parameters),
         "xdata" => Ok(KindArg::Xdata),
+        "queries" => Ok(KindArg::Queries),
+        "triggers" => Ok(KindArg::Triggers),
+        "indices" => Ok(KindArg::Indices),
+        "procedures" => Ok(KindArg::Procedures),
         other => Err(format!(
-            "'{other}' is not a kind (all, methods, properties, parameters, xdata)"
+            "'{other}' is not a kind (all, methods, properties, parameters, xdata, queries, triggers, indices, procedures)"
         )),
     }
 }
@@ -269,6 +288,14 @@ pub enum KindArg {
     Parameters,
     /// `XData` block names only
     Xdata,
+    /// Queries only
+    Queries,
+    /// Triggers only
+    Triggers,
+    /// Indices only
+    Indices,
+    /// SQL-callable methods only
+    Procedures,
 }
 
 /// clap mirror of [`DependencyDirection`].
@@ -508,6 +535,10 @@ impl Commands {
                             KindArg::Properties => MembersKind::Properties,
                             KindArg::Parameters => MembersKind::Parameters,
                             KindArg::Xdata => MembersKind::XData,
+                            KindArg::Queries => MembersKind::Queries,
+                            KindArg::Triggers => MembersKind::Triggers,
+                            KindArg::Indices => MembersKind::Indices,
+                            KindArg::Procedures => MembersKind::Procedures,
                         }),
                         include_inherited: if *include_inherited { Some(true) } else { None },
                     },
@@ -526,6 +557,20 @@ impl Commands {
                             DirectionArg::Both => DependencyDirection::Both,
                         }),
                         depth: *depth,
+                    },
+                },
+                GraphCommands::Refs {
+                    target,
+                    system,
+                    generated,
+                    max,
+                } => GraphCall::Refs {
+                    args: FindReferencesArgs {
+                        target: target.clone(),
+                        namespace: ns_override.clone(),
+                        include_system: if *system { Some(true) } else { None },
+                        include_generated: if *generated { Some(true) } else { None },
+                        max_results: *max,
                     },
                 },
             }),
@@ -638,6 +683,11 @@ pub enum GraphCall {
     Deps {
         /// Shared args.
         args: ClassDependenciesArgs,
+    },
+    /// refs
+    Refs {
+        /// Shared args.
+        args: FindReferencesArgs,
     },
 }
 

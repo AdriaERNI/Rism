@@ -68,7 +68,7 @@ regexp pattern` — no crash, no silent success.
 | HTTP door `tools/list` inputSchema count | 29 — **BUG FIXED**: coder step9 updated `packaging/mcp_probe.sh:196`'s message string "expected 29" but left the numeric test `-eq 25`; the probe FAILed on the new build (message/count desync from the cp of the 25-era line). Fix commit: `fix mcp_probe.sh HTTP-door count`; probe now `MCP probe OK: HTTP door answered (29 tools, SQL clean), SIGTERM exit 0` |
 | `#[tool(` attrs in src/mcp/mod.rs | 29 (grep artifact "33" = comment prose — matches E_SPEC's correction) |
 | annotations, 4 new tools | title + readOnlyHint:true + destructiveHint:false ×4 (wire JSON; stdio door observed) |
-| docs/mcp-tools.md | "Rism serves **29 tools**"; `###` sections for all 4 new tools (17 `###` sections + grouped debugger table); debugger family = 9 rows |
+| docs/mcp-tools.md | serves the full (29 tools at that count) surface; `###` sections for all 4 new tools (17 `###` sections + grouped debugger table); debugger family = 9 rows |
 | instructions budget | 1386 chars < 2048; lists all 29 names incl. the 4 new |
 | count pins | `tests/http_door.rs:180`, `tests/http_door_stateless.rs:179`, tool_matrix surface test — re-ran green |
 | drift gate (python port `bench/drift_port.py` of the Windows-CI `analyze-docs-drift.ps1`) | **0 fails after fix** — **BUG FIXED**: 7 tracked *.md carried then-25-tool / Tier-1-2-surface prose the `(\d+)\s+tools` regex mismatches against 29 → windows-installer CI `consistency` job would FAIL this PR. Rephrased to non-claiming forms (then-25-tool count / Tier-1/Tier-2 surfaces); port scoped to `git ls-files` like a CI checkout. Commit `fix docs-drift gate` |

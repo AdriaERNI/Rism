@@ -11,6 +11,8 @@ use crate::tools::serverinfo::ServerInfoOut;
 use crate::tools::sql::SqlResult;
 use crate::tools::testing::{ListTestsResult, RunTestsResult, TestHistoryResult};
 
+use std::fmt::Write as _;
+
 use super::OutputFormat;
 
 /// Render any serializable result as JSON (table fallback is the `plain` thunk).
@@ -578,14 +580,47 @@ pub fn render_members(res: &crate::tools::graph::ClassMembersResult, format: Out
             for x in &res.xdata {
                 println!("xdata     {:<32}", x.name);
             }
-            println!(
-                "\n{} method(s), {} property(ies), {} parameter(s), {} xdata in {}",
-                res.counts.methods,
-                res.counts.properties,
-                res.counts.parameters,
-                res.counts.xdata,
-                res.class
+            for q in &res.queries {
+                println!(
+                    "query     {:<32} {}{} {}",
+                    q.name,
+                    q.formal_spec,
+                    if q.sql_view { " view" } else { "" },
+                    q.sql_name
+                );
+            }
+            for t in &res.triggers {
+                println!("trigger   {:<32} {} {}", t.name, t.event, t.time);
+            }
+            for ix in &res.indices {
+                println!("index     {:<32} {} {}", ix.name, ix.type_, ix.properties);
+            }
+            for p in &res.procedures {
+                println!("procedure {:<32} {}", p.name, p.return_type);
+            }
+            let mut tail = format!(
+                "\n{} method(s), {} property(ies), {} parameter(s), {} xdata",
+                res.counts.methods, res.counts.properties, res.counts.parameters, res.counts.xdata,
             );
+            if !res.queries.is_empty() {
+                let _ = write!(
+                    &mut tail,
+                    ", {} quer{}",
+                    res.counts.queries,
+                    if res.counts.queries == 1 { "y" } else { "ies" }
+                );
+            }
+            if !res.triggers.is_empty() {
+                let _ = write!(&mut tail, ", {} trigger(s)", res.counts.triggers);
+            }
+            if !res.indices.is_empty() {
+                let _ = write!(&mut tail, ", {} index(es)", res.counts.indices);
+            }
+            if !res.procedures.is_empty() {
+                let _ = write!(&mut tail, ", {} procedure(s)", res.counts.procedures);
+            }
+            let _ = write!(&mut tail, " in {}", res.class);
+            println!("{tail}");
         },
     );
 }
@@ -614,6 +649,44 @@ pub fn render_deps(res: &crate::tools::graph::ClassDependenciesResult, format: O
                 res.class,
                 res.depends_on.len(),
                 res.used_by.len()
+            );
+        },
+    );
+}
+
+/// Render `find_references` output: one line per edge, then the unresolved
+/// section, then the tally.
+pub fn render_refs(res: &crate::tools::refs::FindReferencesResult, format: OutputFormat) {
+    render_json(
+        &serde_json::to_value(res).unwrap_or_default(),
+        format,
+        || {
+            if !res.edges.is_empty() {
+                println!("references to {} ({}):", res.target, res.kind);
+                for e in &res.edges {
+                    let member = e.member.as_deref().filter(|m| !m.is_empty());
+                    let loc = match (member, e.line) {
+                        (Some(m), Some(l)) => format!("({m}:{l})"),
+                        (Some(m), None) => format!("({m})"),
+                        (None, Some(l)) => format!(":{l}"),
+                        (None, None) => String::new(),
+                    };
+                    println!("  {:<44} {:<10} {loc} — {}", e.doc, e.via, e.text);
+                }
+            }
+            if !res.unresolved.is_empty() {
+                println!("unresolved (dynamic forms):");
+                for u in &res.unresolved {
+                    let loc = u.line.map(|l| format!(":{l}")).unwrap_or_default();
+                    println!("  {:<44} {loc} ?{} — {}", u.doc, u.hint, u.text);
+                }
+            }
+            let more = if res.truncated { " (truncated)" } else { "" };
+            println!(
+                "\n{} resolved + {} unresolved across {} doc(s){more}",
+                res.edges.len(),
+                res.unresolved.len(),
+                res.docs_scanned
             );
         },
     );

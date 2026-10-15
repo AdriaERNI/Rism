@@ -798,10 +798,12 @@ async fn subclasses_sql_shape_contains_walk() {
 }
 
 // U12 — Origin filter present/absent per include_inherited; XData has none.
-// F-03 adds an existence cross-check query ONLY when all four tables come
+// F-03 adds an existence cross-check query ONLY when all member tables come
 // back empty; these mocks return rows for one table so the walk is not
-// re-triggered — the empty-read branch is pinned separately (U19).
+// re-triggered — the empty-read branch is pinned separately (U19). The
+// census tables (Query/Trigger/Index) ride the same Origin filter rule.
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // one linear mock pin list: table -> SQL shape
 async fn members_sql_shape_origin_filter() {
     let mock = MockServer::start().await;
     Mock::given(method("POST"))
@@ -814,7 +816,13 @@ async fn members_sql_shape_origin_filter() {
         .expect(1)
         .mount(&mock)
         .await;
-    for tbl in ["CompiledProperty", "CompiledParameter"] {
+    for tbl in [
+        "CompiledProperty",
+        "CompiledParameter",
+        "CompiledQuery",
+        "CompiledTrigger",
+        "CompiledIndex",
+    ] {
         let t = tbl.to_string();
         Mock::given(method("POST"))
             .and(path("/api/atelier/v8/USER/action/query"))
@@ -872,10 +880,10 @@ async fn members_sql_shape_origin_filter() {
         })
         .respond_with(ResponseTemplate::new(200).set_body_json(query_envelope(&[])))
         .with_priority(10)
-        .expect(4)
+        .expect(7)
         .mount(&mock2)
         .await;
-    // F-03: all four tables empty triggers the existence cross-check; the
+    // F-03: all seven tables empty triggers the existence cross-check; the
     // class exists → zeros are reported honestly (no error). Default
     // priority 0 beats the catch-all above.
     Mock::given(method("POST"))
@@ -902,8 +910,8 @@ async fn members_sql_shape_origin_filter() {
     )
     .await
     .expect("members (inherited)");
-    // 4 table reads + 1 existence cross-check (all-zero result branch).
-    assert_eq!(mock2.received_requests().await.unwrap().len(), 5);
+    // 7 table reads + 1 existence cross-check (all-zero result branch).
+    assert_eq!(mock2.received_requests().await.unwrap().len(), 8);
 }
 
 // U14 — the impact query shape + substring drop on a DependsOn hit.
@@ -978,9 +986,9 @@ async fn members_unknown_class_is_honest_not_found() {
         matches!(&err, rism::Error::Config(m) if m.contains("not found") && m.contains("alias")),
         "{err}"
     );
-    // 5th request is the existence cross-check.
+    // 8th request is the existence cross-check.
     let seen = mock.received_requests().await.unwrap();
-    assert_eq!(seen.len(), 5, "4 tables + existence check");
+    assert_eq!(seen.len(), 8, "7 tables + existence check");
 }
 
 // U20 — F-09 regression: the namespace rides the URL path unencoded, so an
@@ -1055,7 +1063,7 @@ async fn empty_document_string_falls_back_to_defaults() {
     let mock = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/atelier/v8/USER/action/search"))
-        .and(query_param("documents", "*.cls,*.mac,*.int"))
+        .and(query_param("documents", "*.cls,*.mac,*.int,*.inc"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "status": {"errors": [], "summary": ""}, "console": [], "result": []
         })))
@@ -1079,6 +1087,348 @@ async fn empty_document_string_falls_back_to_defaults() {
     )
     .await
     .expect("empty mask falls back");
-    assert_eq!(res.documents, vec!["*.cls", "*.mac", "*.int"]);
+    assert_eq!(res.documents, vec!["*.cls", "*.mac", "*.int", "*.inc"]);
     mock.verify().await;
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// find_references + class_members census — U22..U27: guard-before-HTTP,
+// SQL shapes, end-to-end scanner classification on fetched docs.
+// ═════════════════════════════════════════════════════════════════════
+
+fn refs_args(target: &str) -> rism::tools::refs::FindReferencesArgs {
+    rism::tools::refs::FindReferencesArgs {
+        target: target.into(),
+        namespace: None,
+        include_system: None,
+        include_generated: None,
+        max_results: None,
+    }
+}
+
+fn search_envelope(docs: &[(&str, &str)]) -> serde_json::Value {
+    // docs: (doc, matched text) — one line-level match per doc.
+    let result: Vec<serde_json::Value> = docs
+        .iter()
+        .map(|(d, t)| json!({"doc": d, "matches": [{"line": 1, "text": t}]}))
+        .collect();
+    json!({"status": {"errors": [], "summary": ""}, "console": [], "result": result})
+}
+
+fn doc_envelope(lines: &[&str]) -> serde_json::Value {
+    json!({"status": {"errors": [], "summary": ""}, "console": [],
+           "result": {"name": "x", "cat": "CLS", "ts": "t", "content": lines}})
+}
+
+// U22 — unsafe target refuses with ZERO HTTP (grammar guard runs first).
+#[tokio::test]
+async fn refs_rejects_unsafe_target_before_http() {
+    for bad in ["Robert'; DROP TABLE x", "^Bad';Name", "", "a b", "x^y"] {
+        let mock = MockServer::start().await;
+        let client = client(&mock);
+        let err = rism::tools::refs::find_references(&client, &refs_args(bad))
+            .await
+            .expect_err("guard must refuse");
+        assert!(matches!(err, rism::Error::Config(_)), "{bad:?}: {err}");
+        assert_eq!(mock.received_requests().await.unwrap().len(), 0, "{bad:?}");
+    }
+}
+
+// U23 — unsafe namespace refuses with ZERO HTTP on this surface too.
+#[tokio::test]
+async fn refs_rejects_hostile_namespace_before_http() {
+    let mock = MockServer::start().await;
+    let client = client(&mock);
+    let a = rism::tools::refs::FindReferencesArgs {
+        target: "FProbeG.Target.TgtMethod".into(),
+        namespace: Some("A' OR 1=1--".into()),
+        include_system: None,
+        include_generated: None,
+        max_results: None,
+    };
+    let err = rism::tools::refs::find_references(&client, &a)
+        .await
+        .expect_err("namespace guard must refuse");
+    assert!(matches!(err, rism::Error::Config(_)), "{err}");
+    assert_eq!(mock.received_requests().await.unwrap().len(), 0);
+}
+
+// U24 — SQL shapes: existence check, the two embedded-code narrowing
+// queries, and the Super walk for a class target. The needle must ride
+// inside the quoted literal with NO escaping damage and NO injection.
+#[tokio::test]
+async fn refs_sql_shapes_member_and_class_targets() {
+    let mock = MockServer::start().await;
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    {
+        let seen = seen.clone();
+        Mock::given(method("POST"))
+            .and(path("/api/atelier/v8/USER/action/query"))
+            .and(move |req: &wiremock::Request| {
+                let v: serde_json::Value =
+                    serde_json::from_slice(&req.body).unwrap_or(serde_json::Value::Null);
+                if let Some(q) = v["query"].as_str() {
+                    seen.lock().unwrap().push(q.to_string());
+                }
+                true
+            })
+            .respond_with(ResponseTemplate::new(200).set_body_json(query_envelope(&[])))
+            .mount(&mock)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/atelier/v8/USER/action/search"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(search_envelope(&[])))
+            .mount(&mock)
+            .await;
+    }
+    // Member target: existence (2 rows: Class + re-read as class fails ->
+    // error). Give the class a row so the walk runs.
+    let client = client(&mock);
+    let a = rism::tools::refs::FindReferencesArgs {
+        target: "FProbeG.Target.TgtMethod".into(),
+        namespace: None,
+        include_system: None,
+        include_generated: None,
+        max_results: None,
+    };
+    // The existence mock returns [] for everything -> honest not-found.
+    let err = rism::tools::refs::find_references(&client, &a)
+        .await
+        .expect_err("no dictionary row -> not found");
+    assert!(
+        matches!(&err, rism::Error::Config(m) if m.contains("not found")),
+        "{err}"
+    );
+    let seen = seen.lock().unwrap().clone();
+    // existence on the class part, then the whole-string re-read
+    assert!(
+        seen.iter()
+            .any(|q| q
+                == "SELECT Name FROM %Dictionary.ClassDefinition WHERE Name = 'FProbeG.Target'")
+    );
+    assert!(seen.iter().any(|q| q
+        == "SELECT Name FROM %Dictionary.ClassDefinition WHERE Name = 'FProbeG.Target.TgtMethod'"));
+}
+
+// U25 — the full pass: literal-search candidates + SQL narrowing, fetch
+// once, classify. Fixture doc shapes come back through the doc endpoint
+// and the edge buckets must match the frozen semantics.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // one linear end-to-end fixture: mock -> classify -> assert buckets
+async fn refs_end_to_end_classification() {
+    let mock = MockServer::start().await;
+    // existence: the class exists
+    Mock::given(method("POST"))
+        .and(path("/api/atelier/v8/USER/action/query"))
+        .and(body_query_contains(
+            "ClassDefinition WHERE Name = 'FProbeG.Target'",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(query_envelope(&[json!({"Name": "FProbeG.Target"})])),
+        )
+        .up_to_n_times(1)
+        .mount(&mock)
+        .await;
+    // narrowing: the two embedded-code SQL rows point at the target class
+    Mock::given(method("POST"))
+        .and(path("/api/atelier/v8/USER/action/query"))
+        .and(move |req: &wiremock::Request| {
+            let v: serde_json::Value =
+                serde_json::from_slice(&req.body).unwrap_or(serde_json::Value::Null);
+            let q = v["query"].as_str().unwrap_or("");
+            q.contains("CompiledProperty WHERE SqlComputeCode [ 'TgtMethod'")
+                || q.contains("CompiledTrigger WHERE Code [ 'TgtMethod'")
+        })
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(query_envelope(&[json!({"parent": "FProbeG.Target"})])),
+        )
+        .mount(&mock)
+        .await;
+    // Super-of-owner queries: default empty (no rows).
+    Mock::given(method("POST"))
+        .and(path("/api/atelier/v8/USER/action/query"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(query_envelope(&[])))
+        .with_priority(5)
+        .mount(&mock)
+        .await;
+    // literal search returns the caller doc.
+    Mock::given(method("GET"))
+        .and(path("/api/atelier/v8/USER/action/search"))
+        .and(query_param("query", "TgtMethod"))
+        .and(query_param("regex", "0"))
+        .and(query_param("documents", "*.cls,*.mac,*.int,*.inc"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(search_envelope(&[(
+            "FProbeG.Caller.cls",
+            "set t = ##class(FProbeG.Target).TgtMethod(1)",
+        )])))
+        .mount(&mock)
+        .await;
+    // doc fetches (once per candidate).
+    Mock::given(method("GET"))
+        .and(path("/api/atelier/v8/USER/doc/FProbeG.Caller.cls"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(doc_envelope(&[
+            "Class FProbeG.Caller",
+            "{",
+            "ClassMethod Edge1() As %Status",
+            "{",
+            "    set t = ##class(FProbeG.Target).TgtMethod(1)",
+            "    set r = $zobjmethod(obj, \"TgtMethod\", 4)",
+            "    quit",
+            "}",
+            "}",
+        ])))
+        .expect(1)
+        .mount(&mock)
+        .await;
+    Mock::given(method("GET"))
+        .and(path_regex("/api/atelier/v8/USER/doc/.*"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(doc_envelope(&[
+            "Class FProbeG.Target",
+            "{",
+            "ClassMethod TgtMethod(p1) As %Integer { Quit p1+1 }",
+            "Method MInst() As %Integer { Quit ..TgtMethod(6) }",
+            "}",
+        ])))
+        .mount(&mock)
+        .await;
+
+    let client = client(&mock);
+    let a = rism::tools::refs::FindReferencesArgs {
+        target: "FProbeG.Target.TgtMethod".into(),
+        namespace: None,
+        include_system: None,
+        include_generated: None,
+        max_results: None,
+    };
+    let res = rism::tools::refs::find_references(&client, &a)
+        .await
+        .expect("refs run");
+    assert_eq!(res.kind, "class_member");
+    assert_eq!(res.target, "FProbeG.Target.TgtMethod");
+    // Caller ##class edge resolved; the $zobjmethod line unresolved with a
+    // dynamic_string hint; the owner doc's ..-self edge resolved.
+    let caller_edges: Vec<_> = res
+        .edges
+        .iter()
+        .filter(|e| e.doc == "FProbeG.Caller.cls")
+        .collect();
+    assert_eq!(caller_edges.len(), 1, "{:?}", res.edges);
+    assert_eq!(caller_edges[0].via, "class_call");
+    assert_eq!(caller_edges[0].member.as_deref(), Some("Edge1"));
+    assert_eq!(
+        res.unresolved
+            .iter()
+            .filter(|u| u.doc == "FProbeG.Caller.cls" && u.hint == "dynamic_string")
+            .count(),
+        1,
+        "{:?}",
+        res.unresolved
+    );
+    let self_edges: Vec<_> = res
+        .edges
+        .iter()
+        .filter(|e| e.doc == "FProbeG.Target.cls" && e.via == "self_call")
+        .collect();
+    assert_eq!(self_edges.len(), 1, "{:?}", res.edges);
+    assert!(res.docs_scanned >= 2);
+}
+
+// U26 — class-not-found is an honest error, never an empty success
+// (routine targets skip the existence walk entirely).
+#[tokio::test]
+async fn refs_class_not_found_is_error_routine_skips_dict() {
+    let mock = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/atelier/v8/USER/action/query"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(query_envelope(&[])))
+        .mount(&mock)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/atelier/v8/USER/action/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(search_envelope(&[])))
+        .mount(&mock)
+        .await;
+    let client = client(&mock);
+    let err = rism::tools::refs::find_references(&client, &refs_args("No.Such.Class"))
+        .await
+        .expect_err("not-found");
+    assert!(
+        matches!(&err, rism::Error::Config(m) if m.contains("not found")),
+        "{err}"
+    );
+    // Now a routine target: zero ClassDefinition queries for it.
+    let before = mock.received_requests().await.unwrap().len();
+    let res = rism::tools::refs::find_references(&client, &refs_args("^MyRoutine"))
+        .await
+        .expect("routine scan");
+    assert_eq!(res.kind, "routine");
+    let after = mock.received_requests().await.unwrap();
+    for r in &after[before..] {
+        let body = String::from_utf8_lossy(&r.body);
+        assert!(
+            !(body.contains("action/query")
+                || (body.contains("\"query\"") && body.contains("ClassDefinition"))),
+            "routine path must not touch ClassDefinition"
+        );
+    }
+}
+
+// U27 — class_members census SQL shapes: queries/triggers/indices tables,
+// the `_Time` column (Time is reserved — a bare `Time` select must NEVER
+// ride the wire), procedures = CompiledMethod WHERE SqlProc = 1.
+#[tokio::test]
+async fn members_census_sql_shapes() {
+    let mock = MockServer::start().await;
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    {
+        let seen = seen.clone();
+        Mock::given(method("POST"))
+            .and(path("/api/atelier/v8/USER/action/query"))
+            .and(move |req: &wiremock::Request| {
+                let v: serde_json::Value =
+                    serde_json::from_slice(&req.body).unwrap_or(serde_json::Value::Null);
+                if let Some(q) = v["query"].as_str() {
+                    seen.lock().unwrap().push(q.to_string());
+                }
+                true
+            })
+            .respond_with(ResponseTemplate::new(200).set_body_json(query_envelope(&[])))
+            .mount(&mock)
+            .await;
+    }
+    let client = client(&mock);
+    for kind in ["queries", "triggers", "indices", "procedures"] {
+        let m: rism::tools::graph::ClassMembersArgs =
+            serde_json::from_value(json!({"class": "FProbeG.Target", "kind": kind})).unwrap();
+        // empty census + existing class -> zeros reported honestly, so the
+        // existence row must answer.
+        let _ = rism::tools::graph::class_members(&client, &m).await;
+    }
+    let seen = seen.lock().unwrap().clone();
+    assert!(
+        seen.iter()
+            .any(|q| q.contains("%Dictionary.CompiledQuery WHERE parent = 'FProbeG.Target'"))
+    );
+    assert!(seen.iter().any(|q| {
+        q.contains("%Dictionary.CompiledTrigger WHERE parent = 'FProbeG.Target'")
+            && q.contains("_Time")
+    }));
+    assert!(
+        seen.iter()
+            .any(|q| q.contains("%Dictionary.CompiledIndex WHERE parent = 'FProbeG.Target'"))
+    );
+    assert!(
+        seen.iter()
+            .any(|q| q.contains("CompiledMethod WHERE parent = 'FProbeG.Target' AND SqlProc = 1"))
+    );
+    // The reserved-word trap: NO query may select a bare `Time` column.
+    for q in seen.iter().filter(|q| q.contains("CompiledTrigger")) {
+        let sel = q.split(" FROM ").next().unwrap_or("");
+        assert!(
+            sel.split(',').all(|c| c.trim() != "Time"),
+            "bare reserved column in SELECT: {q}"
+        );
+    }
 }
