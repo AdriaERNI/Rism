@@ -11,6 +11,8 @@ use crate::tools::serverinfo::ServerInfoOut;
 use crate::tools::sql::SqlResult;
 use crate::tools::testing::{ListTestsResult, RunTestsResult, TestHistoryResult};
 
+use std::fmt::Write as _;
+
 use super::OutputFormat;
 
 /// Render any serializable result as JSON (table fallback is the `plain` thunk).
@@ -601,22 +603,23 @@ pub fn render_members(res: &crate::tools::graph::ClassMembersResult, format: Out
                 res.counts.methods, res.counts.properties, res.counts.parameters, res.counts.xdata,
             );
             if !res.queries.is_empty() {
-                tail += &format!(
+                let _ = write!(
+                    &mut tail,
                     ", {} quer{}",
                     res.counts.queries,
                     if res.counts.queries == 1 { "y" } else { "ies" }
                 );
             }
             if !res.triggers.is_empty() {
-                tail += &format!(", {} trigger(s)", res.counts.triggers);
+                let _ = write!(&mut tail, ", {} trigger(s)", res.counts.triggers);
             }
             if !res.indices.is_empty() {
-                tail += &format!(", {} index(es)", res.counts.indices);
+                let _ = write!(&mut tail, ", {} index(es)", res.counts.indices);
             }
             if !res.procedures.is_empty() {
-                tail += &format!(", {} procedure(s)", res.counts.procedures);
+                let _ = write!(&mut tail, ", {} procedure(s)", res.counts.procedures);
             }
-            tail += &format!(" in {}", res.class);
+            let _ = write!(&mut tail, " in {}", res.class);
             println!("{tail}");
         },
     );
