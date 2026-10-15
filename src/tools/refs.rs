@@ -1154,11 +1154,16 @@ pub async fn find_references(
 
     // Stage 3 — macro reachability: for each `$$$NAME` used on a scanned
     // code line, locate its definition doc (literal search, `*.mac`/`*.inc`
-    // masks); when the expansion carries the target, report the DEFINITION
-    // doc as unresolved(macro) — the usage edge runs through the macro, not
-    // through literal text.
+    // masks); when the expansion carries the target, report the USAGE site
+    // as unresolved(macro) naming the expansion owner doc — the call edge
+    // runs through the macro, not through literal text at the use site.
     if target.member().is_some() {
-        let mut macro_names: BTreeSet<String> = BTreeSet::new();
+        struct MacroUse {
+            doc: String,
+            line: u32,
+            name: String,
+        }
+        let mut uses: Vec<MacroUse> = Vec::new();
         for f in &fetched {
             let mut from = 0usize;
             while let Some(i) = f.text.joined[from..].find("$$$") {
@@ -1173,15 +1178,28 @@ pub async fn find_references(
                     .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '%')
                     .collect();
                 if !clean.is_empty() {
-                    macro_names.insert(clean);
+                    let (li, _) = f.text.locate(pos);
+                    uses.push(MacroUse {
+                        doc: f.doc.clone(),
+                        line: li as u32 + 1,
+                        name: clean,
+                    });
                 }
             }
         }
-        for mname in macro_names.iter().take(MACRO_LOOKUP_LIMIT) {
+        let mut checked: BTreeSet<String> = BTreeSet::new();
+        let mut carried: BTreeSet<String> = BTreeSet::new();
+        for u in &uses {
+            if !checked.insert(u.name.clone()) {
+                continue;
+            }
+            if checked.len() > MACRO_LOOKUP_LIMIT {
+                break;
+            }
             let ms = search_code(
                 client,
                 &SearchCodeArgs {
-                    query: format!("$$$ {mname}"),
+                    query: format!("$$$ {}", u.name),
                     namespace: Some(ns.clone()),
                     documents: Some(vec!["*.mac".into(), "*.inc".into()]),
                     regex: Some(false),
@@ -1205,10 +1223,10 @@ pub async fn find_references(
                     continue;
                 };
                 let define_line = joined.lines().find(|l| {
-                    l.contains(&format!("$$$ {mname} ="))
-                        || l.contains(&format!("$$$ {mname}="))
-                        || l.contains(&format!("$$${mname} ="))
-                        || l.contains(&format!("$$${mname}="))
+                    l.contains(&format!("$$$ {} =", u.name))
+                        || l.contains(&format!("$$$ {}=", u.name))
+                        || l.contains(&format!("$$${} =", u.name))
+                        || l.contains(&format!("$$${}=", u.name))
                 });
                 let Some(define_line) = define_line else {
                     continue;
@@ -1222,14 +1240,21 @@ pub async fn find_references(
                 let carries = code.contains(target.needle())
                     || target.class().is_some_and(|c| code.contains(c));
                 if carries {
-                    unresolved.push(UnresolvedRef {
-                        doc: d.doc.clone(),
-                        member: None,
-                        line: None,
-                        text: clip(&format!("$$$ {mname}: {code}")),
-                        hint: hint::MACRO.to_string(),
-                    });
+                    carried.insert(u.name.clone());
+                    break;
                 }
+            }
+        }
+        // Second pass: emit at every use site of a carried macro.
+        for u in &uses {
+            if carried.contains(&u.name) {
+                unresolved.push(UnresolvedRef {
+                    doc: u.doc.clone(),
+                    member: None,
+                    line: Some(u.line),
+                    text: clip(&format!("$$$ {}", u.name)),
+                    hint: hint::MACRO.to_string(),
+                });
             }
         }
     }
