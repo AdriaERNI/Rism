@@ -272,6 +272,12 @@ pub struct FindReferencesResult {
 }
 
 /// Trim to 200 chars (code-point safe).
+/// 1-based line number: documents never approach `u32::MAX` lines, but
+/// clamp honestly instead of truncating a hypothetical giant index.
+fn line_no(li: usize) -> u32 {
+    u32::try_from(li).unwrap_or(u32::MAX - 1) + 1
+}
+
 fn clip(s: &str) -> String {
     let t = s.trim();
     if t.chars().count() <= 200 {
@@ -1014,43 +1020,11 @@ pub async fn find_references(
     client: &IrisClient,
     args: &FindReferencesArgs,
 ) -> Result<FindReferencesResult> {
-    // Existence check (dictionary truth): `A.B` may parse as Member under
-    // the last-dot rule while actually being a two-package class name — if
-    // the left part has no row and the WHOLE string does, re-read it as a
-    // class target (one extra dictionary query, only on that shape).
-    let mut target = parse_ref_target(&args.target)?;
     let ns = args
         .namespace
         .clone()
         .unwrap_or_else(|| client.settings().iris_namespace.clone());
-    if !valid_namespace(&ns) {
-        return Err(Error::Config(format!(
-            "invalid namespace (URL path guard): {ns}"
-        )));
-    }
-    match target.clone() {
-        RefTarget::Routine(_) => {}
-        RefTarget::Class(c) => {
-            if !class_exists(client, &ns, &c).await? {
-                return Err(crate::tools::graph::not_found_msg(&c, &ns));
-            }
-        }
-        RefTarget::Member { class, member } => {
-            let whole = format!("{class}.{member}");
-            let (class_row, whole_row) = futures_util::future::join(
-                class_exists(client, &ns, &class),
-                class_exists(client, &ns, &whole),
-            )
-            .await;
-            if class_row? {
-            } else if valid_class_path(&whole) && whole_row? {
-                target = RefTarget::Class(whole);
-            } else {
-                return Err(crate::tools::graph::not_found_msg(&class, &ns));
-            }
-        }
-    }
-
+    let target = resolve_target(client, &ns, &args.target).await?;
     let include_system = args.include_system.unwrap_or(false);
     let include_generated = args.include_generated.unwrap_or(false);
     let max_edges = args
@@ -1062,19 +1036,124 @@ pub async fn find_references(
     let mut unresolved: Vec<UnresolvedRef> = Vec::new();
     let mut truncated = false;
 
-    // Stage 1a/1b (parallel) — literal `action/search` narrowing on the
-    // needle (default masks, which now include `*.inc`; `.int` rides
-    // `include_generated`) + the two embedded-code SQL narrowing queries.
-    // The `[` scans run server-side and the property one measured ~0.9 s
-    // cold, so they overlap the search instead of adding to it.
+    let (candidates, t) =
+        candidates_stage(client, &ns, &target, include_system, include_generated).await?;
+    truncated |= t;
+    if let Some(class) = target.class() {
+        if matches!(target, RefTarget::Class(_)) {
+            truncated |= super_edges(client, &ns, class, &mut edges).await?;
+        }
+    }
+
+    // Stage 2 — fetch each candidate ONCE, then scan the fetched docs.
+    let fetched = fetch_candidates(client, &ns, candidates).await?;
+
+    let (e, u, scanned) = scan_docs(client, &ns, &target, &fetched).await?;
+    edges.extend(e);
+    unresolved.extend(u);
+
+    // Stage 3 — macro reachability: for each `$$$NAME` used on a scanned
+    // code line, locate its definition doc (literal search, `*.mac`/`*.inc`
+    // masks); when the expansion carries the target, report the USAGE site
+    // as unresolved(macro) naming the expansion owner doc — the call edge
+    // runs through the macro, not through literal text at the use site.
+    if target.member().is_some() {
+        let (u, t) = macro_stage(client, &ns, &target, &fetched, include_system).await?;
+        unresolved.extend(u);
+        truncated |= t;
+    }
+
+    // Collapse duplicate unresolved reports for the same source line (a
+    // string-carried name can match several passes).
+    collapse_unresolved(&mut unresolved);
+    sort_edges(&mut edges);
+    sort_unresolved(&mut unresolved);
+    let total = edges.len() + unresolved.len();
+    let keep = usize::try_from(max_edges).unwrap_or(usize::MAX);
+    if total > keep {
+        truncated = true;
+        let etake = edges.len().min(keep);
+        edges.truncate(etake);
+        unresolved.truncate(keep - etake);
+    }
+
+    Ok(FindReferencesResult {
+        namespace: ns,
+        target: target.canonical(),
+        kind: target.kind().to_string(),
+        edges,
+        unresolved,
+        docs_scanned: scanned,
+        truncated,
+    })
+}
+
+/// Dictionary-truth existence check behind the last-dot parse: `A.B` may
+/// parse as Member under the last-dot rule while actually being a
+/// two-package class name — if the left part has no row and the WHOLE
+/// string does, re-read it as a class target (one extra dictionary query,
+/// only on that shape). A class/member target with no
+/// `%Dictionary.ClassDefinition` row is an honest not-found.
+///
+/// # Errors
+/// [`Error::Config`] on an unsafe/invalid target or namespace (before any
+/// HTTP); not-found when the target class has no row; SQL/transport errors
+/// otherwise.
+async fn resolve_target(client: &IrisClient, ns: &str, raw: &str) -> Result<RefTarget> {
+    let mut target = parse_ref_target(raw)?;
+    if !valid_namespace(ns) {
+        return Err(Error::Config(format!(
+            "invalid namespace (URL path guard): {ns}"
+        )));
+    }
+    match target.clone() {
+        RefTarget::Routine(_) => {}
+        RefTarget::Class(c) => {
+            if !class_exists(client, ns, &c).await? {
+                return Err(crate::tools::graph::not_found_msg(&c, ns));
+            }
+        }
+        RefTarget::Member { class, member } => {
+            let whole = format!("{class}.{member}");
+            let (class_row, whole_row) = futures_util::future::join(
+                class_exists(client, ns, &class),
+                class_exists(client, ns, &whole),
+            )
+            .await;
+            if class_row? {
+            } else if valid_class_path(&whole) && whole_row? {
+                target = RefTarget::Class(whole);
+            } else {
+                return Err(crate::tools::graph::not_found_msg(&class, ns));
+            }
+        }
+    }
+    Ok(target)
+}
+
+/// Stage 1a/1b (parallel) — literal `action/search` narrowing on the
+/// needle (default masks, which now include `*.inc`; `.int` rides
+/// `include_generated`) + the two embedded-code SQL narrowing queries.
+/// The `[` scans run server-side and the property one measured ~0.9 s
+/// cold, so they overlap the search instead of adding to it. Returns the
+/// candidate docs plus the search-truncation flag.
+///
+/// # Errors
+/// SQL/transport errors from the search or either narrowing query.
+async fn candidates_stage(
+    client: &IrisClient,
+    ns: &str,
+    target: &RefTarget,
+    include_system: bool,
+    include_generated: bool,
+) -> Result<(BTreeSet<String>, bool)> {
     let needle = target.needle().to_string();
-    let class_target = matches!(target, RefTarget::Class(_));
     let (search_res, prop_res, trig_res) = futures_util::future::join3(
         search_code(
             client,
             &SearchCodeArgs {
                 query: needle.clone(),
-                namespace: Some(ns.clone()),
+                namespace: Some(ns.to_string()),
                 documents: None,
                 regex: Some(false),
                 include_system: Some(include_system),
@@ -1086,20 +1165,18 @@ pub async fn find_references(
         ),
         sql_parent_query(
             client,
-            &ns,
+            ns,
             &format!("SELECT DISTINCT parent FROM %Dictionary.CompiledProperty WHERE SqlComputeCode [ '{needle}'"),
         ),
         sql_parent_query(
             client,
-            &ns,
+            ns,
             &format!("SELECT DISTINCT parent FROM %Dictionary.CompiledTrigger WHERE Code [ '{needle}'"),
         ),
     )
     .await;
     let search = search_res?;
-    if search.truncated {
-        truncated = true;
-    }
+    let truncated = search.truncated;
     let mut candidates: BTreeSet<String> = BTreeSet::new();
     for d in &search.results {
         candidates.insert(d.doc.clone());
@@ -1111,48 +1188,68 @@ pub async fn find_references(
             candidates.insert(format!("{p}.cls"));
         }
     }
-    if class_target {
-        let class = target.class().unwrap_or_default();
-        // Extends/Super rows are dictionary edges (via=super).
-        let sql = format!(
-            "SELECT Name, Super FROM %Dictionary.ClassDefinition WHERE Super [ '{class}' ORDER BY Name"
-        );
-        let outcome = sqlapi::query(client, &ns, &sql, client.settings().sql_max_rows).await?;
-        if outcome.has_more {
-            truncated = true;
-        }
-        for row in &outcome.rows {
-            let Some(name) = row.get("Name").and_then(Value::as_str) else {
-                continue;
-            };
-            let super_raw = row
-                .get("Super")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string();
-            if !super_raw.split(',').map(str::trim).any(|s| s == class) {
-                continue; // `[` is substring-based: exact-element guard
-            }
-            edges.push(RefEdge {
-                doc: format!("{name}.cls"),
-                member: None,
-                line: None,
-                text: clip(&format!("Class {name} Extends {super_raw}")),
-                via: via::SUPER.to_string(),
-            });
-        }
-    }
+    Ok((candidates, truncated))
+}
 
-    // Stage 2 — fetch each candidate ONCE and scan it.
-    struct Fetched {
-        doc: String,
-        text: DocText,
+/// Class-target `Extends`/`Super` rows are dictionary edges (`via=super`).
+/// Returns the has-more truncation flag.
+///
+/// # Errors
+/// SQL/transport errors from the dictionary query.
+async fn super_edges(
+    client: &IrisClient,
+    ns: &str,
+    class: &str,
+    edges: &mut Vec<RefEdge>,
+) -> Result<bool> {
+    let sql = format!(
+        "SELECT Name, Super FROM %Dictionary.ClassDefinition WHERE Super [ '{class}' ORDER BY Name"
+    );
+    let outcome = sqlapi::query(client, ns, &sql, client.settings().sql_max_rows).await?;
+    for row in &outcome.rows {
+        let Some(name) = row.get("Name").and_then(Value::as_str) else {
+            continue;
+        };
+        let super_raw = row
+            .get("Super")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        if !super_raw.split(',').map(str::trim).any(|s| s == class) {
+            continue; // `[` is substring-based: exact-element guard
+        }
+        edges.push(RefEdge {
+            doc: format!("{name}.cls"),
+            member: None,
+            line: None,
+            text: clip(&format!("Class {name} Extends {super_raw}")),
+            via: via::SUPER.to_string(),
+        });
     }
+    Ok(outcome.has_more)
+}
+
+/// One candidate document fetched for stage-2 scanning.
+struct Fetched {
+    doc: String,
+    text: DocText,
+}
+
+/// Fetch each candidate ONCE (bounded concurrency); a doc that vanishes
+/// mid-scan is skipped, any other transport error aborts.
+///
+/// # Errors
+/// Transport errors from the document GETs (a not-found is skipped).
+async fn fetch_candidates(
+    client: &IrisClient,
+    ns: &str,
+    candidates: BTreeSet<String>,
+) -> Result<Vec<Fetched>> {
     let mut fetched: Vec<Fetched> = Vec::new();
     let cand: Vec<String> = candidates.into_iter().collect();
     for chunk in cand.chunks(FETCH_CONCURRENCY) {
         let futs = chunk.iter().map(|d| {
-            let ns = ns.clone();
+            let ns = ns.to_string();
             async move { (d.clone(), docapi::get_doc(client, &ns, d).await) }
         });
         for (name, res) in futures_util::future::join_all(futs).await {
@@ -1168,17 +1265,32 @@ pub async fn find_references(
             }
         }
     }
+    Ok(fetched)
+}
 
+/// Scan every fetched doc and turn hits into edges/unresolved reports.
+/// Returns (resolved edges, unresolved reports, docs scanned).
+///
+/// # Errors
+/// SQL/transport errors from the inheritance `super_of` lookups.
+async fn scan_docs(
+    client: &IrisClient,
+    ns: &str,
+    target: &RefTarget,
+    fetched: &[Fetched],
+) -> Result<(Vec<RefEdge>, Vec<UnresolvedRef>, usize)> {
+    let mut edges: Vec<RefEdge> = Vec::new();
+    let mut unresolved: Vec<UnresolvedRef> = Vec::new();
     // Inheritance context for `..` attribution (memoized one-row SQL).
     let mut owner_extends: Vec<(String, bool)> = Vec::new();
-    for f in &fetched {
+    for f in fetched {
         let owner = owner_class_of(&f.doc);
         let extends_target = match (target.class(), &owner) {
             (Some(tc), Some(oc)) if !oc.eq_ignore_ascii_case(tc) => {
                 if let Some((_, v)) = owner_extends.iter().find(|(k, _)| k == oc) {
                     *v
                 } else {
-                    let v = super_of(client, &ns, oc)
+                    let v = super_of(client, ns, oc)
                         .await?
                         .iter()
                         .any(|s| s.eq_ignore_ascii_case(tc));
@@ -1191,7 +1303,7 @@ pub async fn find_references(
         };
         let tracker = MemberTracker::build(&f.text.lines);
         let ctx = ScanCtx {
-            target: &target,
+            target,
             owner_class: owner,
             owner_extends_target: extends_target,
         };
@@ -1203,7 +1315,7 @@ pub async fn find_references(
                 edges.push(RefEdge {
                     doc: f.doc.clone(),
                     member,
-                    line: Some(li as u32 + 1),
+                    line: Some(line_no(li)),
                     text: clip(&line),
                     via: h.via.to_string(),
                 });
@@ -1211,129 +1323,162 @@ pub async fn find_references(
                 unresolved.push(UnresolvedRef {
                     doc: f.doc.clone(),
                     member,
-                    line: Some(li as u32 + 1),
+                    line: Some(line_no(li)),
                     text: clip(&line),
                     hint: h.hint.to_string(),
                 });
             }
         }
     }
+    Ok((edges, unresolved, fetched.len()))
+}
 
-    // Stage 3 — macro reachability: for each `$$$NAME` used on a scanned
-    // code line, locate its definition doc (literal search, `*.mac`/`*.inc`
-    // masks); when the expansion carries the target, report the USAGE site
-    // as unresolved(macro) naming the expansion owner doc — the call edge
-    // runs through the macro, not through literal text at the use site.
-    if target.member().is_some() {
-        struct MacroUse {
-            doc: String,
-            line: u32,
-            name: String,
+/// One `$$$NAME` use site on a scanned code line.
+struct MacroUse {
+    doc: String,
+    line: u32,
+    name: String,
+}
+
+/// Stage 3: collect macro use sites, resolve the definitions they carry
+/// (bounded by `MACRO_LOOKUP_LIMIT`), and report every use site of a
+/// carrying macro as unresolved. The bool mirrors the search-truncation
+/// signal slot of the other stage helpers (never set by this one).
+///
+/// # Errors
+/// SQL/transport errors from the definition searches.
+async fn macro_stage(
+    client: &IrisClient,
+    ns: &str,
+    target: &RefTarget,
+    fetched: &[Fetched],
+    include_system: bool,
+) -> Result<(Vec<UnresolvedRef>, bool)> {
+    let uses = collect_macro_uses(fetched);
+    let mut checked: BTreeSet<String> = BTreeSet::new();
+    let mut carried: BTreeSet<String> = BTreeSet::new();
+    for u in &uses {
+        if !checked.insert(u.name.clone()) {
+            continue;
         }
-        let mut uses: Vec<MacroUse> = Vec::new();
-        for f in &fetched {
-            let mut from = 0usize;
-            while let Some(i) = f.text.joined[from..].find("$$$") {
-                let pos = from + i;
-                from = pos + 3;
-                if f.text.region(pos) != "code" {
-                    continue;
-                }
-                let (_, tok) = read_token(&f.text.joined, pos + 3);
-                let clean: String = tok
-                    .chars()
-                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '%')
-                    .collect();
-                if !clean.is_empty() {
-                    let (li, _) = f.text.locate(pos);
-                    uses.push(MacroUse {
-                        doc: f.doc.clone(),
-                        line: li as u32 + 1,
-                        name: clean,
-                    });
-                }
-            }
+        if checked.len() > MACRO_LOOKUP_LIMIT {
+            break;
         }
-        let mut checked: BTreeSet<String> = BTreeSet::new();
-        let mut carried: BTreeSet<String> = BTreeSet::new();
-        for u in &uses {
-            if !checked.insert(u.name.clone()) {
+        let ms = search_code(
+            client,
+            &SearchCodeArgs {
+                // Bare name: the `$%%` prefix is search-engine-hostile
+                // and the define line carries it either way; the
+                // `$$$NAME =` shape filter below keeps only definitions.
+                query: u.name.clone(),
+                namespace: Some(ns.to_string()),
+                documents: Some(vec!["*.mac".into(), "*.inc".into()]),
+                regex: Some(false),
+                include_system: Some(include_system),
+                include_generated: Some(false),
+                case_sensitive: None,
+                whole_word: None,
+                max_results: Some(SEARCH_DOC_LIMIT),
+            },
+        )
+        .await?;
+        for d in &ms.results {
+            // Definition text: the line `Set Definition $$$NAME = {…}`
+            // (or the `$$$NAME = {…}` shape). Reuse stage-2 content when
+            // the doc was already fetched; otherwise one extra GET.
+            let joined = if let Some(f) = fetched.iter().find(|f| f.doc == d.doc) {
+                f.text.joined.clone()
+            } else if let Ok(doc) = docapi::get_doc(client, ns, &d.doc).await {
+                doc.content.join("\n")
+            } else {
                 continue;
-            }
-            if checked.len() > MACRO_LOOKUP_LIMIT {
+            };
+            let define_line = find_macro_define_line(&joined, &u.name);
+            let Some(define_line) = define_line else {
+                continue;
+            };
+            // Does the expansion carry the target (name or class as
+            // literal text outside a trailing comment)?
+            if macro_carries(define_line, target) {
+                carried.insert(u.name.clone());
                 break;
             }
-            let ms = search_code(
-                client,
-                &SearchCodeArgs {
-                    // Bare name: the `$%%` prefix is search-engine-hostile
-                    // and the define line carries it either way; the
-                    // `$$$NAME =` shape filter below keeps only definitions.
-                    query: u.name.clone(),
-                    namespace: Some(ns.clone()),
-                    documents: Some(vec!["*.mac".into(), "*.inc".into()]),
-                    regex: Some(false),
-                    include_system: Some(include_system),
-                    include_generated: Some(false),
-                    case_sensitive: None,
-                    whole_word: None,
-                    max_results: Some(SEARCH_DOC_LIMIT),
-                },
-            )
-            .await?;
-            for d in &ms.results {
-                // Definition text: the line `Set Definition $$$NAME = {…}`
-                // (or the `$$$NAME = {…}` shape). Reuse stage-2 content when
-                // the doc was already fetched; otherwise one extra GET.
-                let joined = if let Some(f) = fetched.iter().find(|f| f.doc == d.doc) {
-                    f.text.joined.clone()
-                } else if let Ok(doc) = docapi::get_doc(client, &ns, &d.doc).await {
-                    doc.content.join("\n")
-                } else {
-                    continue;
-                };
-                let define_line = joined.lines().find(|l| {
-                    l.contains(&format!("$$$ {} =", u.name))
-                        || l.contains(&format!("$$$ {}=", u.name))
-                        || l.contains(&format!("$$${} =", u.name))
-                        || l.contains(&format!("$$${}=", u.name))
-                });
-                let Some(define_line) = define_line else {
-                    continue;
-                };
-                // Does the expansion carry the target (name or class as
-                // literal text outside a trailing comment)?
-                let code = match comment_start(define_line) {
-                    Some(cs) => &define_line[..cs],
-                    None => define_line,
-                };
-                let carries = code.contains(target.needle())
-                    || target.class().is_some_and(|c| code.contains(c));
-                if carries {
-                    carried.insert(u.name.clone());
-                    break;
-                }
-            }
         }
-        // Second pass: emit at every use site of a carried macro.
-        for u in &uses {
-            if carried.contains(&u.name) {
-                unresolved.push(UnresolvedRef {
-                    doc: u.doc.clone(),
-                    member: None,
-                    line: Some(u.line),
-                    text: clip(&format!("$$$ {}", u.name)),
-                    hint: hint::MACRO.to_string(),
+    }
+    // Second pass: emit at every use site of a carried macro.
+    let mut unresolved: Vec<UnresolvedRef> = Vec::new();
+    for u in &uses {
+        if carried.contains(&u.name) {
+            unresolved.push(UnresolvedRef {
+                doc: u.doc.clone(),
+                member: None,
+                line: Some(u.line),
+                text: clip(&format!("$$$ {}", u.name)),
+                hint: hint::MACRO.to_string(),
+            });
+        }
+    }
+    Ok((unresolved, false))
+}
+
+/// Every `$$$NAME` token on a code line of the fetched docs.
+fn collect_macro_uses(fetched: &[Fetched]) -> Vec<MacroUse> {
+    let mut uses: Vec<MacroUse> = Vec::new();
+    for f in fetched {
+        let mut from = 0usize;
+        while let Some(i) = f.text.joined[from..].find("$$$") {
+            let pos = from + i;
+            from = pos + 3;
+            if f.text.region(pos) != "code" {
+                continue;
+            }
+            let (_, tok) = read_token(&f.text.joined, pos + 3);
+            let clean: String = tok
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '%')
+                .collect();
+            if !clean.is_empty() {
+                let (li, _) = f.text.locate(pos);
+                uses.push(MacroUse {
+                    doc: f.doc.clone(),
+                    line: line_no(li),
+                    name: clean,
                 });
             }
         }
     }
+    uses
+}
 
-    // Collapse duplicate unresolved reports for the same source line (a
-    // string-carried name can match several passes).
+/// The `Set Definition $$$NAME = {…}` / `$$$NAME = {…}` line in a macro
+/// doc, if present.
+fn find_macro_define_line<'a>(joined: &'a str, name: &str) -> Option<&'a str> {
+    joined.lines().find(|l| {
+        l.contains(&format!("$$$ {name} ="))
+            || l.contains(&format!("$$$ {name}="))
+            || l.contains(&format!("$$${name} ="))
+            || l.contains(&format!("$$${name}="))
+    })
+}
+
+/// Does the expansion carry the target (name or class as literal text
+/// outside a trailing comment)?
+fn macro_carries(define_line: &str, target: &RefTarget) -> bool {
+    let code = match comment_start(define_line) {
+        Some(cs) => &define_line[..cs],
+        None => define_line,
+    };
+    code.contains(target.needle()) || target.class().is_some_and(|cls| code.contains(cls))
+}
+
+/// Drop duplicate unresolved reports for the same doc line + hint.
+fn collapse_unresolved(unresolved: &mut Vec<UnresolvedRef>) {
     let mut seen: BTreeSet<(String, Option<u32>, String)> = BTreeSet::new();
     unresolved.retain(|u| seen.insert((u.doc.clone(), u.line, u.hint.clone())));
+}
 
+/// Stable report order: doc, then line (None last), then via.
+fn sort_edges(edges: &mut [RefEdge]) {
     edges.sort_by(|a, b| {
         (&a.doc, a.line.unwrap_or(u32::MAX), &a.via).cmp(&(
             &b.doc,
@@ -1341,28 +1486,13 @@ pub async fn find_references(
             &b.via,
         ))
     });
+}
+
+/// Stable report order: doc, then line (None last).
+fn sort_unresolved(unresolved: &mut [UnresolvedRef]) {
     unresolved.sort_by(|a, b| {
         (&a.doc, a.line.unwrap_or(u32::MAX)).cmp(&(&b.doc, b.line.unwrap_or(u32::MAX)))
     });
-
-    let total = edges.len() + unresolved.len();
-    if total > max_edges as usize {
-        truncated = true;
-        let keep = max_edges as usize;
-        let etake = edges.len().min(keep);
-        edges.truncate(etake);
-        unresolved.truncate(keep - etake);
-    }
-
-    Ok(FindReferencesResult {
-        namespace: ns,
-        target: target.canonical(),
-        kind: target.kind().to_string(),
-        edges,
-        unresolved,
-        docs_scanned: fetched.len(),
-        truncated,
-    })
 }
 
 #[cfg(test)]

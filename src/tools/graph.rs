@@ -417,131 +417,46 @@ pub async fn class_members(
     };
     let want = |k: MembersKind| matches!(kind, MembersKind::All) || kind == k;
 
-    let mut methods = Vec::new();
-    let mut properties = Vec::new();
-    let mut parameters = Vec::new();
-    let mut xdata = Vec::new();
-    let mut queries = Vec::new();
-    let mut triggers = Vec::new();
-    let mut indices = Vec::new();
-    let mut procedures = Vec::new();
-
-    if want(MembersKind::Methods) {
-        let sql = format!(
-            "SELECT Name, ClassMethod, SqlProc, FormalSpec, ReturnType, Origin FROM %Dictionary.CompiledMethod WHERE parent = '{}'{} ORDER BY Name",
-            args.class, origin_filter
-        );
-        for row in rows(client, &ns, &sql).await? {
-            methods.push(MemberMethod {
-                name: str_field(&row, "Name"),
-                class_method: truthy(&row, "ClassMethod"),
-                sql_proc: truthy(&row, "SqlProc"),
-                formal_spec: str_field(&row, "FormalSpec"),
-                return_type: str_field(&row, "ReturnType"),
-                origin: str_field(&row, "Origin"),
-            });
-        }
-    }
-    if want(MembersKind::Properties) {
-        let sql = format!(
-            "SELECT Name, Type, Collection, Origin FROM %Dictionary.CompiledProperty WHERE parent = '{}'{} ORDER BY Name",
-            args.class, origin_filter
-        );
-        for row in rows(client, &ns, &sql).await? {
-            properties.push(MemberProperty {
-                name: str_field(&row, "Name"),
-                type_: str_field(&row, "Type"),
-                collection: str_field(&row, "Collection"),
-                origin: str_field(&row, "Origin"),
-            });
-        }
-    }
-    if want(MembersKind::Parameters) {
-        let sql = format!(
-            "SELECT Name, Type, Origin FROM %Dictionary.CompiledParameter WHERE parent = '{}'{} ORDER BY Name",
-            args.class, origin_filter
-        );
-        for row in rows(client, &ns, &sql).await? {
-            let t = str_field(&row, "Type");
-            parameters.push(MemberParameter {
-                type_: if t.is_empty() { None } else { Some(t) },
-                name: str_field(&row, "Name"),
-                origin: str_field(&row, "Origin"),
-            });
-        }
-    }
-    if matches!(kind, MembersKind::All | MembersKind::XData) {
-        // XData rows are the class's own declarations: NO Origin filter
-        // and no origin field in the entry (E_SPEC §3).
-        let sql = format!(
-            "SELECT Name FROM %Dictionary.CompiledXData WHERE parent = '{}' ORDER BY Name",
-            args.class
-        );
-        for row in rows(client, &ns, &sql).await? {
-            xdata.push(MemberXData {
-                name: str_field(&row, "Name"),
-            });
-        }
-    }
-    if want(MembersKind::Queries) {
-        let sql = format!(
-            "SELECT Name, FormalSpec, SqlName, SqlView, Type FROM %Dictionary.CompiledQuery WHERE parent = '{}'{} ORDER BY Name",
-            args.class, origin_filter
-        );
-        for row in rows(client, &ns, &sql).await? {
-            queries.push(MemberQuery {
-                name: str_field(&row, "Name"),
-                formal_spec: str_field(&row, "FormalSpec"),
-                sql_name: str_field(&row, "SqlName"),
-                sql_view: truthy(&row, "SqlView"),
-                type_: str_field(&row, "Type"),
-            });
-        }
-    }
-    if want(MembersKind::Triggers) {
-        // The storage column is `_Time` — bare `Time` is a reserved word
-        // (SQLCODE -1) and even a quoted alias fails on 2025.3 (verified
-        // live), so the result field simply carries the `_Time` value.
-        let sql = format!(
-            "SELECT Name, Event, _Time, CodeMode FROM %Dictionary.CompiledTrigger WHERE parent = '{}'{} ORDER BY Name",
-            args.class, origin_filter
-        );
-        for row in rows(client, &ns, &sql).await? {
-            triggers.push(MemberTrigger {
-                name: str_field(&row, "Name"),
-                event: str_field(&row, "Event"),
-                time: str_field(&row, "_Time"),
-                code_mode: str_field(&row, "CodeMode"),
-            });
-        }
-    }
-    if want(MembersKind::Indices) {
-        let sql = format!(
-            "SELECT Name, Type, Properties FROM %Dictionary.CompiledIndex WHERE parent = '{}'{} ORDER BY Name",
-            args.class, origin_filter
-        );
-        for row in rows(client, &ns, &sql).await? {
-            indices.push(MemberIndex {
-                name: str_field(&row, "Name"),
-                type_: str_field(&row, "Type"),
-                properties: str_field(&row, "Properties"),
-            });
-        }
-    }
-    if matches!(kind, MembersKind::Procedures) {
-        // No `%Dictionary.CompiledProcedure` table exists (SQLCODE -30,
-        // verified live): procedures ARE SqlProc=1 compiled methods.
-        let sql = format!(
-            "SELECT Name, ReturnType FROM %Dictionary.CompiledMethod WHERE parent = '{}' AND SqlProc = 1{} ORDER BY Name",
-            args.class, origin_filter
-        );
-        for row in rows(client, &ns, &sql).await? {
-            procedures.push(MemberProcedure {
-                name: str_field(&row, "Name"),
-                return_type: str_field(&row, "ReturnType"),
-            });
-        }
-    }
+    let methods = if want(MembersKind::Methods) {
+        methods_of(client, &ns, &args.class, &origin_filter).await?
+    } else {
+        Vec::new()
+    };
+    let properties = if want(MembersKind::Properties) {
+        properties_of(client, &ns, &args.class, &origin_filter).await?
+    } else {
+        Vec::new()
+    };
+    let parameters = if want(MembersKind::Parameters) {
+        parameters_of(client, &ns, &args.class, &origin_filter).await?
+    } else {
+        Vec::new()
+    };
+    let xdata = if matches!(kind, MembersKind::All | MembersKind::XData) {
+        xdata_of(client, &ns, &args.class).await?
+    } else {
+        Vec::new()
+    };
+    let queries = if want(MembersKind::Queries) {
+        queries_of(client, &ns, &args.class, &origin_filter).await?
+    } else {
+        Vec::new()
+    };
+    let triggers = if want(MembersKind::Triggers) {
+        triggers_of(client, &ns, &args.class, &origin_filter).await?
+    } else {
+        Vec::new()
+    };
+    let indices = if want(MembersKind::Indices) {
+        indices_of(client, &ns, &args.class, &origin_filter).await?
+    } else {
+        Vec::new()
+    };
+    let procedures = if matches!(kind, MembersKind::Procedures) {
+        procedures_of(client, &ns, &args.class, &origin_filter).await?
+    } else {
+        Vec::new()
+    };
 
     // F-03: an all-zero read means either a genuinely empty class or a name
     // the Compiled* tables never key on (alias like %RegisteredObject, or a
@@ -599,6 +514,204 @@ fn kind_name(k: MembersKind) -> &'static str {
     }
 }
 
+/// `%Dictionary.CompiledMethod` rows for one class.
+///
+/// # Errors
+/// SQL/transport errors from the dictionary query.
+async fn methods_of(
+    client: &IrisClient,
+    ns: &str,
+    class: &str,
+    origin_filter: &str,
+) -> Result<Vec<MemberMethod>> {
+    let sql = format!(
+        "SELECT Name, ClassMethod, SqlProc, FormalSpec, ReturnType, Origin FROM %Dictionary.CompiledMethod WHERE parent = '{class}'{origin_filter} ORDER BY Name"
+    );
+    let mut out = Vec::new();
+    for row in rows(client, ns, &sql).await? {
+        out.push(MemberMethod {
+            name: str_field(&row, "Name"),
+            class_method: truthy(&row, "ClassMethod"),
+            sql_proc: truthy(&row, "SqlProc"),
+            formal_spec: str_field(&row, "FormalSpec"),
+            return_type: str_field(&row, "ReturnType"),
+            origin: str_field(&row, "Origin"),
+        });
+    }
+    Ok(out)
+}
+
+/// `%Dictionary.CompiledProperty` rows for one class.
+///
+/// # Errors
+/// SQL/transport errors from the dictionary query.
+async fn properties_of(
+    client: &IrisClient,
+    ns: &str,
+    class: &str,
+    origin_filter: &str,
+) -> Result<Vec<MemberProperty>> {
+    let sql = format!(
+        "SELECT Name, Type, Collection, Origin FROM %Dictionary.CompiledProperty WHERE parent = '{class}'{origin_filter} ORDER BY Name"
+    );
+    let mut out = Vec::new();
+    for row in rows(client, ns, &sql).await? {
+        out.push(MemberProperty {
+            name: str_field(&row, "Name"),
+            type_: str_field(&row, "Type"),
+            collection: str_field(&row, "Collection"),
+            origin: str_field(&row, "Origin"),
+        });
+    }
+    Ok(out)
+}
+
+/// `%Dictionary.CompiledParameter` rows for one class.
+///
+/// # Errors
+/// SQL/transport errors from the dictionary query.
+async fn parameters_of(
+    client: &IrisClient,
+    ns: &str,
+    class: &str,
+    origin_filter: &str,
+) -> Result<Vec<MemberParameter>> {
+    let sql = format!(
+        "SELECT Name, Type, Origin FROM %Dictionary.CompiledParameter WHERE parent = '{class}'{origin_filter} ORDER BY Name"
+    );
+    let mut out = Vec::new();
+    for row in rows(client, ns, &sql).await? {
+        let t = str_field(&row, "Type");
+        out.push(MemberParameter {
+            type_: if t.is_empty() { None } else { Some(t) },
+            name: str_field(&row, "Name"),
+            origin: str_field(&row, "Origin"),
+        });
+    }
+    Ok(out)
+}
+
+/// `%Dictionary.CompiledXData` names for one class. `XData` rows are the
+/// class's own declarations: NO Origin filter and no origin field in the
+/// entry (`E_SPEC` §3).
+///
+/// # Errors
+/// SQL/transport errors from the dictionary query.
+async fn xdata_of(client: &IrisClient, ns: &str, class: &str) -> Result<Vec<MemberXData>> {
+    let sql = format!(
+        "SELECT Name FROM %Dictionary.CompiledXData WHERE parent = '{class}' ORDER BY Name"
+    );
+    let mut out = Vec::new();
+    for row in rows(client, ns, &sql).await? {
+        out.push(MemberXData {
+            name: str_field(&row, "Name"),
+        });
+    }
+    Ok(out)
+}
+
+/// `%Dictionary.CompiledQuery` rows for one class.
+///
+/// # Errors
+/// SQL/transport errors from the dictionary query.
+async fn queries_of(
+    client: &IrisClient,
+    ns: &str,
+    class: &str,
+    origin_filter: &str,
+) -> Result<Vec<MemberQuery>> {
+    let sql = format!(
+        "SELECT Name, FormalSpec, SqlName, SqlView, Type FROM %Dictionary.CompiledQuery WHERE parent = '{class}'{origin_filter} ORDER BY Name"
+    );
+    let mut out = Vec::new();
+    for row in rows(client, ns, &sql).await? {
+        out.push(MemberQuery {
+            name: str_field(&row, "Name"),
+            formal_spec: str_field(&row, "FormalSpec"),
+            sql_name: str_field(&row, "SqlName"),
+            sql_view: truthy(&row, "SqlView"),
+            type_: str_field(&row, "Type"),
+        });
+    }
+    Ok(out)
+}
+
+/// `%Dictionary.CompiledTrigger` rows for one class. The storage column is
+/// `_Time` field — bare `Time` is a reserved word (SQLCODE -1) and even a quoted
+/// alias fails on 2025.3 (verified live), so the result field simply
+/// carries the `_Time` value.
+///
+/// # Errors
+/// SQL/transport errors from the dictionary query.
+async fn triggers_of(
+    client: &IrisClient,
+    ns: &str,
+    class: &str,
+    origin_filter: &str,
+) -> Result<Vec<MemberTrigger>> {
+    let sql = format!(
+        "SELECT Name, Event, _Time, CodeMode FROM %Dictionary.CompiledTrigger WHERE parent = '{class}'{origin_filter} ORDER BY Name"
+    );
+    let mut out = Vec::new();
+    for row in rows(client, ns, &sql).await? {
+        out.push(MemberTrigger {
+            name: str_field(&row, "Name"),
+            event: str_field(&row, "Event"),
+            time: str_field(&row, "_Time"),
+            code_mode: str_field(&row, "CodeMode"),
+        });
+    }
+    Ok(out)
+}
+
+/// `%Dictionary.CompiledIndex` rows for one class.
+///
+/// # Errors
+/// SQL/transport errors from the dictionary query.
+async fn indices_of(
+    client: &IrisClient,
+    ns: &str,
+    class: &str,
+    origin_filter: &str,
+) -> Result<Vec<MemberIndex>> {
+    let sql = format!(
+        "SELECT Name, Type, Properties FROM %Dictionary.CompiledIndex WHERE parent = '{class}'{origin_filter} ORDER BY Name"
+    );
+    let mut out = Vec::new();
+    for row in rows(client, ns, &sql).await? {
+        out.push(MemberIndex {
+            name: str_field(&row, "Name"),
+            type_: str_field(&row, "Type"),
+            properties: str_field(&row, "Properties"),
+        });
+    }
+    Ok(out)
+}
+
+/// SQL-callable methods: no `%Dictionary.CompiledProcedure` table exists
+/// (SQLCODE -30, verified live) — procedures ARE SqlProc=1 compiled
+/// methods.
+///
+/// # Errors
+/// SQL/transport errors from the dictionary query.
+async fn procedures_of(
+    client: &IrisClient,
+    ns: &str,
+    class: &str,
+    origin_filter: &str,
+) -> Result<Vec<MemberProcedure>> {
+    let sql = format!(
+        "SELECT Name, ReturnType FROM %Dictionary.CompiledMethod WHERE parent = '{class}' AND SqlProc = 1{origin_filter} ORDER BY Name"
+    );
+    let mut out = Vec::new();
+    for row in rows(client, ns, &sql).await? {
+        out.push(MemberProcedure {
+            name: str_field(&row, "Name"),
+            return_type: str_field(&row, "ReturnType"),
+        });
+    }
+    Ok(out)
+}
 /// Direction selector for [`class_dependencies`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
