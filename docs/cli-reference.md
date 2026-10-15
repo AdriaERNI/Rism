@@ -201,7 +201,7 @@ units included. `--raw` adds the raw metric vector to the scored table.
 ## MCP server
 
 ### `rism mcp`
-Serve JSON-RPC 2.0 (all 29 tools). Used by MCP clients. No flags = **stdio**,
+Serve JSON-RPC 2.0 (all 30 tools). Used by MCP clients. No flags = **stdio**,
 byte-identical to every released version. `RISM_DEBUG_TOOLS=0` removes the 9
 `debug_*` tools from discovery.
 
@@ -225,7 +225,7 @@ ignored. Precedence: CLI flag > env > `config.toml` (`mcp_transport`,
 
 !!! danger "No auth on the HTTP door"
     `rism mcp --transport http` has **no authentication**: every process that
-    can reach the bound address can drive all 29 tools, including `run_shell`,
+    can reach the bound address can drive all 30 tools, including `run_shell`,
     file tools, and the debugger. Bind loopback only unless you fully own the
     network boundary. Origin is validated when present (RFC 6454 match on the
     door's own origin — the exact bound port is pinned); native clients may

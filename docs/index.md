@@ -20,7 +20,7 @@ the documented REST + WebSocket endpoints your IRIS already exposes.
 | **Prism parity** | behavior-matched port of [Prism](https://github.com/AdriaERNI/Prism)'s 25-tool surface — same log format and debugger, in ~10k lines of Rust; long-running terminal work moves to protocol-native MCP Tasks instead of extra tools |
 | **Debugger without Studio** | full DBGP control (breakpoints, stepping, variable inspection) from the CLI or an agent session — no GUI needed |
 
-## 29 tools at a glance
+## 30 tools at a glance
 
 Documents · code search · class graph · SQL · terminal · tests · debugger ·
 monitoring · host files. See
@@ -46,7 +46,7 @@ rism monitor                   # live metrics + load score
 ```
 
 Serving as an MCP server for an AI client is one line in your client config
-(stdio door — `rism mcp --transport http` serves the same 29 tools over
+(stdio door — `rism mcp --transport http` serves the same 30 tools over
 streamable-HTTP instead):
 
 ```json
@@ -58,7 +58,7 @@ streamable-HTTP instead):
 - [Getting Started](getting-started.md) — install, first connection, compose.yaml for a local IRIS
 - [Configuration](configuration.md) — config file, environment variables, precedence
 - [CLI Reference](cli-reference.md) — every command and flag
-- [MCP Tools](mcp-tools.md) — all 29 tools with parameters
+- [MCP Tools](mcp-tools.md) — all 30 tools with parameters
 - [Code Search](code-search.md) — search engines, graph semantics, benchmarks
 - [AI Agents](ai-agents.md) — wiring Rism into Claude Desktop/Code, Cursor, VS Code
 - [Debugger](debugger.md) — DBGP sessions, breakpoints, stepping

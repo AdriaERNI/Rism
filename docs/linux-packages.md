@@ -62,7 +62,7 @@ install → upgrade → uninstall contract inside real `debian:12`,
 **functional smoke** — the *installed* binary against a live IRIS 2025.3
 service container (`rism info` / SQL / doc put+compile+get / terminal / the
 MCP doors — stdio and streamable-HTTP — via `packaging/mcp_probe.sh`, whose
-HTTP leg parses the ready line from a `--port 0` bind, counts 29 tools over
+HTTP leg parses the ready line from a `--port 0` bind, counts 30 tools over
 a session, makes one call, and asserts a clean SIGTERM exit) — and a
 config-preservation
 probe, on every change to `packaging/**` or the pipelines — the same gate

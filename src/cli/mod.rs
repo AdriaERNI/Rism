@@ -10,6 +10,7 @@ use crate::tools::documents::{
 use crate::tools::graph::{
     ClassDependenciesArgs, ClassMembersArgs, DependencyDirection, FindSubclassesArgs, MembersKind,
 };
+use crate::tools::refs::FindReferencesArgs;
 use crate::tools::search::SearchCodeArgs;
 use crate::tools::sql::ExecuteSqlArgs;
 
@@ -80,7 +81,7 @@ pub enum Commands {
         #[arg(long)]
         max: Option<u32>,
     },
-    /// Class reference graph (subclasses / members / deps)
+    /// Class reference graph (subclasses / members / deps / refs)
     #[command(subcommand)]
     Graph(GraphCommands),
     /// Document operations (list/get/put/compile/delete)
@@ -141,7 +142,7 @@ pub enum Commands {
     /// Serve as an MCP server. Default door: stdio (byte-identical to every
     /// released version). `--transport http` opens a streamable-HTTP door at
     /// /mcp - NO authentication on that door: every local process can drive
-    /// all 29 tools. Binds 127.0.0.1 unless --host/--allow-all-interfaces.
+    /// all 30 tools. Binds 127.0.0.1 unless --host/--allow-all-interfaces.
     Mcp {
         /// Transport door: `stdio` (default) or `http`; aliases
         /// `streamable-http` / `streamable_http` (env: `RISM_MCP_TRANSPORT`)
@@ -226,6 +227,20 @@ pub enum GraphCommands {
         /// Max BFS levels for `used_by` (default 1)
         #[arg(long)]
         depth: Option<u32>,
+    },
+    /// Source references to a class, member, or routine
+    Refs {
+        /// Target: Class.Member, Class, or ^Routine
+        target: String,
+        /// Include system documents (slower)
+        #[arg(long)]
+        system: bool,
+        /// Include generated/compiled .int docs (noisier)
+        #[arg(long)]
+        generated: bool,
+        /// Max edges (default: settings `search_max_results`)
+        #[arg(long)]
+        max: Option<u32>,
     },
 }
 
@@ -544,6 +559,20 @@ impl Commands {
                         depth: *depth,
                     },
                 },
+                GraphCommands::Refs {
+                    target,
+                    system,
+                    generated,
+                    max,
+                } => GraphCall::Refs {
+                    args: FindReferencesArgs {
+                        target: target.clone(),
+                        namespace: ns_override.clone(),
+                        include_system: if *system { Some(true) } else { None },
+                        include_generated: if *generated { Some(true) } else { None },
+                        max_results: *max,
+                    },
+                },
             }),
             _ => None,
         }
@@ -654,6 +683,11 @@ pub enum GraphCall {
     Deps {
         /// Shared args.
         args: ClassDependenciesArgs,
+    },
+    /// refs
+    Refs {
+        /// Shared args.
+        args: FindReferencesArgs,
     },
 }
 

@@ -7,7 +7,7 @@ Format: https://agents.md — canonical repo instructions for coding agents.
 
 Rism is a Rust rewrite of Prism: a CLI **and** MCP server for InterSystems
 IRIS development over the Atelier REST API (zero server-side uploads).
-29 tools, one core in `src/tools/`, two doors (`rism <cmd>` CLI,
+30 tools, one core in `src/tools/`, two doors (`rism <cmd>` CLI,
 `rism mcp` stdio or streamable-HTTP). Depth: [docs/index.md](docs/index.md).
 
 ## Build & test

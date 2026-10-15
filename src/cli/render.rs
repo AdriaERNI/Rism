@@ -650,3 +650,41 @@ pub fn render_deps(res: &crate::tools::graph::ClassDependenciesResult, format: O
         },
     );
 }
+
+/// Render `find_references` output: one line per edge, then the unresolved
+/// section, then the tally.
+pub fn render_refs(res: &crate::tools::refs::FindReferencesResult, format: OutputFormat) {
+    render_json(
+        &serde_json::to_value(res).unwrap_or_default(),
+        format,
+        || {
+            if !res.edges.is_empty() {
+                println!("references to {} ({}):", res.target, res.kind);
+                for e in &res.edges {
+                    let member = e.member.as_deref().filter(|m| !m.is_empty());
+                    let loc = match (member, e.line) {
+                        (Some(m), Some(l)) => format!("({m}:{l})"),
+                        (Some(m), None) => format!("({m})"),
+                        (None, Some(l)) => format!(":{l}"),
+                        (None, None) => String::new(),
+                    };
+                    println!("  {:<44} {:<10} {loc} — {}", e.doc, e.via, e.text);
+                }
+            }
+            if !res.unresolved.is_empty() {
+                println!("unresolved (dynamic forms):");
+                for u in &res.unresolved {
+                    let loc = u.line.map(|l| format!(":{l}")).unwrap_or_default();
+                    println!("  {:<44} {loc} ?{} — {}", u.doc, u.hint, u.text);
+                }
+            }
+            let more = if res.truncated { " (truncated)" } else { "" };
+            println!(
+                "\n{} resolved + {} unresolved across {} doc(s){more}",
+                res.edges.len(),
+                res.unresolved.len(),
+                res.docs_scanned
+            );
+        },
+    );
+}
