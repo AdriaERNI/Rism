@@ -1,0 +1,3 @@
+ROUTINE FProbeG.Mid
+	// target of the Do ^FProbeG.Mid edge
+	quit
