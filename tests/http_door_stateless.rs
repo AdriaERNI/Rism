@@ -6,7 +6,7 @@
 //!   - the per-request factory (rmcp calls it per session/request; the
 //!     cheap-clone handle must produce working services repeatedly),
 //!   - the stateful `Mcp-Session-Id` header contract (row D),
-//!   - 29 tools on the wire, stdout untouched.
+//!   - 30 tools on the wire, stdout untouched.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -176,7 +176,7 @@ async fn http_door_factory_sessions_and_error_path() {
         )
         .await;
         let n = payload.matches("\"inputSchema\"").count();
-        assert_eq!(n, 29, "round {round}: the HTTP door serves 29 tools");
+        assert_eq!(n, 30, "round {round}: the HTTP door serves 30 tools");
 
         // Error-path rule: a tools/call against the dead URL must ANSWER a
         // tool-level error (isError:true) — the reqwest timeout above is

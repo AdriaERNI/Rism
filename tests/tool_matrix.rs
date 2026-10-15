@@ -1,4 +1,4 @@
-//! Live contract matrix over ALL 29 MCP tools via the stdio door — the
+//! Live contract matrix over ALL 30 MCP tools via the stdio door — the
 //! permanent proof for issue #16 (F1 overflow clamp, F2 chars-vs-bytes,
 //! F3 background timeout 0) plus ≥2 observable cases per tool.
 //!
@@ -1419,7 +1419,7 @@ fn debugger_lifecycle_chain() {
 
 #[test]
 #[ignore = "requires live IRIS (RISM_IRIS_BASE_URL + config.toml)"]
-fn surface_is_the_29_tools_the_matrix_covers() {
+fn surface_is_the_30_tools_the_matrix_covers() {
     let mut m = Mcp::spawn();
     let mut c = Case::new();
     let msg = m.rpc("tools/list", json!({}));
@@ -1427,8 +1427,8 @@ fn surface_is_the_29_tools_the_matrix_covers() {
         .as_array()
         .cloned()
         .unwrap_or_default();
-    c.check(tools.len() == 29, || {
-        format!("matrix assumes 29 tools, tools/list says {}", tools.len())
+    c.check(tools.len() == 30, || {
+        format!("matrix assumes 30 tools, tools/list says {}", tools.len())
     });
     // The exact set this file exercises — a tool added/removed/redenied
     // breaks here first, in the file that promises coverage.
@@ -1462,6 +1462,7 @@ fn surface_is_the_29_tools_the_matrix_covers() {
         "find_subclasses",
         "class_members",
         "class_dependencies",
+        "find_references",
     ];
     let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
     for want in covered {

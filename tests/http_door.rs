@@ -1,7 +1,7 @@
 //! Live HTTP-door contract (SPEC T1, matrix row D): spawn the ACTUAL
 //! binary `rism mcp --transport http --port 0`, learn the real port from
 //! the stderr ready line, drive initialize → session header → tools/list
-//! (29) → tools/call `execute_sql` against real IRIS, then kill and prove the
+//! (30) → tools/call `execute_sql` against real IRIS, then kill and prove the
 //! listener died. `#[ignore]`: CI live-smoke (docker IRIS) + VM row D.
 //!
 //! stderr stays OPEN and DRAINED on a thread for the child's whole life —
@@ -177,7 +177,7 @@ async fn http_door_live_binary_roundtrip() {
         &log,
     )
     .await;
-    assert_eq!(payload.matches("\"inputSchema\"").count(), 29, "29 tools");
+    assert_eq!(payload.matches("\"inputSchema\"").count(), 30, "30 tools");
 
     let (_, payload) = post(
         &client,

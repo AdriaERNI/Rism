@@ -798,9 +798,10 @@ async fn subclasses_sql_shape_contains_walk() {
 }
 
 // U12 — Origin filter present/absent per include_inherited; XData has none.
-// F-03 adds an existence cross-check query ONLY when all four tables come
+// F-03 adds an existence cross-check query ONLY when all member tables come
 // back empty; these mocks return rows for one table so the walk is not
-// re-triggered — the empty-read branch is pinned separately (U19).
+// re-triggered — the empty-read branch is pinned separately (U19). The
+// census tables (Query/Trigger/Index) ride the same Origin filter rule.
 #[tokio::test]
 async fn members_sql_shape_origin_filter() {
     let mock = MockServer::start().await;
@@ -814,7 +815,13 @@ async fn members_sql_shape_origin_filter() {
         .expect(1)
         .mount(&mock)
         .await;
-    for tbl in ["CompiledProperty", "CompiledParameter"] {
+    for tbl in [
+        "CompiledProperty",
+        "CompiledParameter",
+        "CompiledQuery",
+        "CompiledTrigger",
+        "CompiledIndex",
+    ] {
         let t = tbl.to_string();
         Mock::given(method("POST"))
             .and(path("/api/atelier/v8/USER/action/query"))
@@ -872,10 +879,10 @@ async fn members_sql_shape_origin_filter() {
         })
         .respond_with(ResponseTemplate::new(200).set_body_json(query_envelope(&[])))
         .with_priority(10)
-        .expect(4)
+        .expect(7)
         .mount(&mock2)
         .await;
-    // F-03: all four tables empty triggers the existence cross-check; the
+    // F-03: all seven tables empty triggers the existence cross-check; the
     // class exists → zeros are reported honestly (no error). Default
     // priority 0 beats the catch-all above.
     Mock::given(method("POST"))
@@ -902,8 +909,8 @@ async fn members_sql_shape_origin_filter() {
     )
     .await
     .expect("members (inherited)");
-    // 4 table reads + 1 existence cross-check (all-zero result branch).
-    assert_eq!(mock2.received_requests().await.unwrap().len(), 5);
+    // 7 table reads + 1 existence cross-check (all-zero result branch).
+    assert_eq!(mock2.received_requests().await.unwrap().len(), 8);
 }
 
 // U14 — the impact query shape + substring drop on a DependsOn hit.
@@ -978,9 +985,9 @@ async fn members_unknown_class_is_honest_not_found() {
         matches!(&err, rism::Error::Config(m) if m.contains("not found") && m.contains("alias")),
         "{err}"
     );
-    // 5th request is the existence cross-check.
+    // 8th request is the existence cross-check.
     let seen = mock.received_requests().await.unwrap();
-    assert_eq!(seen.len(), 5, "4 tables + existence check");
+    assert_eq!(seen.len(), 8, "7 tables + existence check");
 }
 
 // U20 — F-09 regression: the namespace rides the URL path unencoded, so an
