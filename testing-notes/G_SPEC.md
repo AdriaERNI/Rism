@@ -1,6 +1,6 @@
 # G_SPEC — frozen contract for the reference graph + partials
 
-Decides everything the coder must NOT re-litigate. Evidence:
+Decides everything implementation must NOT re-litigate. Evidence:
 testing-notes/G_RESEARCH.md (live probes, 2026-10-14, rism-iris 2025.3).
 Ranking rule applied: server-mechanism > parse-on-fetch (dep-free) >
 persistent index.

@@ -42,7 +42,7 @@ name-word on a 10-edge fixture set; the only structurally-uncoverable class
 of misses is pure dynamic dispatch where even the member name never appears
 as literal text (E5 was found textually — its string contains the name).**
 Fixture corpus + measurement script: `.worktrees/spec` scratch session;
-recall logic to be re-implemented as a bench by the coder (G_SPEC §6).
+recall logic to be re-implemented as a bench (G_SPEC §6).
 
 ## Candidate-by-candidate
 
