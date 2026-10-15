@@ -39,7 +39,7 @@ async fn class_exists(client: &IrisClient, ns: &str, class: &str) -> Result<bool
 }
 
 /// Shared honest-not-found text for the F-03 zero-result cross-check.
-fn not_found_msg(class: &str, ns: &str) -> Error {
+pub(crate) fn not_found_msg(class: &str, ns: &str) -> Error {
     Error::Config(format!(
         "class '{class}' not found in namespace '{ns}' (no %Dictionary.ClassDefinition row; \
          if this is a class alias such as %RegisteredObject, query the canonical name, \
