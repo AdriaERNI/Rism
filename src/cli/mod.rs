@@ -58,7 +58,7 @@ pub enum Commands {
     Search {
         /// Pattern (regex unless --no-regex)
         pattern: String,
-        /// Document masks (repeatable or comma list; default *.cls,*.mac,*.int)
+        /// Document masks (repeatable or comma list; default *.cls,*.mac,*.int,*.inc)
         #[arg(long, value_delimiter = ',')]
         documents: Vec<String>,
         /// Disable regex (literal text search)
@@ -238,8 +238,12 @@ fn parse_kind_arg(s: &str) -> std::result::Result<KindArg, String> {
         "properties" => Ok(KindArg::Properties),
         "parameters" => Ok(KindArg::Parameters),
         "xdata" => Ok(KindArg::Xdata),
+        "queries" => Ok(KindArg::Queries),
+        "triggers" => Ok(KindArg::Triggers),
+        "indices" => Ok(KindArg::Indices),
+        "procedures" => Ok(KindArg::Procedures),
         other => Err(format!(
-            "'{other}' is not a kind (all, methods, properties, parameters, xdata)"
+            "'{other}' is not a kind (all, methods, properties, parameters, xdata, queries, triggers, indices, procedures)"
         )),
     }
 }
@@ -269,6 +273,14 @@ pub enum KindArg {
     Parameters,
     /// `XData` block names only
     Xdata,
+    /// Queries only
+    Queries,
+    /// Triggers only
+    Triggers,
+    /// Indices only
+    Indices,
+    /// SQL-callable methods only
+    Procedures,
 }
 
 /// clap mirror of [`DependencyDirection`].
@@ -508,6 +520,10 @@ impl Commands {
                             KindArg::Properties => MembersKind::Properties,
                             KindArg::Parameters => MembersKind::Parameters,
                             KindArg::Xdata => MembersKind::XData,
+                            KindArg::Queries => MembersKind::Queries,
+                            KindArg::Triggers => MembersKind::Triggers,
+                            KindArg::Indices => MembersKind::Indices,
+                            KindArg::Procedures => MembersKind::Procedures,
                         }),
                         include_inherited: if *include_inherited { Some(true) } else { None },
                     },

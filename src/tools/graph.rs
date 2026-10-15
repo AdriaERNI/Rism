@@ -209,7 +209,8 @@ pub async fn find_subclasses(
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum MembersKind {
-    /// All four member tables.
+    /// All structural member tables (methods, properties, parameters,
+    /// `XData`, queries, triggers, indices).
     #[default]
     All,
     /// Methods only.
@@ -221,6 +222,15 @@ pub enum MembersKind {
     /// `XData` blocks only (names — the stream data is never selected).
     #[serde(rename = "xdata")] // frozen wire string (§4: `xdata`, not `x_data`)
     XData,
+    /// Queries only (`%Dictionary.CompiledQuery`).
+    Queries,
+    /// Triggers only (`%Dictionary.CompiledTrigger`).
+    Triggers,
+    /// Indices only (`%Dictionary.CompiledIndex`).
+    Indices,
+    /// SQL-callable methods (`CompiledMethod WHERE SqlProc = 1`; there is
+    /// no `CompiledProcedure` table on 2025.3 — verified live).
+    Procedures,
 }
 
 /// Arguments for [`class_members`].
@@ -285,6 +295,56 @@ pub struct MemberXData {
     pub name: String,
 }
 
+/// One query row.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct MemberQuery {
+    /// Query name.
+    pub name: String,
+    /// Formal spec string.
+    pub formal_spec: String,
+    /// SQL name of the generated stored procedure.
+    pub sql_name: String,
+    /// Whether an SQL view exists.
+    pub sql_view: bool,
+    /// Query type (e.g. `%Library.SQLQuery`), fully qualified.
+    pub type_: String,
+}
+
+/// One trigger row.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct MemberTrigger {
+    /// Trigger name.
+    pub name: String,
+    /// Event (`INSERT` / `UPDATE` / `DELETE` / `INSERT/UPDATE`).
+    pub event: String,
+    /// Timing (`AFTER` / `BEFORE` / `DEFERRED`). The storage column is
+    /// `_Time` — `Time` is a reserved word in this dialect and even the
+    /// quoted alias is refused (SQLCODE -1; verified live).
+    pub time: String,
+    /// Code mode (`objectscript` / `sql` / `generator`).
+    pub code_mode: String,
+}
+
+/// One index row.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct MemberIndex {
+    /// Index name.
+    pub name: String,
+    /// Index type (`key` / `bitmap` / `index` / …).
+    pub type_: String,
+    /// Indexed properties (comma list as the dictionary stores it).
+    pub properties: String,
+}
+
+/// One SQL-callable method (a `SqlProc=1` row of `CompiledMethod`).
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct MemberProcedure {
+    /// Procedure name.
+    pub name: String,
+    /// Return type (often empty).
+    pub return_type: String,
+}
+
 /// Member counts per table.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct MemberCounts {
@@ -296,6 +356,15 @@ pub struct MemberCounts {
     pub parameters: usize,
     /// `XData` blocks returned.
     pub xdata: usize,
+    /// Queries returned (0 when the kind did not request them).
+    pub queries: usize,
+    /// Triggers returned (0 when the kind did not request them).
+    pub triggers: usize,
+    /// Indices returned (0 when the kind did not request them).
+    pub indices: usize,
+    /// Procedures returned (only non-zero for `kind = "procedures"`;
+    /// `all` reports the `sql_proc` flag on method rows instead).
+    pub procedures: usize,
 }
 
 /// Result of [`class_members`].
@@ -317,6 +386,15 @@ pub struct ClassMembersResult {
     pub parameters: Vec<MemberParameter>,
     /// `XData` names (empty when not requested).
     pub xdata: Vec<MemberXData>,
+    /// Queries (empty when not requested).
+    pub queries: Vec<MemberQuery>,
+    /// Triggers (empty when not requested).
+    pub triggers: Vec<MemberTrigger>,
+    /// Indices (empty when not requested).
+    pub indices: Vec<MemberIndex>,
+    /// SQL-callable methods (empty unless `kind = "procedures"` — `all`
+    /// reports them through the `sql_proc` flag on method rows).
+    pub procedures: Vec<MemberProcedure>,
 }
 
 /// List a class's compiled members from `%Dictionary.Compiled*`.
@@ -343,6 +421,10 @@ pub async fn class_members(
     let mut properties = Vec::new();
     let mut parameters = Vec::new();
     let mut xdata = Vec::new();
+    let mut queries = Vec::new();
+    let mut triggers = Vec::new();
+    let mut indices = Vec::new();
+    let mut procedures = Vec::new();
 
     if want(MembersKind::Methods) {
         let sql = format!(
@@ -401,6 +483,65 @@ pub async fn class_members(
             });
         }
     }
+    if want(MembersKind::Queries) {
+        let sql = format!(
+            "SELECT Name, FormalSpec, SqlName, SqlView, Type FROM %Dictionary.CompiledQuery WHERE parent = '{}'{} ORDER BY Name",
+            args.class, origin_filter
+        );
+        for row in rows(client, &ns, &sql).await? {
+            queries.push(MemberQuery {
+                name: str_field(&row, "Name"),
+                formal_spec: str_field(&row, "FormalSpec"),
+                sql_name: str_field(&row, "SqlName"),
+                sql_view: truthy(&row, "SqlView"),
+                type_: str_field(&row, "Type"),
+            });
+        }
+    }
+    if want(MembersKind::Triggers) {
+        // The storage column is `_Time` — bare `Time` is a reserved word
+        // (SQLCODE -1) and even a quoted alias fails on 2025.3 (verified
+        // live), so the result field simply carries the `_Time` value.
+        let sql = format!(
+            "SELECT Name, Event, _Time, CodeMode FROM %Dictionary.CompiledTrigger WHERE parent = '{}'{} ORDER BY Name",
+            args.class, origin_filter
+        );
+        for row in rows(client, &ns, &sql).await? {
+            triggers.push(MemberTrigger {
+                name: str_field(&row, "Name"),
+                event: str_field(&row, "Event"),
+                time: str_field(&row, "_Time"),
+                code_mode: str_field(&row, "CodeMode"),
+            });
+        }
+    }
+    if want(MembersKind::Indices) {
+        let sql = format!(
+            "SELECT Name, Type, Properties FROM %Dictionary.CompiledIndex WHERE parent = '{}'{} ORDER BY Name",
+            args.class, origin_filter
+        );
+        for row in rows(client, &ns, &sql).await? {
+            indices.push(MemberIndex {
+                name: str_field(&row, "Name"),
+                type_: str_field(&row, "Type"),
+                properties: str_field(&row, "Properties"),
+            });
+        }
+    }
+    if matches!(kind, MembersKind::Procedures) {
+        // No `%Dictionary.CompiledProcedure` table exists (SQLCODE -30,
+        // verified live): procedures ARE SqlProc=1 compiled methods.
+        let sql = format!(
+            "SELECT Name, ReturnType FROM %Dictionary.CompiledMethod WHERE parent = '{}' AND SqlProc = 1{} ORDER BY Name",
+            args.class, origin_filter
+        );
+        for row in rows(client, &ns, &sql).await? {
+            procedures.push(MemberProcedure {
+                name: str_field(&row, "Name"),
+                return_type: str_field(&row, "ReturnType"),
+            });
+        }
+    }
 
     // F-03: an all-zero read means either a genuinely empty class or a name
     // the Compiled* tables never key on (alias like %RegisteredObject, or a
@@ -410,6 +551,10 @@ pub async fn class_members(
         && properties.is_empty()
         && parameters.is_empty()
         && xdata.is_empty()
+        && queries.is_empty()
+        && triggers.is_empty()
+        && indices.is_empty()
+        && procedures.is_empty()
         && !class_exists(client, &ns, &args.class).await?
     {
         return Err(not_found_msg(&args.class, &ns));
@@ -424,11 +569,19 @@ pub async fn class_members(
             properties: properties.len(),
             parameters: parameters.len(),
             xdata: xdata.len(),
+            queries: queries.len(),
+            triggers: triggers.len(),
+            indices: indices.len(),
+            procedures: procedures.len(),
         },
         methods,
         properties,
         parameters,
         xdata,
+        queries,
+        triggers,
+        indices,
+        procedures,
     })
 }
 
@@ -439,6 +592,10 @@ fn kind_name(k: MembersKind) -> &'static str {
         MembersKind::Properties => "properties",
         MembersKind::Parameters => "parameters",
         MembersKind::XData => "xdata",
+        MembersKind::Queries => "queries",
+        MembersKind::Triggers => "triggers",
+        MembersKind::Indices => "indices",
+        MembersKind::Procedures => "procedures",
     }
 }
 
@@ -776,6 +933,17 @@ mod tests {
             serde_json::to_value(MembersKind::Properties).unwrap(),
             json!("properties")
         );
+        // Census kinds (additive wire strings).
+        for (k, w) in [
+            (MembersKind::Queries, "queries"),
+            (MembersKind::Triggers, "triggers"),
+            (MembersKind::Indices, "indices"),
+            (MembersKind::Procedures, "procedures"),
+        ] {
+            assert_eq!(serde_json::to_value(k).unwrap(), json!(w));
+            let back: MembersKind = serde_json::from_value(json!(w)).unwrap();
+            assert_eq!(back, k);
+        }
         assert!(
             serde_json::from_value::<ClassMembersArgs>(json!({"class":"X","kind":"bogus"}))
                 .is_err()

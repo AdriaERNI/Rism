@@ -578,14 +578,46 @@ pub fn render_members(res: &crate::tools::graph::ClassMembersResult, format: Out
             for x in &res.xdata {
                 println!("xdata     {:<32}", x.name);
             }
-            println!(
-                "\n{} method(s), {} property(ies), {} parameter(s), {} xdata in {}",
-                res.counts.methods,
-                res.counts.properties,
-                res.counts.parameters,
-                res.counts.xdata,
-                res.class
+            for q in &res.queries {
+                println!(
+                    "query     {:<32} {}{} {}",
+                    q.name,
+                    q.formal_spec,
+                    if q.sql_view { " view" } else { "" },
+                    q.sql_name
+                );
+            }
+            for t in &res.triggers {
+                println!("trigger   {:<32} {} {}", t.name, t.event, t.time);
+            }
+            for ix in &res.indices {
+                println!("index     {:<32} {} {}", ix.name, ix.type_, ix.properties);
+            }
+            for p in &res.procedures {
+                println!("procedure {:<32} {}", p.name, p.return_type);
+            }
+            let mut tail = format!(
+                "\n{} method(s), {} property(ies), {} parameter(s), {} xdata",
+                res.counts.methods, res.counts.properties, res.counts.parameters, res.counts.xdata,
             );
+            if !res.queries.is_empty() {
+                tail += &format!(
+                    ", {} quer{}",
+                    res.counts.queries,
+                    if res.counts.queries == 1 { "y" } else { "ies" }
+                );
+            }
+            if !res.triggers.is_empty() {
+                tail += &format!(", {} trigger(s)", res.counts.triggers);
+            }
+            if !res.indices.is_empty() {
+                tail += &format!(", {} index(es)", res.counts.indices);
+            }
+            if !res.procedures.is_empty() {
+                tail += &format!(", {} procedure(s)", res.counts.procedures);
+            }
+            tail += &format!(" in {}", res.class);
+            println!("{tail}");
         },
     );
 }
