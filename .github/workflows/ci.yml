@@ -141,7 +141,7 @@ jobs:
       # `rism mcp` stdio child per test.
       - name: Live MCP tool matrix
         timeout-minutes: 15
-        run: cargo test --test tool_matrix -- --ignored
+        run: cargo test --test tool_matrix -- --ignored --test-threads=1
 
   # Tagged builds: Linux + Windows (x64/i686/arm64) binaries + installer,
   # packaged by `release`.
