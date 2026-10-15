@@ -200,7 +200,7 @@ Server-side text/regex search over source documents via the Atelier
 `action/search` endpoint — no local checkout needed. `query` is
 URL-encoded and treated as a regex by default; `regex: false` switches to
 a literal full-text scan. Optional: `namespace`, `documents` (masks,
-default `["*.cls","*.mac","*.int"]`), `include_system`,
+default `["*.cls","*.mac","*.int","*.inc"]`), `include_system`,
 `include_generated`, `case_sensitive` / `whole_word` (sent only when
 set), `max_results` (default `search_max_results` = 200; the server
 honours higher values on IRIS 2025.3 and flags `truncated` when it
