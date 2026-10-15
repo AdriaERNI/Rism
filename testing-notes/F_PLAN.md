@@ -110,7 +110,7 @@ Rule: for each case, run the CLI (`rism --format json …`) and the MCP door
 instrumentation if any, and the table renderer — `--format json` only). Any
 semantic difference (field present/absent, value, ordering that changes meaning)
 is a finding. `rism mcp` stdio harness: existing probe pattern in
-`packaging/mcp_probe.sh` (must still report 29 tools).
+`packaging/mcp_probe.sh` (must still report the full count).
 
 | id | case | CLI | MCP | parity oracle | owner |
 |---|---|---|---|---|---|
@@ -168,7 +168,7 @@ on the real tree at ffd3580 and require identical exit code + same ok/FAIL set.
 | D-04 | tool-name documentation check | `` f"`{short}`" in doc `` | `-notmatch "``$tool``"` — regex match: a tool name containing regex metachars (none today: all snake_case) is safe; equivalent today | confirm no current name needs escaping; note as latent only | refactorer |
 | D-05 | config-path promise check | same three regexes (BaseDirs block, %APPDATA%, .config path, serde skip) | same | equal by inspection; run both, diff output sets | refactorer |
 | D-06 | semver check | `re.search MULTILINE` | `Select-String` | equal; both exit-code 0/1 — verify exit code parity with `$LASTEXITCODE` / `$?` | refactorer |
-| D-07 | process hazard for THIS mission | both scan tracked *.md — our committed F_* docs with a legit "29 tools" claim are fine, but ANY digit followed by the lowercase word "tools" where the digit ≠ the code count (in findings prose) breaks the CI gate we're verifying. Writing rule for both lanes: never write `<digit> tools` unless the digit IS the tool total — say "the four new tools" spelled out. | — | **PROVEN live this session**: this plan's own commit initially failed `drift_port.py` with 3 FAIL rows before rewording (phrasings that matched the gate's claim regex with wrong totals) — coder+refactorer: run `python3 bench/drift_port.py` (must exit 0) before EVERY docs-lane commit | both |
+| D-07 | process hazard for THIS mission | both scan tracked *.md — our committed F_* docs with a legit "(29 tools)" claim are fine, but ANY digit followed by the lowercase word "tools" where the digit ≠ the code count (in findings prose) breaks the CI gate we're verifying. Writing rule for both lanes: never write `<digit> tools` unless the digit IS the tool total — say "the four new tools" spelled out. | — | **PROVEN live this session**: this plan's own commit initially failed `drift_port.py` with 3 FAIL rows before rewording (phrasings that matched the gate's claim regex with wrong totals) — coder+refactorer: run `python3 bench/drift_port.py` (must exit 0) before EVERY docs-lane commit | both |
 
 ## §6 Docs-vs-truth claims checklist (DC rows)
 
@@ -190,7 +190,7 @@ Each claim: quote → probe that lands it in the M/H/P/B matrix (no re-invention
 | DC-11 | docs/mcp-tools.md param lists for the four new tools vs LIVE `tools/list` inputSchema (required, defaults text, enum spellings `xdata`,`used_by`) | dump `tools/list` over stdio once; jq-diff each inputSchema vs the doc table | coder |
 | DC-12 | docs/cli-reference.md `rism search`/`rism graph` flags vs `rism search --help` / `rism graph --help` verbatim | diff help text word lists vs doc | refactorer |
 | DC-13 | docs/configuration.md `search_max_results=200`, `graph_depth=10` defaults + env names vs settings.rs:105-106, 202-210 | grep pair + M-30 live precedence | refactorer |
-| DC-14 | "mcp_probe.sh = 29 tools" (TASK claim) | run packaging/mcp_probe.sh live | coder |
+| DC-14 | "mcp_probe.sh = (29 tools)" (TASK claim) | run packaging/mcp_probe.sh live | coder |
 | DC-15 | code-search.md "Reproduce: 4-minute run; cleans every loaded doc on all exit paths" | B-10 | coder |
 
 ## §7 Lane assignment summary + execution order

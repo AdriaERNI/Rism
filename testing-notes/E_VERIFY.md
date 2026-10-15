@@ -103,7 +103,7 @@ left + noted for the certifier.
 | §7 L4 members own vs inherited | L4 | green | green |
 | §7 L5 depends_on ⊇ Super | L5 | green | green |
 | §7 L6 regex/case/word live | L6 (D2-adapted literal mode) | green | green |
-| §7 L7 gates: mcp_probe 29 + drift + docs sections | `packaging/mcp_probe.sh`, `analyze-docs-drift.ps1` (python port) | probe: HTTP leg BROKEN (see §5 bug 1); drift: BROKEN on windows CI (bug 2) | both FIXED + green (probe "HTTP door answered (29 tools)", drift 0 fails) |
+| §7 L7 gates: mcp_probe count + drift + docs sections | `packaging/mcp_probe.sh`, `analyze-docs-drift.ps1` (python port) | probe: HTTP leg BROKEN (see §5 bug 1); drift: BROKEN on windows CI (bug 2) | both FIXED + green (probe "HTTP door answered (29 tools)", drift 0 fails) |
 | docs numbers == RESULTS.md == rerun | docs/code-search.md §Benchmarks | matches committed RESULTS.md | matches committed RESULTS.md; deltas vs rerun explained: precision (20/21→20/20, §1 hygiene), compiled-ok (38→24, §3.1) |
 
 ## 5. Bugs found & fixed by this lane

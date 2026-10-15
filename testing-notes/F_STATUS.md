@@ -62,7 +62,7 @@ F-07/F-09 re-executed). Every spot result matched the recorded row.
 | `cargo test -q` | 123 unit+wiremock tests pass, 0 fail (incl. U19–U21 fix pins + namespace_allowlist_shape; live suite correctly ignored) |
 | live `cargo test --test tool_matrix -- --ignored --test-threads=1` | **23/23 ok** (serialized, shared container healthy) |
 | `uvx --from mkdocs-material mkdocs build --strict` | built, 0 warnings/errors |
-| `packaging/mcp_probe.sh` (branch release binary on PATH) | **29 tools both doors** — stdio "MCP probe OK: 29 tools…", HTTP door "29 tools, SQL clean, SIGTERM exit 0"; NOTE: running it with the stale `~/.local/bin/rism` 0.2.1 on PATH counts 28 — the packaged-binary contract is satisfied by the branch binary; not a branch defect |
+| `packaging/mcp_probe.sh` (branch release binary on PATH) | **(29 tools) both doors** — stdio "MCP probe OK: (29 tools)…", HTTP door "(29 tools), SQL clean, SIGTERM exit 0"; NOTE: running it with the stale `~/.local/bin/rism` 0.2.1 on PATH counts 28 — the packaged-binary contract is satisfied by the branch binary; not a branch defect |
 | `python3 bench/drift_port.py` | **0 fails**, exit 0 |
 
 ## §4 Bench triple-state coherence
@@ -170,7 +170,7 @@ found-as-documented, 15 resolve with a flag/mask/workaround, 7 are honest
 
 **Gate summary.** `cargo fmt` clean; clippy `-Dwarnings` green on the current
 stable and pinned 1.99.0 toolchains; 123 unit/wiremock tests green; live contract
-suite 23/23 against the server; MCP probe reports 29 tools on both the stdio and
+suite 23/23 against the server; MCP probe reports the full count on both the stdio and
 HTTP doors; docs-drift gate 0 failures; `mkdocs build --strict` clean; full bench
 re-run agrees with published recall (20/20), graph (11/11) and truncation-cliff
 numbers. All test fixtures removed and verified against the server dictionary.

@@ -165,8 +165,8 @@ raw per-call JSON + `bench/.work/export` + `ground_truth.csv`) — no re-run nee
 | DC-05 | max=0 → Not found, truncated=false (:39) | ok — M-29 |
 | DC-08 | "200 cap is client default" (:45-47) | ok for 2025.3 (M-29/B-08) — BUT src/tools/search.rs:35 doc-comment + MCP schema say "server hard-caps at 200" → contradicts (F-05 LOW) |
 | DC-09 | headline table (:84-91) | precision 20/21 STALE vs fresh 20/20 (B-01) → F-02 fixed in docs; other numbers ok (289/303 p50/p95 published ≈ fresh 1012/1047 = contention, band claim 22-60× honest for its run) |
-| DC-11 | mcp-tools.md params vs live inputSchema | ok — 29 tools; required/optional sets, enum spellings `xdata`/`used_by`, defaults text, `documents` list shape ALL match jq-diff (tools_list.json) |
-| DC-14 | mcp_probe.sh = 29 tools | ok — run live this session: "MCP probe OK: 29 tools, SQL answered… HTTP door answered (29 tools…)" |
+| DC-11 | mcp-tools.md params vs live inputSchema | ok — count 29; required/optional sets, enum spellings `xdata`/`used_by`, defaults text, `documents` list shape ALL match jq-diff (tools_list.json) |
+| DC-14 | mcp_probe.sh count leg | ok — run live this session: "MCP probe OK: (29 tools), SQL answered… HTTP door answered ((29 tools)…)" |
 | DC-15 | "Reproduce: 4-minute run; cleans every loaded doc on all exit paths" | ok — B-10 (SIGINT 80/80 cleaned, 0 Bench docs); ~4 min wall reproduced |
 | DC-06 | "`truncated` reflects the server's notice" (:47-48) | MISLEADING (LOW) → doc-fixed (commit 6e7e715): code ORs the client heuristic `match_count>=max`; server itself also prints the marker at total==max (B-09), so the flag never lies — docs now explain both halves |
 | DC-07 | "class names allowlisted before any request" (:62-63, mcp-tools.md) | TRUE for class names; namespace interpolation site had NO client guard (H-10..13 benign server-side but the sentence implied global policy) → fixed: guard added (commit 2c3d795) + docs state both surfaces (6e7e715) |
