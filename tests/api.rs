@@ -1055,7 +1055,7 @@ async fn empty_document_string_falls_back_to_defaults() {
     let mock = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/atelier/v8/USER/action/search"))
-        .and(query_param("documents", "*.cls,*.mac,*.int"))
+        .and(query_param("documents", "*.cls,*.mac,*.int,*.inc"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "status": {"errors": [], "summary": ""}, "console": [], "result": []
         })))
@@ -1079,6 +1079,6 @@ async fn empty_document_string_falls_back_to_defaults() {
     )
     .await
     .expect("empty mask falls back");
-    assert_eq!(res.documents, vec!["*.cls", "*.mac", "*.int"]);
+    assert_eq!(res.documents, vec!["*.cls", "*.mac", "*.int", "*.inc"]);
     mock.verify().await;
 }

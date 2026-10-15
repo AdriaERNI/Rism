@@ -9,9 +9,14 @@ use crate::iris::IrisClient;
 use crate::iris::search as api;
 use crate::tools::names::valid_namespace;
 
-/// Default document masks when the caller does not choose any (issue #17:
-/// classes, macros, routines).
-pub const DEFAULT_DOCUMENTS: [&str; 3] = ["*.cls", "*.mac", "*.int"];
+/// Default document masks when the caller does not choose any. `*.inc`
+/// joins the set: macro `$def` definitions live in include docs and were a
+/// silent blind spot under the old three-mask default (measured recall,
+/// G_RESEARCH baseline row C). **Behavior change:** `search_code` calls
+/// that relied on the old default may now return extra `.inc` matches with
+/// the same ranking. On 2025.3 a `.inc` created through the Atelier `doc`
+/// API is actually stored as `.mac`, so both masks are scanned.
+pub const DEFAULT_DOCUMENTS: [&str; 4] = ["*.cls", "*.mac", "*.int", "*.inc"];
 
 /// Arguments for [`search_code`].
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -21,7 +26,7 @@ pub struct SearchCodeArgs {
     pub query: String,
     /// Target namespace (defaults to configured namespace)
     pub namespace: Option<String>,
-    /// Document masks (default: *.cls, *.mac, *.int)
+    /// Document masks (default: *.cls, *.mac, *.int, *.inc)
     pub documents: Option<Vec<String>>,
     /// Regex mode; omit to use the server default (on)
     pub regex: Option<bool>,
