@@ -205,7 +205,7 @@ impl RefTarget {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FindReferencesArgs {
-    /// Target: "Package.Class.Member", "Package.Class", or "^RoutineName"
+    /// Target: "Package.Class.Member", "Package.Class", or "^`RoutineName`"
     pub target: String,
     /// Target namespace (defaults to configured namespace)
     pub namespace: Option<String>,
@@ -368,7 +368,7 @@ fn token_before(hay: &str, i: usize) -> (usize, String) {
 fn skip_ws_soft(hay: &str, mut i: usize) -> usize {
     while matches!(
         hay.as_bytes().get(i),
-        Some(&b' ') | Some(&b'\t') | Some(&b'\n') | Some(&b'\r')
+        Some(&b' ' | &b'\t' | &b'\n' | &b'\r')
     ) {
         i += 1;
     }
@@ -552,7 +552,7 @@ fn scan_doc(text: &DocText, ctx: &ScanCtx, tracker: &MemberTracker) -> Vec<Hit> 
     match ctx.target {
         RefTarget::Routine(r) => scan_routine(hay, text, r, &mut hits),
         RefTarget::Class(_) | RefTarget::Member { .. } => {
-            scan_class(hay, text, ctx, tracker, &mut hits)
+            scan_class(hay, text, ctx, tracker, &mut hits);
         }
     }
     hits.sort_by_key(|h| h.pos);
@@ -664,157 +664,136 @@ fn scan_class(
         }
     }
 
-    match want_member {
-        Some(member) => {
-            // 2. ..Member( — self/inherited. Resolved inside the target
-            // class (or a subclass body, where it reaches the INHERITED
-            // member); inside any other class it is a reference to that
-            // class's own same-named member — oref-ish, unresolved.
-            let needle = format!("..{member}");
-            let mut from = 0usize;
-            while let Some(i) = hay[from..].find(&needle) {
-                let pos = from + i;
-                from = pos + needle.len();
-                match text.region(pos) {
-                    "comment" => continue,
-                    "string" => {
-                        hits.push(Hit {
-                            pos,
-                            resolved: false,
-                            via: "",
-                            hint: hint::DYNAMIC_STRING,
-                        });
-                        continue;
-                    }
-                    _ => {}
+    if let Some(member) = want_member {
+        // 2. ..Member( — self/inherited. Resolved inside the target
+        // class (or a subclass body, where it reaches the INHERITED
+        // member); inside any other class it is a reference to that
+        // class's own same-named member — oref-ish, unresolved.
+        let needle = format!("..{member}");
+        let mut from = 0usize;
+        while let Some(i) = hay[from..].find(&needle) {
+            let pos = from + i;
+            from = pos + needle.len();
+            match text.region(pos) {
+                "comment" => continue,
+                "string" => {
+                    hits.push(Hit {
+                        pos,
+                        resolved: false,
+                        via: "",
+                        hint: hint::DYNAMIC_STRING,
+                    });
+                    continue;
                 }
-                if !boundary_before(hay, pos) {
-                    continue; // `x..M(` is a property chain, not self-ref
-                }
-                if hay.as_bytes().get(skip_ws_soft(hay, pos + needle.len())) != Some(&b'(') {
-                    continue; // `..Property` read, not a call
-                }
-                let in_owner = ctx.owner_class.as_deref().is_some_and(|oc| {
-                    oc.eq_ignore_ascii_case(want_class) || ctx.owner_extends_target
+                _ => {}
+            }
+            if !boundary_before(hay, pos) {
+                continue; // `x..M(` is a property chain, not self-ref
+            }
+            if hay.as_bytes().get(skip_ws_soft(hay, pos + needle.len())) != Some(&b'(') {
+                continue; // `..Property` read, not a call
+            }
+            let in_owner = ctx
+                .owner_class
+                .as_deref()
+                .is_some_and(|oc| oc.eq_ignore_ascii_case(want_class) || ctx.owner_extends_target);
+            if in_owner {
+                hits.push(Hit {
+                    pos,
+                    resolved: true,
+                    via: via::SELF_CALL,
+                    hint: "",
                 });
-                if in_owner {
-                    hits.push(Hit {
-                        pos,
-                        resolved: true,
-                        via: via::SELF_CALL,
-                        hint: "",
-                    });
-                } else {
-                    hits.push(Hit {
-                        pos,
-                        resolved: false,
-                        via: "",
-                        hint: hint::OREF,
-                    });
-                }
+            } else {
+                hits.push(Hit {
+                    pos,
+                    resolved: false,
+                    via: "",
+                    hint: hint::OREF,
+                });
             }
+        }
 
-            // 3. `.Member(` occurrences that are NOT part of `..` or
-            // `##class(...).`: static `Class.Member(` form resolves; a
-            // receiver expression (`o.M(`, `x.y.M(`, `Foo().M(`) is an
-            // oref — unresolved by construction.
-            let dot = format!(".{member}");
-            let mut from = 0usize;
-            while let Some(i) = hay[from..].find(&dot) {
-                let pos = from + i;
-                from = pos + dot.len();
-                if pos > 0 && hay.as_bytes()[pos - 1] == b'.' {
-                    continue; // `..Member` — pass 2 owns it
-                }
-                match text.region(pos) {
-                    "comment" => continue,
-                    "string" => {
-                        hits.push(Hit {
-                            pos,
-                            resolved: false,
-                            via: "",
-                            hint: hint::DYNAMIC_STRING,
-                        });
-                        continue;
-                    }
-                    _ => {}
-                }
-                if !boundary_at(hay, pos + dot.len()) {
-                    continue; // `.TgtMethodX(` is not `.TgtMethod(`
-                }
-                if hay.as_bytes().get(skip_ws_soft(hay, pos + dot.len())) != Some(&b'(') {
-                    continue; // not a call
-                }
-                let prev = pos.wrapping_sub(1);
-                if hay.as_bytes().get(prev) == Some(&b')') {
-                    if opens_class_call(hay, prev) {
-                        continue; // `##class(...)M(` — pass 1 owns it
-                    }
+        // 3. `.Member(` occurrences that are NOT part of `..` or
+        // `##class(...).`: static `Class.Member(` form resolves; a
+        // receiver expression (`o.M(`, `x.y.M(`, `Foo().M(`) is an
+        // oref — unresolved by construction.
+        let dot = format!(".{member}");
+        let mut from = 0usize;
+        while let Some(i) = hay[from..].find(&dot) {
+            let pos = from + i;
+            from = pos + dot.len();
+            if pos > 0 && hay.as_bytes()[pos - 1] == b'.' {
+                continue; // `..Member` — pass 2 owns it
+            }
+            match text.region(pos) {
+                "comment" => continue,
+                "string" => {
                     hits.push(Hit {
                         pos,
                         resolved: false,
                         via: "",
-                        hint: hint::OREF,
+                        hint: hint::DYNAMIC_STRING,
                     });
                     continue;
                 }
-                let (tstart, tok) = token_before(hay, pos);
-                if tok.eq_ignore_ascii_case(want_class) && boundary_before(hay, tstart) {
-                    hits.push(Hit {
-                        pos,
-                        resolved: true,
-                        via: via_for_line(text, tracker, pos),
-                        hint: "",
-                    });
-                } else if !tok.is_empty()
-                    && tok
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '%')
-                    && boundary_before(hay, tstart)
+                _ => {}
+            }
+            if !boundary_at(hay, pos + dot.len()) {
+                continue; // `.TgtMethodX(` is not `.TgtMethod(`
+            }
+            if hay.as_bytes().get(skip_ws_soft(hay, pos + dot.len())) != Some(&b'(') {
+                continue; // not a call
+            }
+            let prev = pos.wrapping_sub(1);
+            if hay.as_bytes().get(prev) == Some(&b')') {
+                if opens_class_call(hay, prev) {
+                    continue; // `##class(...)M(` — pass 1 owns it
+                }
+                hits.push(Hit {
+                    pos,
+                    resolved: false,
+                    via: "",
+                    hint: hint::OREF,
+                });
+                continue;
+            }
+            let (tstart, tok) = token_before(hay, pos);
+            if tok.eq_ignore_ascii_case(want_class) && boundary_before(hay, tstart) {
+                hits.push(Hit {
+                    pos,
+                    resolved: true,
+                    via: via_for_line(text, tracker, pos),
+                    hint: "",
+                });
+            } else if !tok.is_empty()
+                && tok
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '%')
+                && boundary_before(hay, tstart)
+            {
+                hits.push(Hit {
+                    pos,
+                    resolved: false,
+                    via: "",
+                    hint: hint::OREF,
+                });
+            }
+        }
+
+        // 4. `$zobjmethod(recv, "Member", …)` / `$method` dynamic forms.
+        for kw in ["$zobjmethod", "$zobjclassmethod", "$method"] {
+            let mut from = 0usize;
+            while let Some(i) = text.lower[from..].find(kw) {
+                let pos = from + i;
+                from = pos + kw.len();
+                if text.region(pos) != "code" {
+                    continue;
+                }
+                let rest = &hay[pos..line_end_of(hay, pos)];
+                if rest.contains(&format!("\"{member}\""))
+                    || rest.contains(&format!("\"{want_class}.{member}\""))
                 {
-                    hits.push(Hit {
-                        pos,
-                        resolved: false,
-                        via: "",
-                        hint: hint::OREF,
-                    });
-                }
-            }
-
-            // 4. `$zobjmethod(recv, "Member", …)` / `$method` dynamic forms.
-            for kw in ["$zobjmethod", "$zobjclassmethod", "$method"] {
-                let mut from = 0usize;
-                while let Some(i) = text.lower[from..].find(kw) {
-                    let pos = from + i;
-                    from = pos + kw.len();
-                    if text.region(pos) != "code" {
-                        continue;
-                    }
-                    let rest = &hay[pos..line_end_of(hay, pos)];
-                    if rest.contains(&format!("\"{member}\""))
-                        || rest.contains(&format!("\"{want_class}.{member}\""))
-                    {
-                        hits.push(Hit {
-                            pos,
-                            resolved: false,
-                            via: "",
-                            hint: hint::DYNAMIC_STRING,
-                        });
-                    }
-                }
-            }
-
-            // 5. The member name anywhere inside a string literal (the
-            // decoy/eval rule: a quoted occurrence is never a resolved
-            // edge; reported unresolved so nothing is silently dropped).
-            let mut from = 0usize;
-            while let Some(i) = hay[from..].find(member) {
-                let pos = from + i;
-                from = pos + member.len();
-                if !boundary_before(hay, pos) || !boundary_at(hay, pos + member.len()) {
-                    continue;
-                }
-                if text.region(pos) == "string" {
                     hits.push(Hit {
                         pos,
                         resolved: false,
@@ -824,32 +803,52 @@ fn scan_class(
                 }
             }
         }
-        None => {
-            // Class target: any `..` inside the class's own docs references
-            // INTO the class (member unspecified) — resolved self edges.
-            let mut i = 0usize;
-            while let Some(p) = find_selfdot(hay, i) {
-                i = p + 2;
-                if text.region(p) != "code" {
-                    continue;
-                }
-                let in_owner = ctx.owner_class.as_deref().is_some_and(|oc| {
-                    oc.eq_ignore_ascii_case(want_class) || ctx.owner_extends_target
+
+        // 5. The member name anywhere inside a string literal (the
+        // decoy/eval rule: a quoted occurrence is never a resolved
+        // edge; reported unresolved so nothing is silently dropped).
+        let mut from = 0usize;
+        while let Some(i) = hay[from..].find(member) {
+            let pos = from + i;
+            from = pos + member.len();
+            if !boundary_before(hay, pos) || !boundary_at(hay, pos + member.len()) {
+                continue;
+            }
+            if text.region(pos) == "string" {
+                hits.push(Hit {
+                    pos,
+                    resolved: false,
+                    via: "",
+                    hint: hint::DYNAMIC_STRING,
                 });
-                if in_owner {
-                    hits.push(Hit {
-                        pos: p,
-                        resolved: true,
-                        via: via::SELF_CALL,
-                        hint: "",
-                    });
-                }
+            }
+        }
+    } else {
+        // Class target: any `..` inside the class's own docs references
+        // INTO the class (member unspecified) — resolved self edges.
+        let mut i = 0usize;
+        while let Some(p) = find_selfdot(hay, i) {
+            i = p + 2;
+            if text.region(p) != "code" {
+                continue;
+            }
+            let in_owner = ctx
+                .owner_class
+                .as_deref()
+                .is_some_and(|oc| oc.eq_ignore_ascii_case(want_class) || ctx.owner_extends_target);
+            if in_owner {
+                hits.push(Hit {
+                    pos: p,
+                    resolved: true,
+                    via: via::SELF_CALL,
+                    hint: "",
+                });
             }
         }
     }
 }
 
-/// `via` label for a resolved call-site line: trigger body / SqlComputeCode
+/// `via` label for a resolved call-site line: trigger body / `SqlComputeCode`
 /// override the plain class call.
 fn via_for_line(text: &DocText, tracker: &MemberTracker, pos: usize) -> &'static str {
     let (li, _) = text.locate(pos);
@@ -1313,7 +1312,12 @@ mod tests {
     use serde_json::json;
 
     fn doc(lines: &[&str]) -> DocText {
-        DocText::new(&lines.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+        DocText::new(
+            &lines
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect::<Vec<_>>(),
+        )
     }
 
     fn member_target() -> RefTarget {
@@ -1440,7 +1444,7 @@ mod tests {
 
     /// E6 self-call inside the class resolves; the prefix-collision decoy
     /// (`TgtMethodX`) never hits; the bare word in a string is unresolved
-    /// (dynamic_string) — zero resolved decoy edges.
+    /// (`dynamic_string`) — zero resolved decoy edges.
     #[test]
     fn scanner_self_prefix_and_string() {
         let t = member_target();
@@ -1463,7 +1467,7 @@ mod tests {
         assert_eq!(d.locate(un[0].pos).0, 4);
     }
 
-    /// E7 (trigger body) → via=trigger; E8 (SqlComputeCode) → via=computed.
+    /// E7 (trigger body) → via=trigger; E8 (`SqlComputeCode`) → via=computed.
     #[test]
     fn scanner_trigger_and_computed() {
         let t = member_target();
@@ -1485,7 +1489,7 @@ mod tests {
         assert!(resolved.contains(&(4, via::COMPUTED)), "{resolved:?}");
     }
 
-    /// E10: `o.TgtMethod(` is an oref form — unresolved(oref_call).
+    /// E10: `o.TgtMethod(` is an oref form — `unresolved(oref_call)`.
     #[test]
     fn scanner_oref_call() {
         let t = member_target();
@@ -1552,7 +1556,7 @@ mod tests {
         assert_eq!(d.locate(hits[0].pos).0, 0);
     }
 
-    /// Class target: ##class(Foo).%New() and `..`-self inside Foo both
+    /// Class target: ##`class(Foo).%New()` and `..`-self inside Foo both
     /// resolve.
     #[test]
     fn scanner_class_target() {

@@ -2122,12 +2122,18 @@ fn census_zero(m: &mut Mcp) -> bool {
         "execute_sql",
         json!({"query": "SELECT Name FROM %Dictionary.ClassDefinition WHERE Name LIKE 'FProbeG%'"}),
     );
-    let classes = !is_err && parsed["rows"].as_array().is_some_and(|a| a.is_empty());
+    let classes = !is_err
+        && parsed["rows"]
+            .as_array()
+            .is_some_and(std::vec::Vec::is_empty);
     let (is_err3, parsed3, _) = m.call(
         "execute_sql",
         json!({"query": "SELECT Name FROM %Library.RoutineMgr_StudioOpenDialog('FProbeG*',1,1,1,1,1)"}),
     );
-    let docs_gone = !is_err3 && parsed3["rows"].as_array().is_some_and(|a| a.is_empty());
+    let docs_gone = !is_err3
+        && parsed3["rows"]
+            .as_array()
+            .is_some_and(std::vec::Vec::is_empty);
     classes && docs_gone
 }
 
@@ -2267,7 +2273,7 @@ fn find_references_live_recall() {
         }),
         || format!("class→super edge: {rc}"),
     );
-    let cedges = rc["edges"].as_array().map(Vec::len).unwrap_or(0);
+    let cedges = rc["edges"].as_array().map_or(0, Vec::len);
     c.check(cedges >= 4, || format!("class edges >=4: {rc}"));
 
     // --- class_members census fields on the fixture class
