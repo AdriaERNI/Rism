@@ -803,6 +803,7 @@ async fn subclasses_sql_shape_contains_walk() {
 // re-triggered — the empty-read branch is pinned separately (U19). The
 // census tables (Query/Trigger/Index) ride the same Origin filter rule.
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // one linear mock pin list: table -> SQL shape
 async fn members_sql_shape_origin_filter() {
     let mock = MockServer::start().await;
     Mock::given(method("POST"))
@@ -1213,6 +1214,7 @@ async fn refs_sql_shapes_member_and_class_targets() {
 // once, classify. Fixture doc shapes come back through the doc endpoint
 // and the edge buckets must match the frozen semantics.
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // one linear end-to-end fixture: mock -> classify -> assert buckets
 async fn refs_end_to_end_classification() {
     let mock = MockServer::start().await;
     // existence: the class exists

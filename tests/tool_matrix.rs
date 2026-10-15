@@ -2070,7 +2070,9 @@ fn load_fprobeg(c: &mut Case, m: &mut Mcp) {
         // (`FProbeG.EdgeR`) stores as ERROR #16021. Normalize to the
         // header form — the body text the search engine indexes is then
         // byte-identical to the measurement set.
-        if name.ends_with(".mac") && !content.first().is_some_and(|l| l.starts_with("ROUTINE ")) {
+        if name.to_ascii_lowercase().ends_with(".mac")
+            && !content.first().is_some_and(|l| l.starts_with("ROUTINE "))
+        {
             content.insert(0, format!("ROUTINE {}", name.trim_end_matches(".mac")));
         }
         c.ok(
@@ -2139,6 +2141,7 @@ fn census_zero(m: &mut Mcp) -> bool {
 
 #[test]
 #[ignore = "requires live IRIS (RISM_IRIS_BASE_URL + config.toml)"]
+#[allow(clippy::too_many_lines)] // one linear recall protocol: load, probe every edge class, time, tear down
 fn find_references_live_recall() {
     // L6 — the frozen recall table (G_SPEC §5) on the SAME fixture set the
     // baseline was recorded against; every number lands in stdout as one
@@ -2311,15 +2314,10 @@ fn find_references_live_recall() {
         timings.push(ms);
     }
     timings.sort_unstable();
-    let mut sys_ms = 0u128;
-    {
-        let (rs, ms) = run!(
-            "find_references",
-            json!({"target": "FProbeG.Target.TgtMethod", "namespace": "USER", "include_system": true}),
-        );
-        sys_ms = ms;
-        let _ = rs;
-    }
+    let (_rs, sys_ms) = run!(
+        "find_references",
+        json!({"target": "FProbeG.Target.TgtMethod", "namespace": "USER", "include_system": true}),
+    );
     println!(
         "PROOF-G-TIMING {}",
         json!({"member_runs_ms": timings, "p95_ms": timings[2.min(timings.len()-1)],
