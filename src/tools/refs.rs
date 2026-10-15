@@ -922,28 +922,17 @@ async fn super_of(client: &IrisClient, ns: &str, class: &str) -> Result<Vec<Stri
         .collect())
 }
 
-/// SQL narrowing: classes carrying the needle inside embedded-code columns
-/// the literal engine reports inconsistently — property `SqlComputeCode` and
-/// trigger `Code` (both verified live; a call site there is still source
-/// text and must never depend on the search engine surfacing it). The
-/// needle interpolated into a quoted literal passed the name guards first.
-async fn sql_candidate_parents(client: &IrisClient, ns: &str, needle: &str) -> Result<Vec<String>> {
-    let mut out = Vec::new();
-    for sql in [
-        format!(
-            "SELECT DISTINCT parent FROM %Dictionary.CompiledProperty WHERE SqlComputeCode [ '{needle}'"
-        ),
-        format!("SELECT DISTINCT parent FROM %Dictionary.CompiledTrigger WHERE Code [ '{needle}'"),
-    ] {
-        for row in rows(client, ns, &sql).await? {
-            if let Some(p) = row.get("parent").and_then(Value::as_str) {
-                if valid_class_name(p) {
-                    out.push(p.to_string());
-                }
-            }
-        }
-    }
-    Ok(out)
+/// One SQL narrowing query: class parents carrying `needle` inside an
+/// embedded-code column. The needle interpolated into the quoted literal
+/// passed the name guards first, so it can only be word chars/dots.
+async fn sql_parent_query(client: &IrisClient, ns: &str, sql: &str) -> Result<Vec<String>> {
+    Ok(rows(client, ns, sql)
+        .await?
+        .iter()
+        .filter_map(|r| r.get("parent").and_then(Value::as_str))
+        .filter(|p| valid_class_name(p))
+        .map(str::to_string)
+        .collect())
 }
 
 /// Class a doc name stems from: `Foo.Bar.cls` → `Foo.Bar`; routines,
@@ -966,7 +955,10 @@ pub async fn find_references(
     client: &IrisClient,
     args: &FindReferencesArgs,
 ) -> Result<FindReferencesResult> {
-    // Guards BEFORE HTTP: the target grammar, then the namespace.
+    // Existence check (dictionary truth): `A.B` may parse as Member under
+    // the last-dot rule while actually being a two-package class name — if
+    // the left part has no row and the WHOLE string does, re-read it as a
+    // class target (one extra dictionary query, only on that shape).
     let mut target = parse_ref_target(&args.target)?;
     let ns = args
         .namespace
@@ -977,11 +969,6 @@ pub async fn find_references(
             "invalid namespace (URL path guard): {ns}"
         )));
     }
-
-    // Existence check (dictionary truth): `A.B` may parse as Member under
-    // the last-dot rule while actually being a two-package class name — if
-    // the left part has no row and the WHOLE string does, re-read it as a
-    // class target (one extra dictionary query, only on that shape).
     match target.clone() {
         RefTarget::Routine(_) => {}
         RefTarget::Class(c) => {
@@ -990,13 +977,17 @@ pub async fn find_references(
             }
         }
         RefTarget::Member { class, member } => {
-            if !class_exists(client, &ns, &class).await? {
-                let whole = format!("{class}.{member}");
-                if valid_class_path(&whole) && class_exists(client, &ns, &whole).await? {
-                    target = RefTarget::Class(whole);
-                } else {
-                    return Err(crate::tools::graph::not_found_msg(&class, &ns));
-                }
+            let whole = format!("{class}.{member}");
+            let (class_row, whole_row) = futures_util::future::join(
+                class_exists(client, &ns, &class),
+                class_exists(client, &ns, &whole),
+            )
+            .await;
+            if class_row? {
+            } else if valid_class_path(&whole) && whole_row? {
+                target = RefTarget::Class(whole);
+            } else {
+                return Err(crate::tools::graph::not_found_msg(&class, &ns));
             }
         }
     }
@@ -1012,23 +1003,41 @@ pub async fn find_references(
     let mut unresolved: Vec<UnresolvedRef> = Vec::new();
     let mut truncated = false;
 
-    // Stage 1a — literal `action/search` narrowing on the needle (default
-    // masks, which now include `*.inc`; `.int` rides `include_generated`).
-    let search = search_code(
-        client,
-        &SearchCodeArgs {
-            query: target.needle().to_string(),
-            namespace: Some(ns.clone()),
-            documents: None,
-            regex: Some(false),
-            include_system: Some(include_system),
-            include_generated: Some(include_generated),
-            case_sensitive: None,
-            whole_word: None,
-            max_results: Some(SEARCH_DOC_LIMIT),
-        },
+    // Stage 1a/1b (parallel) — literal `action/search` narrowing on the
+    // needle (default masks, which now include `*.inc`; `.int` rides
+    // `include_generated`) + the two embedded-code SQL narrowing queries.
+    // The `[` scans run server-side and the property one measured ~0.9 s
+    // cold, so they overlap the search instead of adding to it.
+    let needle = target.needle().to_string();
+    let class_target = matches!(target, RefTarget::Class(_));
+    let (search_res, prop_res, trig_res) = futures_util::future::join3(
+        search_code(
+            client,
+            &SearchCodeArgs {
+                query: needle.clone(),
+                namespace: Some(ns.clone()),
+                documents: None,
+                regex: Some(false),
+                include_system: Some(include_system),
+                include_generated: Some(include_generated),
+                case_sensitive: None,
+                whole_word: None,
+                max_results: Some(SEARCH_DOC_LIMIT),
+            },
+        ),
+        sql_parent_query(
+            client,
+            &ns,
+            &format!("SELECT DISTINCT parent FROM %Dictionary.CompiledProperty WHERE SqlComputeCode [ '{needle}'"),
+        ),
+        sql_parent_query(
+            client,
+            &ns,
+            &format!("SELECT DISTINCT parent FROM %Dictionary.CompiledTrigger WHERE Code [ '{needle}'"),
+        ),
     )
-    .await?;
+    .await;
+    let search = search_res?;
     if search.truncated {
         truncated = true;
     }
@@ -1036,43 +1045,42 @@ pub async fn find_references(
     for d in &search.results {
         candidates.insert(d.doc.clone());
     }
-
-    // Stage 1b — SQL narrowing + dictionary edges.
     if let Some(class) = target.class() {
         candidates.insert(format!("{class}.cls")); // the target's own doc:
         // `..`-self and the member definition live there.
-        for p in sql_candidate_parents(client, &ns, target.needle()).await? {
+        for p in prop_res?.into_iter().chain(trig_res?) {
             candidates.insert(format!("{p}.cls"));
         }
-        if matches!(target, RefTarget::Class(_)) {
-            // Extends/Super rows are dictionary edges (via=super).
-            let sql = format!(
-                "SELECT Name, Super FROM %Dictionary.ClassDefinition WHERE Super [ '{class}' ORDER BY Name"
-            );
-            let outcome = sqlapi::query(client, &ns, &sql, client.settings().sql_max_rows).await?;
-            if outcome.has_more {
-                truncated = true;
+    }
+    if class_target {
+        let class = target.class().unwrap_or_default();
+        // Extends/Super rows are dictionary edges (via=super).
+        let sql = format!(
+            "SELECT Name, Super FROM %Dictionary.ClassDefinition WHERE Super [ '{class}' ORDER BY Name"
+        );
+        let outcome = sqlapi::query(client, &ns, &sql, client.settings().sql_max_rows).await?;
+        if outcome.has_more {
+            truncated = true;
+        }
+        for row in &outcome.rows {
+            let Some(name) = row.get("Name").and_then(Value::as_str) else {
+                continue;
+            };
+            let super_raw = row
+                .get("Super")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            if !super_raw.split(',').map(str::trim).any(|s| s == class) {
+                continue; // `[` is substring-based: exact-element guard
             }
-            for row in &outcome.rows {
-                let Some(name) = row.get("Name").and_then(Value::as_str) else {
-                    continue;
-                };
-                let super_raw = row
-                    .get("Super")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                if !super_raw.split(',').map(str::trim).any(|s| s == class) {
-                    continue; // `[` is substring-based: exact-element guard
-                }
-                edges.push(RefEdge {
-                    doc: format!("{name}.cls"),
-                    member: None,
-                    line: None,
-                    text: clip(&format!("Class {name} Extends {super_raw}")),
-                    via: via::SUPER.to_string(),
-                });
-            }
+            edges.push(RefEdge {
+                doc: format!("{name}.cls"),
+                member: None,
+                line: None,
+                text: clip(&format!("Class {name} Extends {super_raw}")),
+                via: via::SUPER.to_string(),
+            });
         }
     }
 
@@ -1199,7 +1207,10 @@ pub async fn find_references(
             let ms = search_code(
                 client,
                 &SearchCodeArgs {
-                    query: format!("$$$ {}", u.name),
+                    // Bare name: the `$%%` prefix is search-engine-hostile
+                    // and the define line carries it either way; the
+                    // `$$$NAME =` shape filter below keeps only definitions.
+                    query: u.name.clone(),
                     namespace: Some(ns.clone()),
                     documents: Some(vec!["*.mac".into(), "*.inc".into()]),
                     regex: Some(false),
