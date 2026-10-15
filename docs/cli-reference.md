@@ -32,7 +32,7 @@ Flags: `--max-rows <N>` (default 1000).
 
 ### `rism search <PATTERN>`
 Server-side text/regex search over source documents (`*.cls`, `*.mac`,
-`*.int` unless masked). Regex by default; `--no-regex` switches to a
+`*.int`, `*.inc` unless masked). Regex by default; `--no-regex` switches to a
 literal full-text scan (body text — comments, string literals — is only
 visible in this mode on IRIS 2025.3; regex mode scans member/attribute
 names — see [Code Search](code-search.md)).
@@ -58,7 +58,8 @@ Bounded BFS over `%Dictionary` Super edges (`depth` default
 
 ### `rism graph members <CLASS> [--kind K] [--include-inherited]`
 Own (or inherited-inclusive) compiled members. `--kind` ∈ `all`
-(default) / `methods` / `properties` / `parameters` / `xdata`.
+(default) / `methods` / `properties` / `parameters` / `xdata` /
+`queries` / `triggers` / `indices` / `procedures`.
 
 ### `rism graph deps <CLASS> [--direction D] [--depth N]`
 Dependency edges: `--direction` ∈ `depends_on` / `used_by` / `both`
@@ -66,9 +67,20 @@ Dependency edges: `--direction` ∈ `depends_on` / `used_by` / `both`
 max 64). Class names pass the same allowlist as the MCP tools — an
 unsafe name is refused before any request.
 
+### `rism graph refs <TARGET> [--namespace NS] [--system] [--generated] [--max N]`
+Call-graph references to `Package.Class.Member`, `Package.Class`, or
+`^Routine` (JSON mirrors `find_references`). The table shows
+`doc(member:line) via — text` per resolved edge and flags the
+`unresolved` bucket with `?hint`. `--system` widens the scan to system
+docs (slow — measured above the 2 s gate, which is why it is opt-in);
+`--generated` adds compiled `.int` docs. Names pass the same allowlists
+as the MCP tool — an unsafe name is refused with zero HTTP calls.
+
 ```bash
 rism graph subclasses EnsLib.HL7.Adapter.28 --depth 3 --format json
 rism graph deps MyApp.Service --direction used_by --depth 2
+rism graph refs MyApp.Service.DoWork
+rism graph refs ^MyRoutine --format json
 ```
 
 ## Documents
