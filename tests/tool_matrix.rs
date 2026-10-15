@@ -2036,3 +2036,294 @@ fn search_regex_and_case_flags_live() {
     delete_fixtures(&mut c, &mut m, &[cls]);
     c.finish();
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// 16. find_references — planted-edge recall vs the recorded baseline
+// ─────────────────────────────────────────────────────────────────────
+
+/// Fixture docs (the measurement set the recall table was frozen against).
+fn fprobeg_fixtures() -> Vec<(&'static str, Vec<String>)> {
+    let read = |f: &str| -> Vec<String> {
+        let p = format!("testing-notes/fixtures-g/{f}");
+        std::fs::read_to_string(&p)
+            .unwrap_or_else(|e| panic!("fixture {p} must exist: {e}"))
+            .lines()
+            .map(str::to_string)
+            .collect()
+    };
+    vec![
+        ("FProbeG.Macros.inc", read("FProbeG.Macros.inc")),
+        ("FProbeG.Mid.mac", read("FProbeG.Mid.mac")),
+        ("FProbeG.EdgeR.mac", read("FProbeG.EdgeR.mac")),
+        ("FProbeG.Target.cls", read("FProbeG.Target.cls")),
+        ("FProbeG.Caller.cls", read("FProbeG.Caller.cls")),
+        ("FProbeG.Sub.cls", read("FProbeG.Sub.cls")),
+    ]
+}
+
+fn load_fprobeg(c: &mut Case, m: &mut Mcp) {
+    for (name, mut content) in fprobeg_fixtures() {
+        // The doc API requires the ROUTINE header line; a bare label
+        // (`FProbeG.EdgeR`) stores as ERROR #16021. Normalize to the
+        // header form — the body text the search engine indexes is then
+        // byte-identical to the measurement set.
+        if name.ends_with(".mac")
+            && !content.first().is_some_and(|l| l.starts_with("ROUTINE "))
+        {
+            content.insert(0, format!("ROUTINE {}", name.trim_end_matches(".mac")));
+        }
+        c.ok(
+            m,
+            "put_document",
+            json!({"name": name, "content": content, "ignore_conflict": true}),
+        );
+    }
+    c.ok(
+        m,
+        "compile_documents",
+        json!({"names": ["FProbeG.Target.cls", "FProbeG.Caller.cls", "FProbeG.Sub.cls"], "flags": "cku"}),
+    );
+}
+
+fn delete_fprobeg(c: &mut Case, m: &mut Mcp) {
+    for (name, _) in fprobeg_fixtures() {
+        let _ = m.call("delete_document", json!({"name": name}));
+    }
+    // macros stored under the .mac quirk name on 2025.3
+    let _ = m.call("delete_document", json!({"name": "FProbeG.Macros.mac"}));
+    for n in [
+        "FProbeG.Target.cls",
+        "FProbeG.Caller.cls",
+        "FProbeG.Sub.cls",
+        "FProbeG.Mid.mac",
+        "FProbeG.EdgeR.mac",
+        "FProbeG.Macros.inc",
+    ] {
+        let _ = m.call("delete_document", json!({"name": n}));
+    }
+    // Compiled member routines/classes can outlive the doc delete; drop
+    // the class definitions themselves, then verify via %Dictionary.
+    for cls in ["FProbeG.Sub", "FProbeG.Caller", "FProbeG.Target"] {
+        let (is_err, _, text) = m.call(
+            "execute_command",
+            json!({"command": format!("do ##class(%Dictionary.ClassDefinition).%DeleteId(\"{cls}\") write 1")}),
+        );
+        if is_err {
+            c.failures.push(format!("CLEANUP: drop {cls}: {text}"));
+        }
+    }
+}
+
+fn census_zero(m: &mut Mcp) -> bool {
+    // Class rows via the dictionary; docs/routines via the Studio file
+    // list (no RoutineDefinition table exists on 2025.3 — verified).
+    let (is_err, parsed, _) = m.call(
+        "execute_sql",
+        json!({"query": "SELECT Name FROM %Dictionary.ClassDefinition WHERE Name LIKE 'FProbeG%'"}),
+    );
+    let classes = !is_err && parsed["rows"].as_array().is_some_and(|a| a.is_empty());
+    let (is_err3, parsed3, _) = m.call(
+        "execute_sql",
+        json!({"query": "SELECT Name FROM %Library.RoutineMgr_StudioOpenDialog('FProbeG*',1,1,1,1,1)"}),
+    );
+    let docs_gone = !is_err3 && parsed3["rows"].as_array().is_some_and(|a| a.is_empty());
+    classes && docs_gone
+}
+
+#[test]
+#[ignore = "requires live IRIS (RISM_IRIS_BASE_URL + config.toml)"]
+fn find_references_live_recall() {
+    // L6 — the frozen recall table (G_SPEC §5) on the SAME fixture set the
+    // baseline was recorded against; every number lands in stdout as one
+    // JSON line for the proof ledger. Fixtures deleted + census verified 0
+    // on every exit path.
+    let mut m = Mcp::spawn();
+    let mut c = Case::new();
+    delete_fprobeg(&mut c, &mut m); // pre-clean stale leftovers
+    load_fprobeg(&mut c, &mut m);
+
+    macro_rules! run {
+        ($tool:expr, $args:expr $(,)?) => {{
+            let t0 = std::time::Instant::now();
+            let (is_err, parsed, text) = m.call($tool, $args);
+            let ms = t0.elapsed().as_millis();
+            if is_err {
+                c.failures.push(format!(
+                    "{} errored: {}",
+                    $tool,
+                    text.chars().take(300).collect::<String>()
+                ));
+            }
+            (parsed, ms)
+        }};
+    }
+
+    // --- member query
+    let (r, ms_member) = run!(
+        "find_references",
+        json!({"target": "FProbeG.Target.TgtMethod", "namespace": "USER"}),
+    );
+    let edge = |doc: &str, via: &str| -> bool {
+        r["edges"].as_array().is_some_and(|a| {
+            a.iter()
+                .any(|e| e["doc"] == json!(doc) && e["via"] == json!(via))
+        })
+    };
+    let unres = |doc: &str, hint: &str| -> bool {
+        r["unresolved"].as_array().is_some_and(|a| {
+            a.iter()
+                .any(|u| u["doc"] == json!(doc) && u["hint"] == json!(hint))
+        })
+    };
+    // E1 resolved (Caller ##class), E7 resolved trigger, E8 resolved
+    // computed, E6 resolved self inside Target.
+    c.check(edge("FProbeG.Caller.cls", "class_call"), || {
+        format!("E1: {r}")
+    });
+    c.check(edge("FProbeG.Target.cls", "trigger"), || format!("E7: {r}"));
+    c.check(edge("FProbeG.Target.cls", "computed"), || {
+        format!("E8: {r}")
+    });
+    c.check(edge("FProbeG.Target.cls", "self_call"), || {
+        format!("E6: {r}")
+    });
+    // E2: the .mac ##class edge (search may present it as .mac doc).
+    let e2 = r["edges"].as_array().is_some_and(|a| {
+        a.iter().any(|e| {
+            e["doc"]
+                .as_str()
+                .is_some_and(|d| d.starts_with("FProbeG.EdgeR"))
+                && e["via"] == json!("class_call")
+        })
+    });
+    c.check(e2, || format!("E2: {r}"));
+    // E4 + E5 unresolved(dynamic_string) on Caller (a quoted member name —
+    // $zobjmethod or an assembled eval string — is dynamic_string by the
+    // §2 hint rules), E10 unresolved(oref_call) on Sub, E9 macro hint.
+    let e45 = r["unresolved"].as_array().is_some_and(|a| {
+        a.iter()
+            .filter(|u| {
+                u["doc"] == json!("FProbeG.Caller.cls") && u["hint"] == json!("dynamic_string")
+            })
+            .count()
+            >= 2
+    });
+    c.check(e45, || format!("E4+E5: {r}"));
+    c.check(unres("FProbeG.Sub.cls", "oref_call"), || {
+        format!("E10: {r}")
+    });
+    let e9 = r["unresolved"].as_array().is_some_and(|a| {
+        a.iter().any(|u| {
+            u["hint"] == json!("macro")
+                && u["doc"]
+                    .as_str()
+                    .is_some_and(|d| d.contains("FProbeG.Macros"))
+        })
+    }) || unres("FProbeG.EdgeR.mac", "macro")
+        || unres("FProbeG.Macros.mac", "macro")
+        || unres("FProbeG.Macros.inc", "macro");
+    c.check(e9, || format!("E9: {r}"));
+    // ≥9/10 docs surfaced overall + the decoy is never a RESOLVED edge.
+    let surfaced = r["docs_scanned"].as_u64().unwrap_or(0);
+    c.check(surfaced >= 4, || format!("docs_scanned: {r}"));
+    let decoy_resolved = r["edges"].as_array().is_some_and(|a| {
+        a.iter().any(|e| {
+            e["text"]
+                .as_str()
+                .is_some_and(|t| t.contains("is the name we are hunting"))
+        })
+    });
+    c.check(!decoy_resolved, || {
+        format!("decoy must never be resolved: {r}")
+    });
+
+    // --- routine query (E3)
+    let (r3, ms_routine) = run!(
+        "find_references",
+        json!({"target": "^FProbeG.Mid", "namespace": "USER"}),
+    );
+    c.check(
+        r3["edges"].as_array().is_some_and(|a| {
+            a.iter().any(|e| {
+                e["via"] == json!("routine_do")
+                    && e["doc"]
+                        .as_str()
+                        .is_some_and(|d| d.contains("FProbeG.EdgeR"))
+            })
+        }),
+        || format!("E3: {r3}"),
+    );
+
+    // --- class query (E1 E2 E6 + super edge Sub)
+    let (rc, ms_class) = run!(
+        "find_references",
+        json!({"target": "FProbeG.Target", "namespace": "USER"}),
+    );
+    c.check(
+        rc["edges"].as_array().is_some_and(|a| {
+            a.iter()
+                .any(|e| e["via"] == json!("super") && e["doc"] == json!("FProbeG.Sub.cls"))
+        }),
+        || format!("class→super edge: {rc}"),
+    );
+    let cedges = rc["edges"].as_array().map(Vec::len).unwrap_or(0);
+    c.check(cedges >= 4, || format!("class edges >=4: {rc}"));
+
+    // --- class_members census fields on the fixture class
+    let (cm, ms_members) = run!(
+        "class_members",
+        json!({"class": "FProbeG.Target", "namespace": "USER"}),
+    );
+    c.check(
+        cm["queries"]
+            .as_array()
+            .is_some_and(|a| a.iter().any(|q| q["name"] == json!("QAll"))),
+        || format!("census queries: {cm}"),
+    );
+    c.check(
+        cm["triggers"].as_array().is_some_and(|a| {
+            a.iter()
+                .any(|t| t["name"] == json!("trg1") && !t["time"].as_str().unwrap_or("").is_empty())
+        }),
+        || format!("census triggers (_Time column): {cm}"),
+    );
+    c.check(
+        cm["indices"]
+            .as_array()
+            .is_some_and(|a| a.iter().any(|i| i["name"] == json!("idx1"))),
+        || format!("census indices: {cm}"),
+    );
+
+    // --- timing (p95 gate: 3 runs of the member query)
+    let mut timings = vec![ms_member];
+    for _ in 0..2 {
+        let (_, ms) = run!(
+            "find_references",
+            json!({"target": "FProbeG.Target.TgtMethod", "namespace": "USER"}),
+        );
+        timings.push(ms);
+    }
+    timings.sort_unstable();
+    let mut sys_ms = 0u128;
+    {
+        let (rs, ms) = run!(
+            "find_references",
+            json!({"target": "FProbeG.Target.TgtMethod", "namespace": "USER", "include_system": true}),
+        );
+        sys_ms = ms;
+        let _ = rs;
+    }
+    println!(
+        "PROOF-G-TIMING {}",
+        json!({"member_runs_ms": timings, "p95_ms": timings[2.min(timings.len()-1)],
+               "routine_ms": ms_routine, "class_ms": ms_class, "members_ms": ms_members,
+               "include_system_ms": sys_ms})
+    );
+
+    // --- teardown + census-zero check
+    delete_fprobeg(&mut c, &mut m);
+    c.check(census_zero(&mut m), || {
+        "FProbeG census must be 0 after teardown".to_string()
+    });
+    c.finish();
+}
