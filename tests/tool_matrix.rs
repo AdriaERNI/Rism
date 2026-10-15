@@ -1630,9 +1630,12 @@ fn joint_multibyte_straddle_holds_on_both_doors() {
 // ─────────────────────────────────────────────────────────────────────
 
 /// Process-unique suffix for live fixtures (TASK rule: never assume the
-/// corpus is free of a name we might create).
+/// corpus is free of a name we might create). Monotonic counter too: the
+/// matrix runs in parallel inside ONE process, so `pid` alone collides.
 fn uniq() -> String {
-    format!("{}", std::process::id())
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{}{:04}", std::process::id(), n % 10_000)
 }
 
 fn graph_class_src(name: &str, super_: &str, extra: &[String]) -> Vec<String> {
@@ -2067,9 +2070,7 @@ fn load_fprobeg(c: &mut Case, m: &mut Mcp) {
         // (`FProbeG.EdgeR`) stores as ERROR #16021. Normalize to the
         // header form — the body text the search engine indexes is then
         // byte-identical to the measurement set.
-        if name.ends_with(".mac")
-            && !content.first().is_some_and(|l| l.starts_with("ROUTINE "))
-        {
+        if name.ends_with(".mac") && !content.first().is_some_and(|l| l.starts_with("ROUTINE ")) {
             content.insert(0, format!("ROUTINE {}", name.trim_end_matches(".mac")));
         }
         c.ok(
