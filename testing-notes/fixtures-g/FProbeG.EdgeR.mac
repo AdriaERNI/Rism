@@ -1,0 +1,11 @@
+Include FProbeG.Macros
+FProbeG.EdgeR
+	// E3: Do into a routine
+	Do ^FProbeG.Mid
+	// E2: ##class literal in a .mac routine
+	set y = ##class(FProbeG.Target).TgtMethod(3)
+	// E9: macro-expanded call (see FProbeG.Macros.inc)
+	set z = $$$FPROBEGCALL
+	// decoy: plain word, not a call
+	write "TgtMethod is the name we are hunting",!
+	quit
