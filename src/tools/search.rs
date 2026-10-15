@@ -12,7 +12,7 @@ use crate::tools::names::valid_namespace;
 /// Default document masks when the caller does not choose any. `*.inc`
 /// joins the set: macro `$def` definitions live in include docs and were a
 /// silent blind spot under the old three-mask default (measured recall,
-/// G_RESEARCH baseline row C). **Behavior change:** `search_code` calls
+/// `G_RESEARCH` baseline row C). **Behavior change:** `search_code` calls
 /// that relied on the old default may now return extra `.inc` matches with
 /// the same ranking. On 2025.3 a `.inc` created through the Atelier `doc`
 /// API is actually stored as `.mac`, so both masks are scanned.
