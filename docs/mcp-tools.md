@@ -176,7 +176,7 @@ Full DBGP control without leaving the API session — see [Debugger](debugger.md
 
 ### `monitor_system`
 Scored snapshot: overall + cpu/memory/disk/process, with units and per-category
-detail. `include_raw_metrics` returns the raw vector too.
+detail. `timestamp` is Unix epoch **seconds** (float, server clock). `include_raw_metrics` returns the raw vector too.
 
 ## Host file tools (agent-side)
 
