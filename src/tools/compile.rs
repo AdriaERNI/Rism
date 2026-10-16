@@ -47,6 +47,9 @@ pub async fn compile_documents(
     client: &IrisClient,
     args: &CompileDocumentsArgs,
 ) -> Result<CompileResult> {
+    for name in &args.names {
+        crate::tools::names::guard_document_name(name)?;
+    }
     let ns = args
         .namespace
         .clone()
