@@ -79,10 +79,28 @@ async fn check_bind_policy(cfg: &HttpServerConfig) -> crate::Result<()> {
     Err(Error::Config(format!(
         "refusing to bind the HTTP MCP door to '{host}' without --allow-all-interfaces: \
          this door has NO authentication - every host on the network could drive all \
-         25 Rism tools. Use --host 127.0.0.1, or pass --allow-all-interfaces to accept \
+         {count} Rism tools. Use --host 127.0.0.1, or pass --allow-all-interfaces to accept \
          that risk explicitly.",
-        host = cfg.host
+        host = cfg.host,
+        count = tool_surface_count()
     )))
+}
+
+/// Tool count exposed by this server, derived from the live router so the
+/// security banners can never under- or over-count the surface they warn
+/// about (the shell + debugger additions made a hardcoded count drift).
+fn tool_surface_count() -> usize {
+    RismMcp::tool_router().list_all().len()
+}
+
+/// The `--allow-all-interfaces` stderr warning text. Pure so tests can pin
+/// the named tool count against the router without binding a socket.
+fn exposure_warning(addr: &str, tool_count: usize) -> String {
+    format!(
+        "warning: rism MCP HTTP door bound to {addr} with NO authentication - every \
+         process that can reach this address can drive all {tool_count} tools (incl. shell \
+         and debugger). Do not expose it beyond a trusted network."
+    )
 }
 
 /// Resolve the transport for the `rism mcp` dispatch: a parsed CLI/env tier
@@ -123,13 +141,14 @@ pub async fn serve_http(settings: Settings, cfg: HttpServerConfig) -> anyhow::Re
     if cfg.allow_all_interfaces {
         // Loud opt-out banner (stderr; the actual port when ephemeral).
         eprintln!(
-            "warning: rism MCP HTTP door bound to {} with NO authentication - every \
-             process that can reach this address can drive all 25 tools (incl. shell \
-             and debugger). Do not expose it beyond a trusted network.",
-            match listener.local_addr() {
-                Ok(a) => display_addr(a),
-                Err(_) => bind.clone(),
-            }
+            "{}",
+            exposure_warning(
+                &match listener.local_addr() {
+                    Ok(a) => display_addr(a),
+                    Err(_) => bind.clone(),
+                },
+                tool_surface_count()
+            )
         );
     }
     serve_http_on(listener, settings, cfg.allow_all_interfaces).await
@@ -264,6 +283,44 @@ fn allowed_origins_for(addr: std::net::SocketAddr, all_interfaces: bool) -> Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn security_banners_name_the_live_tool_surface() {
+        // The auth-less-door warnings must never under-count what they
+        // expose: the number is derived from the router, not hardcoded,
+        // and no stale literal count survives in this module's source.
+        let live = tool_surface_count();
+        assert!(live > 0, "router must expose tools");
+        let warn = exposure_warning("0.0.0.0:3000", live);
+        assert!(
+            warn.contains(&format!("drive all {live} tools")),
+            "banner must name the live surface count: {warn}"
+        );
+        let src = include_str!("http.rs");
+        for count in [10usize, 15, 20, 25, 35] {
+            let stale = format!("{count} tools");
+            assert!(
+                !src.contains(stale.as_str()),
+                "http.rs must not hardcode a tool count ({stale})"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn bind_refusal_names_the_live_tool_surface() {
+        let cfg = HttpServerConfig {
+            host: "0.0.0.0".to_string(),
+            ..Default::default()
+        };
+        let msg = match check_bind_policy(&cfg).await {
+            Err(e) => e.to_string(),
+            Ok(()) => panic!("non-loopback without opt-out must be refused"),
+        };
+        assert!(
+            msg.contains(&format!("drive all {} Rism tools", tool_surface_count())),
+            "refusal must name the live surface count: {msg}"
+        );
+    }
 
     #[tokio::test]
     async fn loopback_bind_policy() {
