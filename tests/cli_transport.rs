@@ -199,3 +199,25 @@ fn named_loopback_host_binds_without_optout() {
         "a loopback name must never be told to opt out: {text}"
     );
 }
+
+#[test]
+fn exec_repl_refuses_hostile_namespace_before_the_server() {
+    // The interactive REPL resolves --namespace without a tool-Args guard
+    // chain, so it runs the canonical URL-path guard itself. With a dead
+    // server URL the ONLY possible failure is that client-side refusal —
+    // a dropped guard instead yields a connection error, making this red.
+    rism()
+        .args([
+            "--url",
+            "http://127.0.0.1:1",
+            "--namespace",
+            "US;ER",
+            "exec",
+        ])
+        .write_stdin("")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "invalid namespace (URL path guard)",
+        ));
+}
