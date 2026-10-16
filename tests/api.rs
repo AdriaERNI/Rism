@@ -1691,3 +1691,165 @@ async fn put_doc_surfaces_in_status_error() {
         "{err}"
     );
 }
+
+// R3 completion: the test-runner, background-job, and debugger doors resolve
+// a namespace the same way as the SQL/document doors and must refuse hostile
+// values client-side with ZERO HTTP before the server (or the debug agent)
+// sees them.
+async fn hostile_ns_calls_round2(
+    client: &IrisClient,
+    ns: &str,
+) -> Vec<(&'static str, rism::error::Result<()>)> {
+    vec![
+        (
+            "run_tests",
+            rism::tools::testing::run_tests(
+                client,
+                &rism::tools::testing::RunTestsArgs {
+                    test_class: "FProbeI_c.None".into(),
+                    test_method: None,
+                    namespace: Some(ns.into()),
+                    timeout_secs: None,
+                },
+            )
+            .await
+            .map(|_| ()),
+        ),
+        (
+            "list_tests",
+            rism::tools::testing::list_tests(
+                client,
+                &rism::tools::testing::ListTestsArgs {
+                    filter: None,
+                    namespace: Some(ns.into()),
+                },
+            )
+            .await
+            .map(|_| ()),
+        ),
+        (
+            "get_test_results",
+            rism::tools::testing::get_test_results(
+                client,
+                &rism::tools::testing::GetTestResultsArgs {
+                    test_class: None,
+                    max_runs: None,
+                    namespace: Some(ns.into()),
+                },
+            )
+            .await
+            .map(|_| ()),
+        ),
+        ("put_document", {
+            let name = "FProbeI_c.Doc.cls";
+            rism::tools::documents::put_document(
+                client,
+                &rism::tools::documents::PutDocumentArgs {
+                    name: name.into(),
+                    content: vec![("Class FProbeI_c.Doc extends %RegisteredObject".to_string())],
+                    ignore_conflict: false,
+                    namespace: Some(ns.into()),
+                    flags: None,
+                },
+            )
+            .await
+            .map(|_| ())
+        }),
+        (
+            "delete_document",
+            rism::tools::documents::delete_document(
+                client,
+                &rism::tools::documents::DeleteDocumentArgs {
+                    name: "FProbeI_c.Doc.cls".into(),
+                    namespace: Some(ns.into()),
+                },
+            )
+            .await
+            .map(|_| ()),
+        ),
+        (
+            "debug_start",
+            rism::tools::debugger::debug_start(
+                client,
+                &rism::tools::debugger::DebugStartArgs {
+                    target: "##class(FProbeI_c.Doc).M()".into(),
+                    stop_on_entry: None,
+                    breakpoints: None,
+                    namespace: Some(ns.into()),
+                },
+            )
+            .await
+            .map(|_| ()),
+        ),
+        (
+            "debug_attach",
+            rism::tools::debugger::debug_attach(
+                client,
+                &rism::tools::debugger::DebugAttachArgs {
+                    pid: 1,
+                    namespace: Some(ns.into()),
+                },
+            )
+            .await
+            .map(|_| ()),
+        ),
+    ]
+}
+
+#[tokio::test]
+async fn testing_documents_debug_doors_refuse_hostile_namespace_before_http() {
+    for ns in ["US;ER", "A' OR 1=1--", "../admin", "USER&x=1", ""] {
+        let mock = MockServer::start().await;
+        let client = client(&mock);
+        for (tool, res) in hostile_ns_calls_round2(&client, ns).await {
+            match res {
+                Err(rism::Error::Config(m)) => assert!(
+                    m.contains("invalid namespace (URL path guard)"),
+                    "{tool}/{ns:?}: wrong guard text: {m}"
+                ),
+                other => panic!("{tool} with ns {ns:?} must be a Config refusal, got {other:?}"),
+            }
+            assert_eq!(
+                mock.received_requests().await.unwrap().len(),
+                0,
+                "{tool}: zero HTTP for ns {ns:?}"
+            );
+        }
+    }
+}
+
+// The background-job door is synchronous; its guard must refuse before the
+// registry slot or the terminal session opens (a spawned job would hit the
+// wire). One job per hostile namespace, cancelled after a grace window in
+// case a regression ever lets one through.
+#[tokio::test]
+async fn start_job_refuses_hostile_namespace_without_touching_the_wire() {
+    for ns in ["US;ER", "../admin", ""] {
+        let mock = MockServer::start().await;
+        let client = client(&mock);
+        let res = rism::tools::jobs::start(
+            &client,
+            Some(ns.into()),
+            "write 1".into(),
+            std::time::Duration::from_secs(5),
+        );
+        match res {
+            Err(rism::Error::Config(m)) => assert!(
+                m.contains("invalid namespace (URL path guard)"),
+                "jobs/start/{ns:?}: wrong guard text: {m}"
+            ),
+            Ok(info) => {
+                let _ = rism::tools::jobs::cancel(&info.id);
+                panic!("jobs/start with ns {ns:?} must be a Config refusal, got {info:?}");
+            }
+            Err(other) => {
+                panic!("jobs/start with ns {ns:?} must be a Config refusal, got {other:?}")
+            }
+        }
+        assert_eq!(
+            mock.received_requests().await.unwrap().len(),
+            0,
+            "jobs/start: zero HTTP for ns {ns:?}"
+        );
+    }
+}

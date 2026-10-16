@@ -1235,6 +1235,23 @@ struct Fetched {
     text: DocText,
 }
 
+/// Server-sourced doc names are NOT trusted: a dictionary entry shaped
+/// like a traversal (or empty) must never reach the doc URL — the
+/// re-guard principle `graph.rs` applies to frontier names. Such entries
+/// are dropped here, before any fetch is even dispatched.
+fn fetchable_candidates(candidates: BTreeSet<String>) -> Vec<String> {
+    candidates
+        .into_iter()
+        .filter(|d| {
+            let ok = crate::tools::names::guard_document_name(d).is_ok();
+            if !ok {
+                tracing::debug!("skipping unsafely-named candidate doc: {d}");
+            }
+            ok
+        })
+        .collect()
+}
+
 /// Fetch each candidate ONCE (bounded concurrency); a doc that vanishes
 /// mid-scan is skipped, any other transport error aborts.
 ///
@@ -1246,20 +1263,13 @@ async fn fetch_candidates(
     candidates: BTreeSet<String>,
 ) -> Result<Vec<Fetched>> {
     let mut fetched: Vec<Fetched> = Vec::new();
-    let cand: Vec<String> = candidates.into_iter().collect();
+    let cand: Vec<String> = fetchable_candidates(candidates);
     for chunk in cand.chunks(FETCH_CONCURRENCY) {
-        let futs = chunk.iter().filter_map(|d| {
-            // Server-sourced doc names are NOT trusted: a dictionary entry
-            // shaped like a traversal must never reach the doc URL (the
-            // re-guard principle graph.rs applies to frontier names).
-            if crate::tools::names::guard_document_name(d).is_err() {
-                tracing::debug!("skipping unsafely-named candidate doc: {d}");
-                return None;
-            }
+        let futs = chunk.iter().map(|d| {
             let d = d.clone();
             let name = d.clone();
             let ns = ns.to_string();
-            Some(async move { (name, docapi::get_doc(client, &ns, &d).await) })
+            async move { (name, docapi::get_doc(client, &ns, &d).await) }
         });
         for (name, res) in futures_util::future::join_all(futs).await {
             match res {
@@ -1517,6 +1527,25 @@ mod tests {
                 .map(std::string::ToString::to_string)
                 .collect::<Vec<_>>(),
         )
+    }
+
+    #[test]
+    fn candidate_docs_with_unsafe_names_are_dropped_before_fetch() {
+        let kept = fetchable_candidates(BTreeSet::from([
+            "FProbe.Safe.cls".into(),
+            "/csp/user/menu.csp".into(), // slashes alone stay legal
+            "../%SYS/Evil.cls".into(),   // traversal — must never reach the URL
+            "a/..\\b.cls".into(),        // backslash traversal variant
+            String::new(),               // empty addresses the collection endpoint
+        ]));
+        assert_eq!(
+            kept,
+            vec![
+                "/csp/user/menu.csp".to_string(),
+                "FProbe.Safe.cls".to_string()
+            ],
+            "hostile candidate names must be filtered, safe ones kept sorted"
+        );
     }
 
     fn member_target() -> RefTarget {
