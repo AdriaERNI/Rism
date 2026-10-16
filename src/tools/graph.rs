@@ -129,19 +129,24 @@ pub async fn find_subclasses(
 
     'levels: for level in 1..=depth {
         let mut next: Vec<String> = Vec::new();
-        for f in &frontier {
-            // Server-sourced frontier names are NOT trusted: re-guard.
-            if !valid_class_name(f) {
-                tracing::warn!("dropping unsafe frontier class name: {f}");
-                continue;
-            }
+        // One query per frontier CHUNK, not per class: the walk's cost is
+        // the round trips, and a single-substring-predicate scan of the
+        // class dictionary is already ~15 ms (measured live on 2025.3) —
+        // one query per frontier made wide walks quadratic in latency.
+        // Names are pre-guarded, so the OR chain can never carry injection.
+        for chunk in &super_frontier_chunks(&frontier) {
             if queries >= FRONTIER_QUERY_BUDGET {
                 truncated = true;
                 break 'levels;
             }
             queries += 1;
+            let ors = chunk
+                .iter()
+                .map(|f| format!("Super [ '{f}'"))
+                .collect::<Vec<_>>()
+                .join(" OR ");
             let sql = format!(
-                "SELECT Name, Super FROM %Dictionary.ClassDefinition WHERE Super [ '{f}' ORDER BY Name"
+                "SELECT Name, Super FROM %Dictionary.ClassDefinition WHERE {ors} ORDER BY Name"
             );
             let outcome = sqlapi::query(client, &ns, &sql, client.settings().sql_max_rows).await?;
             if outcome.has_more {
@@ -157,7 +162,7 @@ pub async fn find_subclasses(
                     .unwrap_or_default()
                     .to_string();
                 // `[` is substring-based: require an EXACT superclass edge.
-                if !super_split_exact(&super_raw, f) {
+                if !chunk.iter().any(|f| super_split_exact(&super_raw, f)) {
                     continue;
                 }
                 if visited.iter().any(|v| v == name) {
@@ -907,18 +912,19 @@ async fn used_by_walk(
 
     'levels: for level in 1..=depth {
         let mut next: Vec<String> = Vec::new();
-        for f in &frontier {
-            if !valid_class_name(f) {
-                tracing::warn!("dropping unsafe frontier class name: {f}");
-                continue;
-            }
+        for chunk in &super_frontier_chunks(&frontier) {
             if queries >= FRONTIER_QUERY_BUDGET {
                 truncated = true;
                 break 'levels;
             }
             queries += 1;
+            let ors = chunk
+                .iter()
+                .flat_map(|f| [format!("DependsOn [ '{f}'"), format!("Super [ '{f}'")])
+                .collect::<Vec<_>>()
+                .join(" OR ");
             let sql = format!(
-                "SELECT Name, DependsOn, Super FROM %Dictionary.ClassDefinition WHERE DependsOn [ '{f}' OR Super [ '{f}' ORDER BY Name"
+                "SELECT Name, DependsOn, Super FROM %Dictionary.ClassDefinition WHERE {ors} ORDER BY Name"
             );
             let outcome = sqlapi::query(client, ns, &sql, client.settings().sql_max_rows).await?;
             if outcome.has_more {
@@ -934,7 +940,9 @@ async fn used_by_walk(
                     .unwrap_or_default();
                 let super_raw = row.get("Super").and_then(Value::as_str).unwrap_or_default();
                 // Exactness over the substring `[` match (both fields).
-                let exact_edge = super_split_exact(super_raw, f) || dep_split_exact(dep_raw, f);
+                let exact_edge = chunk
+                    .iter()
+                    .any(|f| super_split_exact(super_raw, f) || dep_split_exact(dep_raw, f));
                 if !exact_edge || visited.iter().any(|v| v == name) {
                     continue;
                 }
@@ -965,6 +973,27 @@ async fn used_by_walk(
 /// the `[` operator is substring-based, so verify an EXACT element edge.
 fn super_split_exact(super_raw: &str, f: &str) -> bool {
     super_raw.split(',').map(str::trim).any(|s| s == f)
+}
+
+/// Chunk a BFS frontier for one-query-per-chunk walks: guarded names,
+/// deduped, capped per statement so the OR chain stays well under the
+/// server's SQL length limits.
+fn super_frontier_chunks(frontier: &[String]) -> Vec<Vec<String>> {
+    let mut seen: Vec<String> = Vec::new();
+    for f in frontier {
+        // Server-sourced frontier names are NOT trusted: re-guard.
+        if !valid_class_name(f) {
+            tracing::warn!("dropping unsafe frontier class name: {f}");
+            continue;
+        }
+        if !seen.iter().any(|v| v == f) {
+            seen.push(f.clone());
+        }
+    }
+    // The dictionary is a few thousand rows; each extra substring predicate
+    // adds a marginal scan cost, so keep chunks small enough that a wide
+    // level still fans out only linearly in total scan work.
+    seen.chunks(48).map(<[String]>::to_vec).collect()
 }
 
 /// Same exactness for `DependsOn` entries (member suffixes stripped first).
@@ -1105,5 +1134,25 @@ mod tests {
         assert!(matches!(resolve_depth(Some(0), 10), Err(Error::Config(_))));
         assert!(matches!(resolve_depth(Some(100), 10), Ok(64)));
         assert!(matches!(resolve_depth(None, 10), Ok(10)));
+    }
+
+    /// Frontier batching: unsafe names drop (never reach the SQL), dupes
+    /// collapse, and a chunk never exceeds the statement budget.
+    #[test]
+    fn frontier_chunks_guard_dedupe_and_cap() {
+        let f: Vec<String> = ["A.B", "A.B", "C.D;DROP", "%Library.String"]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        let chunks = super_frontier_chunks(&f);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(
+            chunks[0],
+            vec!["A.B".to_string(), "%Library.String".to_string()]
+        );
+        let wide: Vec<String> = (0..200).map(|i| format!("P.C{i}")).collect();
+        let chunks = super_frontier_chunks(&wide);
+        assert!(chunks.iter().all(|c| c.len() <= 48));
+        assert_eq!(chunks.iter().map(Vec::len).sum::<usize>(), 200);
     }
 }
