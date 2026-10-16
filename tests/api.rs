@@ -1547,3 +1547,73 @@ async fn sql_documents_compile_command_refuse_hostile_namespace_before_http() {
         "%SYS must reach the wire on execute_sql"
     );
 }
+
+// list_documents contract: the docnames endpoint ignores `filetypes` and
+// `count` on this IRIS build (verified live), so the tool enforces both
+// client-side. The wire still carries the params (back-compat with servers
+// that DO honor them); the returned list must respect them either way.
+#[tokio::test]
+async fn list_documents_enforces_filetypes_and_count_client_side() {
+    let rows = |n: usize, cat: &str| -> Vec<serde_json::Value> {
+        (0..n)
+            .map(|i| {
+                json!({"name": format!("Pack.Doc{i}.cls"), "cat": cat,
+                       "ts": "t", "db": "USER"})
+            })
+            .collect()
+    };
+    let mut content = rows(4, "CLS");
+    content.push(json!({"name":"Pack.R1.mac","cat":"MAC","ts":"t","db":"USER"}));
+    content.push(json!({"name":"Pack.R2.mac","cat":"MAC","ts":"t","db":"USER"}));
+    let mock = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/atelier/v8/USER/docnames"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "status": {"errors": [], "summary": ""}, "console": [],
+            "result": {"content": content}
+        })))
+        .expect(3)
+        .mount(&mock)
+        .await;
+    let client = client(&mock);
+    // filetypes selects by category, case-insensitively
+    let r = rism::tools::documents::list_documents(
+        &client,
+        &rism::tools::documents::ListDocumentsArgs {
+            filter: None,
+            filetypes: Some(vec!["cls".into()]),
+            count: None,
+            namespace: None,
+        },
+    )
+    .await
+    .expect("list");
+    assert_eq!(r.count, 4, "only CLS rows: {r:?}");
+    // count caps AFTER filetype filtering
+    let r = rism::tools::documents::list_documents(
+        &client,
+        &rism::tools::documents::ListDocumentsArgs {
+            filter: None,
+            filetypes: Some(vec!["MAC".into()]),
+            count: Some(1),
+            namespace: None,
+        },
+    )
+    .await
+    .expect("list");
+    assert_eq!((r.count, r.documents.len()), (1, 1), "count cap: {r:?}");
+    assert_eq!(r.documents[0].cat, "MAC");
+    // a filetype matching nothing is an empty SUCCESS, not an error
+    let r = rism::tools::documents::list_documents(
+        &client,
+        &rism::tools::documents::ListDocumentsArgs {
+            filter: None,
+            filetypes: Some(vec!["qqq".into()]),
+            count: None,
+            namespace: None,
+        },
+    )
+    .await
+    .expect("empty filetype success");
+    assert_eq!(r.count, 0);
+}

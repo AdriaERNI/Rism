@@ -86,7 +86,8 @@ rism graph refs ^MyRoutine --format json
 ## Documents
 
 ### `rism doc list`
-List documents. Flags: `--filter <PATTERN>` (SQL LIKE on names, e.g. `My.%`),
+List documents. Flags: `--filter <TEXT>` (case-insensitive substring of names,
+e.g. `My.`),
 `--filetypes <LIST>`, `--count <N>`.
 
 ```bash

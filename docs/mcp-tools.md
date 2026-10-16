@@ -26,9 +26,9 @@ No parameters.
 ### `list_documents`
 | Param | Notes |
 |---|---|
-| `filter` | name **prefix** (starts-with) |
-| `filetypes` | e.g. `["cls"]` |
-| `count` | max results |
+| `filter` | case-insensitive **substring** of the name (the server matches anywhere; `My.%` works as literal text, `%` is not a wildcard) |
+| `filetypes` | e.g. `["cls"]` — matched against the doc category, client-side |
+| `count` | max results — cuts the list client-side (no truncated flag: `count == requested` means more may exist) |
 
 ### `get_document` — `name`*
 Source as text lines + metadata (ts, owner, size).
