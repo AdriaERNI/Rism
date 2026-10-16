@@ -12,7 +12,7 @@ use crate::iris::documents as api;
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ListDocumentsArgs {
-    /// SQL LIKE filter on document names (e.g. `RismTest.%`)
+    /// Case-insensitive substring filter on document names (e.g. `RismTest.`)
     pub filter: Option<String>,
     /// File types to include (e.g. `["CLS", "RTN"]`)
     pub filetypes: Option<Vec<String>>,
@@ -66,8 +66,14 @@ pub async fn list_documents(
         args.count,
     )
     .await?;
+    // The docnames endpoint accepts `filetypes` and `count` but IGNORES
+    // both (verified live against IRIS 2025.3: any value, any count, same
+    // full listing). Enforce them client-side so the documented contract
+    // holds on every server.
+    let wanted: Vec<String> = fts.iter().map(|f| f.to_ascii_uppercase()).collect();
     let documents = metas
         .into_iter()
+        .filter(|m| wanted.is_empty() || wanted.contains(&m.cat.to_ascii_uppercase()))
         .map(|m| DocMetaOut {
             name: m.name,
             cat: m.cat,
@@ -75,6 +81,10 @@ pub async fn list_documents(
             db: m.db,
         })
         .collect::<Vec<_>>();
+    let documents = match args.count {
+        Some(c) => documents.into_iter().take(c as usize).collect(),
+        None => documents,
+    };
     let count = documents.len();
     Ok(ListDocumentsResult { documents, count })
 }

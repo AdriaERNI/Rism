@@ -385,7 +385,7 @@ pub enum TestCommands {
 pub enum DocCommands {
     /// List documents
     List {
-        /// SQL LIKE filter on names (e.g. 'My.%')
+        /// Substring filter on names (case-insensitive, e.g. 'My.')
         #[arg(long)]
         filter: Option<String>,
         /// Filetypes to include (e.g. CLS,RTN)

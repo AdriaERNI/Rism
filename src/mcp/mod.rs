@@ -87,7 +87,7 @@ impl RismMcp {
     }
 
     #[tool(
-        description = "List documents in a namespace. Optional LIKE filter (e.g. 'My.%'), filetypes (CLS, RTN, ...), and count."
+        description = "List documents in a namespace. Optional case-insensitive substring filter (e.g. 'My.'), filetypes (CLS, RTN, ...), and count (caps the returned list)."
     )]
     async fn list_documents(
         &self,
