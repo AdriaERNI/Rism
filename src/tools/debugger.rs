@@ -902,7 +902,28 @@ pub async fn debug_step(_client: &IrisClient, args: &DebugStepArgs) -> Result<De
 
     let resp = {
         let mut conn = session.conn.lock().await;
-        conn.command(&action, &[], None).await?
+        if action == "run" {
+            // A resumed job replies to `run` only when it NEXT stops; a
+            // long-running target would stall the default 30 s recv. Wait
+            // with a short window and route by transaction id so stale
+            // frames from an earlier timed-out command are discarded.
+            if let Some(r) = conn
+                .run_and_drain(std::time::Duration::from_secs(5))
+                .await?
+            {
+                r
+            } else {
+                session.set_state("running");
+                return Ok(DebugStepResult {
+                    session_id: args.session_id.clone(),
+                    state: "running".into(),
+                    location: None,
+                    variables: Vec::new(),
+                });
+            }
+        } else {
+            conn.command(&action, &[], None).await?
+        }
     };
     let status = attr(&resp, "status").unwrap_or("unknown").to_string();
     let state = state_of(&status).to_string();

@@ -155,6 +155,66 @@ impl DbgpConnection {
     pub async fn close(&mut self) {
         let _ = self.ws.close(None).await;
     }
+
+    /// Send `run` and wait for a reply whose `transaction_id` matches our
+    /// command, discarding earlier queued frames. A resumed job replies
+    /// only when it next stops; any stale reply from a previously timed-out
+    /// command arrives FIRST, and a socket read that finds nothing simply
+    /// times out. Returns `None` when no matching reply arrived in time
+    /// (target still running), `Some(Err)` on a real DBGP error frame.
+    ///
+    /// # Errors
+    /// [`Error`] on transport failures or a DBGP `<error>` under our id.
+    pub async fn run_and_drain(&mut self, timeout: Duration) -> Result<Option<Element>> {
+        self.tx_id += 1;
+        let expect = self.tx_id;
+        let mut line = format!("run -i {expect}");
+        line.push('\n');
+        self.ws
+            .send(Message::Text(line.into()))
+            .await
+            .map_err(|e| Error::Debug(format!("ws send: {e}")))?;
+        let started = std::time::Instant::now();
+        loop {
+            let left = timeout.saturating_sub(started.elapsed());
+            if left.is_zero() {
+                return Ok(None);
+            }
+            let raw = match recv_frame(&mut self.ws, left).await {
+                Ok(r) => r,
+                // A recv timeout is the expected "job still running" case.
+                Err(Error::Debug(ref m)) if m.contains("timed out") => return Ok(None),
+                Err(e) => return Err(e),
+            };
+            if raw.starts_with("<exit")
+                || raw.contains("&lt;EXIT&gt;")
+                || raw.contains("<UNDEFINED>")
+            {
+                return Err(Error::Debug(format!(
+                    "XDebug agent crashed on 'run': {}",
+                    raw.chars().take(200).collect::<String>()
+                )));
+            }
+            let Ok(root) = Element::parse(std::io::Cursor::new(raw.as_bytes())) else {
+                continue; // not XML we can route — drop it
+            };
+            let Some(tx) = attr(&root, "transaction_id").and_then(|t| t.parse::<u32>().ok()) else {
+                continue;
+            };
+            if tx != expect {
+                continue; // stale reply of an earlier command
+            }
+            if let Some(err) = find_error(&root) {
+                let code: u32 = attr(err, "code").and_then(|c| c.parse().ok()).unwrap_or(0);
+                let message = elements(err)
+                    .find(|c| c.name == "message")
+                    .and_then(text_of)
+                    .unwrap_or_else(|| "unknown DBGP error".to_string());
+                return Err(Error::Dbgp { code, message });
+            }
+            return Ok(Some(root));
+        }
+    }
 }
 
 /// WS URL for the debug endpoint — always routed under `%25SYS`.
