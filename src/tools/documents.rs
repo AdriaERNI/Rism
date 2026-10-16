@@ -117,6 +117,7 @@ pub struct DocumentOut {
 /// # Errors
 /// [`crate::error::Error::DocNotFound`] on 404; transport/envelope otherwise.
 pub async fn get_document(client: &IrisClient, args: &GetDocumentArgs) -> Result<DocumentOut> {
+    crate::tools::names::guard_document_name(&args.name)?;
     let ns = ns(client, args.namespace.as_ref())?;
     let doc = api::get_doc(client, &ns, &args.name).await?;
     Ok(DocumentOut {
@@ -163,6 +164,7 @@ pub async fn put_document(
     client: &IrisClient,
     args: &PutDocumentArgs,
 ) -> Result<PutDocumentResult> {
+    crate::tools::names::guard_document_name(&args.name)?;
     let ns = ns(client, args.namespace.as_ref())?;
     let ts = api::put_doc(client, &ns, &args.name, &args.content, args.ignore_conflict).await?;
     Ok(PutDocumentResult {
@@ -181,6 +183,7 @@ pub async fn put_and_compile(
     client: &IrisClient,
     args: &PutDocumentArgs,
 ) -> Result<PutDocumentResult> {
+    crate::tools::names::guard_document_name(&args.name)?;
     let ns = ns(client, args.namespace.as_ref())?;
     let ts = api::put_doc(client, &ns, &args.name, &args.content, args.ignore_conflict).await?;
     let flags = args.flags.clone().unwrap_or_else(|| "cuk".to_string());
@@ -212,6 +215,7 @@ pub async fn delete_document(
     client: &IrisClient,
     args: &DeleteDocumentArgs,
 ) -> Result<serde_json::Value> {
+    crate::tools::names::guard_document_name(&args.name)?;
     let ns = ns(client, args.namespace.as_ref())?;
     api::delete_doc(client, &ns, &args.name).await?;
     Ok(serde_json::json!({"deleted": args.name}))

@@ -75,6 +75,26 @@ pub(crate) fn guard_namespace(ns: &str) -> crate::error::Result<()> {
     }
 }
 
+/// Document-name safety for the `/doc/<name>` URL path. Legit document
+/// names may be CSP paths (`/csp/user/menu.csp`), so slashes are allowed —
+/// but an EMPTY name addresses the collection endpoint and any `..`
+/// segment lets the request path escape the namespace's doc root. Those
+/// must refuse client-side, before any HTTP (same policy as the namespace
+/// URL-path guard).
+pub(crate) fn guard_document_name(name: &str) -> crate::error::Result<()> {
+    if name.is_empty() {
+        return Err(crate::error::Error::Config(
+            "invalid document name: empty".to_string(),
+        ));
+    }
+    if name.split(['/', '\\']).any(|seg| seg == "..") {
+        return Err(crate::error::Error::Config(format!(
+            "invalid document name (path traversal guard): {name}"
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::missing_panics_doc)]
 mod tests {

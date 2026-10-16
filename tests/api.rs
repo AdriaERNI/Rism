@@ -1617,3 +1617,51 @@ async fn list_documents_enforces_filetypes_and_count_client_side() {
     .expect("empty filetype success");
     assert_eq!(r.count, 0);
 }
+
+// R3 guard: document names that would escape the namespace doc root (`..`
+// segment) or address the collection endpoint (empty) must refuse with ZERO
+// HTTP — the server error text they used to produce leaked the raw URL path.
+#[tokio::test]
+async fn unsafe_document_names_refused_before_http() {
+    for name in ["", "../../etc/passwd", "../%SYS/doc/x.cls", "a/..\\b.cls"] {
+        let mock = MockServer::start().await;
+        let client = client(&mock);
+        let res = rism::tools::documents::get_document(
+            &client,
+            &rism::tools::documents::GetDocumentArgs {
+                name: name.into(),
+                namespace: None,
+            },
+        )
+        .await;
+        match res {
+            Err(rism::Error::Config(m)) => assert!(
+                m.contains("invalid document name"),
+                "guard text for {name:?}: {m}"
+            ),
+            other => panic!("{name:?} must refuse, got {other:?}"),
+        }
+        assert_eq!(
+            mock.received_requests().await.unwrap().len(),
+            0,
+            "zero HTTP for doc {name:?}"
+        );
+    }
+    // A CSP-style path name stays legal (slashes alone are not traversal).
+    let mock = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/atelier/v8/USER/doc//csp/user/menu.csp"))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(1)
+        .mount(&mock)
+        .await;
+    let client = client(&mock);
+    let _ = rism::tools::documents::get_document(
+        &client,
+        &rism::tools::documents::GetDocumentArgs {
+            name: "/csp/user/menu.csp".into(),
+            namespace: None,
+        },
+    )
+    .await;
+}
