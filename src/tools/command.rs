@@ -62,6 +62,9 @@ pub async fn execute_command(
         .namespace
         .clone()
         .unwrap_or_else(|| client.settings().iris_namespace.clone());
+    // Same URL-path policy as the query doors: a hostile namespace must
+    // refuse before the terminal WS opens (F-09).
+    crate::tools::names::guard_namespace(&ns)?;
     let timeout = Duration::from_secs(clamp_timeout_secs(
         args.timeout_secs.unwrap_or(client.settings().timeout_secs),
     ));

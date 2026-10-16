@@ -52,7 +52,7 @@ pub async fn list_documents(
     client: &IrisClient,
     args: &ListDocumentsArgs,
 ) -> Result<ListDocumentsResult> {
-    let ns = ns(client, args.namespace.as_ref());
+    let ns = ns(client, args.namespace.as_ref())?;
     let fts: Vec<&str> = args
         .filetypes
         .as_deref()
@@ -107,7 +107,7 @@ pub struct DocumentOut {
 /// # Errors
 /// [`crate::error::Error::DocNotFound`] on 404; transport/envelope otherwise.
 pub async fn get_document(client: &IrisClient, args: &GetDocumentArgs) -> Result<DocumentOut> {
-    let ns = ns(client, args.namespace.as_ref());
+    let ns = ns(client, args.namespace.as_ref())?;
     let doc = api::get_doc(client, &ns, &args.name).await?;
     Ok(DocumentOut {
         name: doc.name,
@@ -153,7 +153,7 @@ pub async fn put_document(
     client: &IrisClient,
     args: &PutDocumentArgs,
 ) -> Result<PutDocumentResult> {
-    let ns = ns(client, args.namespace.as_ref());
+    let ns = ns(client, args.namespace.as_ref())?;
     let ts = api::put_doc(client, &ns, &args.name, &args.content, args.ignore_conflict).await?;
     Ok(PutDocumentResult {
         name: args.name.clone(),
@@ -171,7 +171,7 @@ pub async fn put_and_compile(
     client: &IrisClient,
     args: &PutDocumentArgs,
 ) -> Result<PutDocumentResult> {
-    let ns = ns(client, args.namespace.as_ref());
+    let ns = ns(client, args.namespace.as_ref())?;
     let ts = api::put_doc(client, &ns, &args.name, &args.content, args.ignore_conflict).await?;
     let flags = args.flags.clone().unwrap_or_else(|| "cuk".to_string());
     let outcome =
@@ -202,13 +202,18 @@ pub async fn delete_document(
     client: &IrisClient,
     args: &DeleteDocumentArgs,
 ) -> Result<serde_json::Value> {
-    let ns = ns(client, args.namespace.as_ref());
+    let ns = ns(client, args.namespace.as_ref())?;
     api::delete_doc(client, &ns, &args.name).await?;
     Ok(serde_json::json!({"deleted": args.name}))
 }
 
-fn ns(client: &IrisClient, override_ns: Option<&String>) -> String {
-    override_ns
+fn ns(client: &IrisClient, override_ns: Option<&String>) -> crate::error::Result<String> {
+    let resolved = override_ns
         .cloned()
-        .unwrap_or_else(|| client.settings().iris_namespace.clone())
+        .unwrap_or_else(|| client.settings().iris_namespace.clone());
+    // F-09: the namespace interpolates raw into the URL path segment
+    // (`api_url`) — refuse unsafe values before any HTTP, same policy as
+    // the search/graph guards.
+    crate::tools::names::guard_namespace(&resolved)?;
+    Ok(resolved)
 }

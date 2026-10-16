@@ -22,9 +22,15 @@ use crate::iris::terminal;
 
 pub(crate) use crate::tools::names::{valid_class_name, valid_identifier};
 
-fn ns_of(client: &IrisClient, ns: Option<&String>) -> String {
-    ns.cloned()
-        .unwrap_or_else(|| client.settings().iris_namespace.clone())
+fn ns_of(client: &IrisClient, ns: Option<&String>) -> crate::error::Result<String> {
+    let resolved = ns
+        .cloned()
+        .unwrap_or_else(|| client.settings().iris_namespace.clone());
+    // F-09: the resolved namespace interpolates into the SQL URL path —
+    // refuse unsafe values before any HTTP, same policy as the search/graph
+    // guards.
+    crate::tools::names::guard_namespace(&resolved)?;
+    Ok(resolved)
 }
 
 /// Arguments for [`run_tests`].
@@ -96,7 +102,7 @@ pub async fn run_tests(client: &IrisClient, args: &RunTestsArgs) -> Result<RunTe
             return Err(Error::Config(format!("invalid method name: {m}")));
         }
     }
-    let ns = ns_of(client, args.namespace.as_ref());
+    let ns = ns_of(client, args.namespace.as_ref())?;
     let timeout = Duration::from_secs(crate::tools::clamp_timeout_secs(
         args.timeout_secs
             .unwrap_or(client.settings().timeout_secs.max(120)),
@@ -270,7 +276,7 @@ pub async fn list_tests(client: &IrisClient, args: &ListTestsArgs) -> Result<Lis
             return Err(Error::Config(format!("invalid filter prefix: {f}")));
         }
     }
-    let ns = ns_of(client, args.namespace.as_ref());
+    let ns = ns_of(client, args.namespace.as_ref())?;
     let filter_clause = args
         .filter
         .as_ref()
@@ -353,7 +359,7 @@ pub async fn get_test_results(
             return Err(Error::Config(format!("invalid class name: {c}")));
         }
     }
-    let ns = ns_of(client, args.namespace.as_ref());
+    let ns = ns_of(client, args.namespace.as_ref())?;
     let limit = args.max_runs.unwrap_or(10).min(1000);
     let where_clause = args
         .test_class

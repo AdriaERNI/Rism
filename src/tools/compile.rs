@@ -51,6 +51,9 @@ pub async fn compile_documents(
         .namespace
         .clone()
         .unwrap_or_else(|| client.settings().iris_namespace.clone());
+    // F-09: the namespace interpolates raw into the URL path segment
+    // (`api_url`) — refuse unsafe values before any HTTP.
+    crate::tools::names::guard_namespace(&ns)?;
     let flags = args.flags.clone().unwrap_or_else(|| "cuk".to_string());
     let outcome = api::compile(client, &ns, &args.names, &flags).await?;
     Ok(CompileResult {
