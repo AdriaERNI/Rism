@@ -11,7 +11,7 @@ use serde_json::Value;
 use crate::error::{Error, Result};
 use crate::iris::IrisClient;
 use crate::iris::sql as sqlapi;
-use crate::tools::names::{valid_class_name, valid_identifier, valid_namespace};
+use crate::tools::names::{valid_class_name, valid_identifier};
 
 /// Query budget per tool call across a whole BFS walk (`E_SPEC` §3): more
 /// frontier queries than this sets `truncated` instead of fanning out.
@@ -61,12 +61,7 @@ fn guard(class: &str) -> Result<()> {
 /// F-09: same zero-HTTP refusal for the namespace, which interpolates raw
 /// into the URL path segment (`api_url`) rather than into SQL.
 fn guard_ns(ns: &str) -> Result<()> {
-    if !valid_namespace(ns) {
-        return Err(Error::Config(format!(
-            "invalid namespace (URL path guard): {ns}"
-        )));
-    }
-    Ok(())
+    crate::tools::names::guard_namespace(ns)
 }
 
 /// One edge of a subclass/dependency walk: the found name, the raw field

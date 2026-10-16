@@ -44,6 +44,10 @@ pub async fn execute_sql(client: &IrisClient, args: &ExecuteSqlArgs) -> Result<S
         .namespace
         .clone()
         .unwrap_or_else(|| client.settings().iris_namespace.clone());
+    // F-09: the namespace interpolates raw into the URL path segment
+    // (`api_url`) — refuse unsafe values before any HTTP, same policy as
+    // the search/graph guards.
+    crate::tools::names::guard_namespace(&ns)?;
     let max_rows = args.max_rows.unwrap_or(client.settings().sql_max_rows);
 
     let outcome = api::query(client, &ns, &args.query, max_rows).await?;

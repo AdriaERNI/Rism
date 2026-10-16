@@ -1432,3 +1432,118 @@ async fn members_census_sql_shapes() {
         );
     }
 }
+
+// F-09 completion: the SQL, document, compile, and terminal doors interpolate
+// the namespace into the URL path too, so they must refuse hostile values
+// client-side with ZERO HTTP — same policy, same text, as search/graph/refs.
+async fn hostile_ns_calls(
+    client: &IrisClient,
+    ns: &str,
+) -> Vec<(&'static str, rism::error::Result<()>)> {
+    vec![
+        (
+            "execute_sql",
+            rism::tools::sql::execute_sql(
+                client,
+                &rism::tools::sql::ExecuteSqlArgs {
+                    query: "select 1".into(),
+                    namespace: Some(ns.into()),
+                    max_rows: None,
+                },
+            )
+            .await
+            .map(|_| ()),
+        ),
+        (
+            "list_documents",
+            rism::tools::documents::list_documents(
+                client,
+                &rism::tools::documents::ListDocumentsArgs {
+                    filter: None,
+                    filetypes: None,
+                    count: None,
+                    namespace: Some(ns.into()),
+                },
+            )
+            .await
+            .map(|_| ()),
+        ),
+        (
+            "get_document",
+            rism::tools::documents::get_document(
+                client,
+                &rism::tools::documents::GetDocumentArgs {
+                    name: "%Library.RegisteredObject.cls".into(),
+                    namespace: Some(ns.into()),
+                },
+            )
+            .await
+            .map(|_| ()),
+        ),
+        (
+            "compile_documents",
+            rism::tools::compile::compile_documents(
+                client,
+                &rism::tools::compile::CompileDocumentsArgs {
+                    names: vec!["No.Such.cls".into()],
+                    flags: None,
+                    namespace: Some(ns.into()),
+                },
+            )
+            .await
+            .map(|_| ()),
+        ),
+        (
+            "execute_command",
+            rism::tools::command::execute_command(
+                client,
+                &rism::tools::command::ExecuteCommandArgs {
+                    command: "write 1".into(),
+                    namespace: Some(ns.into()),
+                    timeout_secs: None,
+                    background: None,
+                },
+            )
+            .await
+            .map(|_| ()),
+        ),
+    ]
+}
+
+#[tokio::test]
+async fn sql_documents_compile_command_refuse_hostile_namespace_before_http() {
+    for ns in ["US;ER", "A' OR 1=1--", "../admin", "USER&x=1", ""] {
+        let mock = MockServer::start().await;
+        let client = client(&mock);
+        for (tool, res) in hostile_ns_calls(&client, ns).await {
+            match res {
+                Err(rism::Error::Config(m)) => assert!(
+                    m.contains("invalid namespace (URL path guard)"),
+                    "{tool}/{ns:?}: wrong guard text: {m}"
+                ),
+                other => panic!("{tool} with ns {ns:?} must be a Config refusal, got {other:?}"),
+            }
+            assert_eq!(
+                mock.received_requests().await.unwrap().len(),
+                0,
+                "{tool}: zero HTTP for ns {ns:?}"
+            );
+        }
+    }
+    // %SYS must still pass the guard on the SQL door (no over-tightening).
+    let mock = MockServer::start().await;
+    let client = client(&mock);
+    let _ = rism::tools::sql::execute_sql(
+        &client,
+        &rism::tools::sql::ExecuteSqlArgs {
+            query: "select 1".into(),
+            namespace: Some("%SYS".into()),
+            max_rows: Some(1),
+        },
+    )
+    .await;
+    assert!(
+        !mock.received_requests().await.unwrap().is_empty(),
+        "%SYS must reach the wire on execute_sql"
+    );
+}

@@ -201,6 +201,9 @@ pub fn start(
     timeout: Duration,
 ) -> Result<JobInfo> {
     let ns = namespace.unwrap_or_else(|| client.settings().iris_namespace.clone());
+    // F-09: the namespace rides into the terminal URL/config — refuse
+    // hostile values before the background job opens any connection.
+    crate::tools::names::guard_namespace(&ns)?;
     let slot = Arc::new(JobSlot {
         meta: Mutex::new(JobMeta {
             command: command.clone(),

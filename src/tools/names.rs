@@ -62,6 +62,19 @@ pub(crate) fn valid_namespace(ns: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
 }
 
+/// Guard a resolved namespace for URL interpolation (F-09): refuse unsafe
+/// values BEFORE any request, with the one canonical error text every door
+/// shares (sql, documents, compile, terminal, search, graph, refs).
+pub(crate) fn guard_namespace(ns: &str) -> crate::error::Result<()> {
+    if valid_namespace(ns) {
+        Ok(())
+    } else {
+        Err(crate::error::Error::Config(format!(
+            "invalid namespace (URL path guard): {ns}"
+        )))
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::missing_panics_doc)]
 mod tests {
