@@ -9,8 +9,10 @@
 //!   `Features` array) and `stack_get` must precede any `context_get` after a
 //!   stop (agent's `StackLevelMappings`) — skipping either CRASHES the agent;
 //! - stop location comes from `stack_get` (`run`/step replies carry none);
-//! - entry breakpoints need offset 1 (offset 0 → error 201 on 2025.3; this is
-//!   why Prism's `stop_on_entry` silently no-ops).
+//! - line breakpoints use `offset` = the method's (1-based) source line;
+//!   offset 0 and offset 1 both bind to the method's entry line (verified
+//!   live on 2025.3); an offset past the method's last line answers
+//!   DBGP error 201 "Breakpoint Cannot Be Mapped".
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -463,7 +465,9 @@ pub struct BreakpointSpec {
     pub method: Option<String>,
     /// Routine name (`Label^Routine`) — alternative to class/method.
     pub routine: Option<String>,
-    /// Line offset in method/routine (entry = 1; 0 fails on 2025.3).
+    /// Line offset in the method (1-based source line; 0 binds to the
+    /// entry line like 1 does). Past the method's last line the server
+    /// refuses with "Breakpoint Cannot Be Mapped".
     pub offset: Option<u32>,
     /// Condition expression → conditional breakpoint.
     pub condition: Option<String>,
@@ -1113,6 +1117,9 @@ pub struct DebugStopArgs {
 }
 
 /// End a session (stop command best-effort, socket closed, slot freed).
+/// A `debug_start`-launched target is ABORTED by the stop (it never
+/// resumes); to let an attached process continue, use `debug_step`
+/// with `action=run` instead.
 ///
 /// # Errors
 /// Unknown id.
@@ -1167,7 +1174,8 @@ pub struct DebugRunResult {
 }
 
 /// Run a target to completion under the debugger in ONE call: start, walk
-/// every stop, then always stop the session so the IRIS job resumes.
+/// every stop, then end the session (the target completes on its own once
+/// every stop has been stepped past; the final `stop` only frees the slot).
 ///
 /// # Errors
 /// Transport, DBGP, or session-registry errors.
