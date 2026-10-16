@@ -189,7 +189,7 @@ otherwise the process working directory.
 | Tool | Params |
 |---|---|
 | `read_file` | `path`\* — text; binary detected and rejected |
-| `list_files` | `path`, `pattern` (glob), `max_results` |
+| `list_files` | `path`, `pattern` (glob), `max_results` (default 200, clamped to [1, 1000]) |
 | `run_shell` | `command`\*, `cwd`, `timeout_secs` (default 30 s, clamped to [1, 3600]) — `bash` on Unix, PowerShell on Windows |
 
 ## Code search
