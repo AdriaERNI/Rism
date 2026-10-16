@@ -1302,6 +1302,16 @@ fn debugger_lifecycle_chain() {
         l0["breakpoints"].as_array().map(std::vec::Vec::len) == Some(1),
         || format!("entry session must carry exactly the entry bp: {l0}"),
     );
+    // A nonexistent method must be REFUSED at set time, not silently
+    // accepted — verified live on 2025.3 (DBGP 201 "Breakpoint Cannot Be
+    // Mapped"); the refusal keeps the session usable (checked right after).
+    c.err(
+        &mut m,
+        "debug_breakpoints",
+        json!({"session_id": sid1, "action": "set",
+                "breakpoint": {"class": cls, "method": "NoSuchMethodAnywhere", "offset": 1}}),
+        "201",
+    );
     let set = c.ok(
         &mut m,
         "debug_breakpoints",
@@ -1315,6 +1325,26 @@ fn debugger_lifecycle_chain() {
     c.check(
         !bp_id.is_empty() && set["breakpoint"]["state"] == json!("enabled"),
         || format!("set must return an enabled bp with an id: {set}"),
+    );
+    // offset 0 is legal on current IRIS and binds to the method's entry
+    // line (offset 1's position) — pin that it SETS, whatever line the
+    // server echoes, so the old "offset 0 fails" claim cannot return.
+    let zero = c.ok(
+        &mut m,
+        "debug_breakpoints",
+        json!({"session_id": sid1, "action": "set",
+                "breakpoint": {"class": cls, "method": "Run", "offset": 0}}),
+    );
+    let zero_id = zero["breakpoint"]["id"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    c.check(!zero_id.is_empty(), || {
+        format!("offset 0 must set an entry-line breakpoint: {zero}")
+    });
+    let _ = m.call(
+        "debug_breakpoints",
+        json!({"session_id": sid1, "action": "remove", "id": zero_id}),
     );
     let l1 = c.ok(
         &mut m,

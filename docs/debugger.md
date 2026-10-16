@@ -11,8 +11,10 @@ agents beyond what IRIS ships. Behavior is 1:1 with Prism's debugger.
   `step_over`, `context_get`, `property_get`, `stack_get`, …).
 - Sessions have an **id** (returned by `debug_start`/`debug_attach`); the other
   eight `debug_*` tools take `session_id`.
-- A stop suspends the target job. Always end sessions with `debug_stop` /
-  `debug_step action=run` — a crashed client that leaves a session open pauses
+- A stop suspends the target job. End sessions with `debug_stop` (aborts a
+  `debug_start`ed target; for an attached job, prefer `debug_step`
+  `action=run` so the job continues — `debug_stop` ends it) — a crashed
+  client that leaves a session open pauses
   the job until it times out. (If a job is orphaned this way, `docker restart`
   or terminating the job is the reliable recovery — `debug_stop` from a new
   session does not reclaim the old one.)

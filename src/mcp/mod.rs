@@ -256,7 +256,7 @@ impl RismMcp {
     }
 
     #[tool(
-        description = "Attach the debugger to a running IRIS process by pid (from debug_list_processes). Pauses it; call debug_stop to resume."
+        description = "Attach the debugger to a running IRIS process by pid (from debug_list_processes). Pauses it; to let it continue, call debug_step action=run (debug_stop would end the job)."
     )]
     async fn debug_attach(
         &self,
@@ -302,7 +302,7 @@ impl RismMcp {
     }
 
     #[tool(
-        description = "Breakpoints: action list|set|remove|enable|disable. Entry breakpoints need offset 1 on current IRIS (offset 0 fails)."
+        description = "Breakpoints: action list|set|remove|enable|disable. `offset` is the method's 1-based source line (0 binds to the entry line like 1 does; past the last line the server refuses)."
     )]
     async fn debug_breakpoints(
         &self,
@@ -311,7 +311,9 @@ impl RismMcp {
         Ok(map_json(debug_breakpoints(&self.client, &args).await))
     }
 
-    #[tool(description = "Stop a debug session and resume the target process.")]
+    #[tool(
+        description = "End a debug session. A launched target is ABORTED, not resumed; for an attached process call debug_step action=run first (stop on a live attached job kills it)."
+    )]
     async fn debug_stop(
         &self,
         Parameters(args): Parameters<DebugStopArgs>,
