@@ -144,6 +144,26 @@ pub async fn put_doc(
         vec![]
     };
     let env = client.put_json(&url, &q, &body).await?;
+    // Some servers answer 200 and bury the real failure in
+    // `result.status` (e.g. `ERROR #16022` for empty content) while the
+    // top-level status.errors stays empty — surface it as an error, the
+    // same shape the SQL layer already handles.
+    if let Some(msg) = env
+        .result
+        .get("status")
+        .and_then(Value::as_str)
+        .filter(|s| s.contains("ERROR"))
+    {
+        return Err(Error::Iris {
+            code: msg
+                .split('#')
+                .nth(1)
+                .and_then(|t| t.split([':', ' ']).next())
+                .and_then(|t| t.parse().ok())
+                .unwrap_or(0),
+            message: msg.to_string(),
+        });
+    }
     Ok(env
         .result
         .get("ts")

@@ -1665,3 +1665,29 @@ async fn unsafe_document_names_refused_before_http() {
     )
     .await;
 }
+
+// put_document must not report success when the server answers 200 but
+// buries the failure in result.status (verified live on 2025.3 with empty
+// content: "ERROR #16022: No Class Definition or ROUTINE header").
+#[tokio::test]
+async fn put_doc_surfaces_in_status_error() {
+    let mock = MockServer::start().await;
+    Mock::given(method("PUT"))
+        .and(path("/api/atelier/v8/USER/doc/Empty.Doc.cls"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "status": {"errors": [], "summary": ""}, "console": [],
+            "result": {"name": "Empty.Doc.cls", "cat": "CLS", "enc": false,
+                       "content": "", "status": "ERROR #16022: No Class Definition or ROUTINE header"}
+        })))
+        .expect(1)
+        .mount(&mock)
+        .await;
+    let client = client(&mock);
+    let err = rism::iris::documents::put_doc(&client, "USER", "Empty.Doc.cls", &[], true)
+        .await
+        .expect_err("200-with-ERROR-status is a failure");
+    assert!(
+        matches!(&err, rism::Error::Iris { code: 16022, message } if message.contains("16022")),
+        "{err}"
+    );
+}
