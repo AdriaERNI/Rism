@@ -390,8 +390,17 @@ async fn dispatch_debug(
             };
             let info = debug_attach(client, &args).await?;
             render::render_debug_attach(&info, format);
-            // The WS dies with this process: stop the session explicitly so
-            // the attached job resumes instead of waiting on the debug agent.
+            // The WS dies with this process: resume the target with `run`
+            // (a `stop` here would END the attached job, not resume it) and
+            // then drop the session so the slot frees.
+            let _ = rism::tools::debugger::debug_step(
+                client,
+                &rism::tools::debugger::DebugStepArgs {
+                    session_id: info.session_id.clone(),
+                    action: Some("run".to_string()),
+                },
+            )
+            .await;
             let _ = rism::tools::debugger::debug_stop(
                 client,
                 &rism::tools::debugger::DebugStopArgs {
