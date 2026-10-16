@@ -455,6 +455,7 @@ fn bp_file_uri(namespace: &str, doc: &str) -> String {
 
 /// One breakpoint definition (`debug_start` / `debug_breakpoints` set).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct BreakpointSpec {
     /// Class (without `.cls`) — pair with `method`.
     pub class: Option<String>,
@@ -537,6 +538,7 @@ async fn parse_breakpoint_list(conn: &mut DbgpConnection) -> Result<Vec<Breakpoi
 
 /// Arguments for [`debug_list_processes`].
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DebugListProcessesArgs {
     /// Filter jobs by namespace (client-side).
     pub namespace: Option<String>,
@@ -603,6 +605,7 @@ pub async fn debug_list_processes(
 
 /// Arguments for [`debug_start`].
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DebugStartArgs {
     /// `ObjectScript` target, e.g. `##class(MyApp.Utils).Add(2,3)`.
     pub target: String,
@@ -725,6 +728,7 @@ async fn start_inner(
 
 /// Arguments for [`debug_attach`].
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DebugAttachArgs {
     /// Process id to attach to (from [`debug_list_processes`]).
     pub pid: u32,
@@ -839,6 +843,7 @@ async fn attach_inner(session: &Arc<DebugSession>, pid: u32) -> Result<DebugSess
 
 /// Arguments for [`debug_step`].
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DebugStepArgs {
     /// Session id.
     pub session_id: String,
@@ -920,6 +925,7 @@ pub async fn debug_step(_client: &IrisClient, args: &DebugStepArgs) -> Result<De
 
 /// Arguments for [`debug_variables`].
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DebugVariablesArgs {
     /// Session id.
     pub session_id: String,
@@ -988,6 +994,7 @@ pub async fn debug_variables(
 
 /// Arguments for [`debug_inspect`].
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DebugInspectArgs {
     /// Session id.
     pub session_id: String,
@@ -1015,6 +1022,7 @@ pub async fn debug_inspect(_client: &IrisClient, args: &DebugInspectArgs) -> Res
 
 /// Arguments for [`debug_stack`].
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DebugStackArgs {
     /// Session id.
     pub session_id: String,
@@ -1032,6 +1040,7 @@ pub async fn debug_stack(_client: &IrisClient, args: &DebugStackArgs) -> Result<
 
 /// Arguments for [`debug_breakpoints`].
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DebugBreakpointsArgs {
     /// Session id.
     pub session_id: String,
@@ -1097,6 +1106,7 @@ pub async fn debug_breakpoints(_client: &IrisClient, args: &DebugBreakpointsArgs
 
 /// Arguments for [`debug_stop`].
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DebugStopArgs {
     /// Session id.
     pub session_id: String,
@@ -1120,6 +1130,7 @@ pub async fn debug_stop(_client: &IrisClient, args: &DebugStopArgs) -> Result<Va
 
 /// Arguments for [`debug_run`] (the scripted CLI session).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DebugRunArgs {
     /// `ObjectScript` target expression.
     pub target: String,
