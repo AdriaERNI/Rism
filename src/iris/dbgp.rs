@@ -156,6 +156,21 @@ impl DbgpConnection {
         let _ = self.ws.close(None).await;
     }
 
+    /// Test seam: a connection over an already-connected TCP socket.
+    /// Lets unit tests drive `run_and_drain`'s frame routing with a
+    /// loopback peer that scripts replies (a queued stale frame, then the
+    /// matching one) — no IRIS, no debugger slot.
+    #[cfg(test)]
+    async fn for_test(stream: tokio::net::TcpStream) -> Self {
+        let ws = tokio_tungstenite::WebSocketStream::from_raw_socket(
+            tokio_tungstenite::MaybeTlsStream::Plain(stream),
+            tokio_tungstenite::tungstenite::protocol::Role::Client,
+            None,
+        )
+        .await;
+        Self { ws, tx_id: 0 }
+    }
+
     /// Send `run` and wait for a reply whose `transaction_id` matches our
     /// command, discarding earlier queued frames. A resumed job replies
     /// only when it next stops; any stale reply from a previously timed-out
@@ -321,5 +336,92 @@ mod tests {
         .expect("parses");
         let err = find_error(&doc).expect("error child");
         assert_eq!(attr(err, "code"), Some("201"));
+    }
+
+    /// `run_and_drain` must route by transaction id: a stale reply queued
+    /// from an earlier timed-out command arrives FIRST and must be
+    /// discarded, never handed back as the `run` answer. Remove the
+    /// `tx != expect` check (first frame wins) and this test goes red.
+    #[tokio::test]
+    async fn run_and_drain_discards_a_stale_frame_then_returns_the_match() {
+        use futures_util::StreamExt as _;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("loopback bind");
+        let addr = listener.local_addr().expect("addr");
+        let client = tokio::net::TcpStream::connect(addr)
+            .await
+            .expect("loopback connect");
+        let (server, _) = listener.accept().await.expect("accept");
+        let mut conn = DbgpConnection::for_test(client).await;
+        let mut peer = tokio::time::timeout(
+            Duration::from_secs(5),
+            tokio_tungstenite::WebSocketStream::from_raw_socket(
+                server,
+                tokio_tungstenite::tungstenite::protocol::Role::Server,
+                None,
+            ),
+        )
+        .await
+        .expect("peer handshake");
+        // Pretend tx 7 was an earlier command whose reply timed out — its
+        // answer is still sitting on the socket when `run` goes out as tx 8.
+        conn.tx_id = 7;
+        let scripted = tokio::spawn(async move {
+            let _cmd = peer.next().await; // the `run -i 8` line
+            peer.send(Message::Text(
+                "<response command='step_over' transaction_id='7' status='break'/>".into(),
+            ))
+            .await
+            .expect("stale frame");
+            peer.send(Message::Text(
+                "<response command='run' transaction_id='8' status='break'><message/></response>"
+                    .into(),
+            ))
+            .await
+            .expect("fresh frame");
+            peer
+        });
+        let root = conn
+            .run_and_drain(Duration::from_millis(500))
+            .await
+            .expect("no error")
+            .expect("the matching frame must be returned, not None");
+        assert_eq!(attr(&root, "transaction_id"), Some("8"));
+        assert_eq!(attr(&root, "command"), Some("run"));
+        drop(scripted.await.expect("script task"));
+    }
+
+    /// No matching reply inside the window is the expected "job still
+    /// running" case: `None`, not a transport error.
+    #[tokio::test]
+    async fn run_and_drain_reports_still_running_when_the_window_laps() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("loopback bind");
+        let addr = listener.local_addr().expect("addr");
+        let client = tokio::net::TcpStream::connect(addr)
+            .await
+            .expect("loopback connect");
+        let (server, _) = listener.accept().await.expect("accept");
+        drop(listener);
+        let peer = tokio::time::timeout(
+            Duration::from_secs(5),
+            tokio_tungstenite::WebSocketStream::from_raw_socket(
+                server,
+                tokio_tungstenite::tungstenite::protocol::Role::Server,
+                None,
+            ),
+        )
+        .await
+        .expect("peer handshake");
+        let _silent_peer = peer; // never replies — the window must lap
+        let mut conn = DbgpConnection::for_test(client).await;
+        assert!(
+            conn.run_and_drain(Duration::from_millis(200))
+                .await
+                .expect("a recv timeout is not an error")
+                .is_none()
+        );
     }
 }

@@ -650,6 +650,10 @@ pub async fn debug_start(client: &IrisClient, args: &DebugStartArgs) -> Result<D
         .namespace
         .clone()
         .unwrap_or_else(|| client.settings().iris_namespace);
+    // F-09: the namespace is interpolated into the DBGP target wire string
+    // and every breakpoint URI — same policy as the URL doors: a hostile
+    // value refuses client-side before it reaches the agent.
+    crate::tools::names::guard_namespace(&ns)?;
     // slot guard BEFORE connect — see slot_free's note: connecting a
     // second agent would reset the live session's socket.
     if !slot_free().await {
@@ -751,6 +755,10 @@ pub async fn debug_attach(client: &IrisClient, args: &DebugAttachArgs) -> Result
         .namespace
         .clone()
         .unwrap_or_else(|| client.settings().iris_namespace);
+    // F-09: parity with debug_start — the namespace flows into session
+    // metadata and breakpoint URIs; refuse hostile values before the slot
+    // (and the agent) is touched.
+    crate::tools::names::guard_namespace(&ns)?;
     let target = format!("PID:{}", args.pid);
     // slot guard BEFORE connect — see slot_free's note: connecting a
     // second agent would reset the live session's socket.
@@ -1316,5 +1324,60 @@ mod tests {
         assert_eq!(state_of("stopping"), "ended");
         assert_eq!(state_of("running"), "running");
         assert_eq!(state_of("weird"), "unknown");
+    }
+
+    // Every debug argument struct carries `deny_unknown_fields` (the repo-
+    // wide canonical-Args rule). A typo'd or stale key must fail loudly at
+    // deserialization — silently ignoring it would misroute a debug
+    // command. If an attribute is removed from any struct below, the
+    // matching case goes red.
+    #[test]
+    fn debug_args_reject_unknown_fields() {
+        macro_rules! refuses {
+            ($ty:ty, $base:expr) => {{
+                let mut v: serde_json::Value = $base;
+                v.as_object_mut()
+                    .expect("object")
+                    .insert("bogus_field".into(), serde_json::json!(1));
+                assert!(
+                    serde_json::from_value::<$ty>(v).is_err(),
+                    "{} must deny unknown fields",
+                    stringify!($ty)
+                );
+            }};
+        }
+        refuses!(BreakpointSpec, serde_json::json!({"class": "A.B"}));
+        refuses!(
+            DebugStartArgs,
+            serde_json::json!({"target": "##class(A.B).M()"})
+        );
+        refuses!(DebugAttachArgs, serde_json::json!({"pid": 1u32}));
+        refuses!(
+            DebugStepArgs,
+            serde_json::json!({"session_id": "s", "action": "run"})
+        );
+        refuses!(DebugVariablesArgs, serde_json::json!({"session_id": "s"}));
+        refuses!(
+            DebugInspectArgs,
+            serde_json::json!({"session_id": "s", "expression": "x"})
+        );
+        refuses!(DebugStackArgs, serde_json::json!({"session_id": "s"}));
+        refuses!(
+            DebugBreakpointsArgs,
+            serde_json::json!({"session_id": "s", "action": "list"})
+        );
+        refuses!(DebugStopArgs, serde_json::json!({"session_id": "s"}));
+        refuses!(DebugListProcessesArgs, serde_json::json!({"system": true}));
+        refuses!(DebugRunArgs, serde_json::json!({"target": "1"}));
+        // Nested breakpoint specs are guarded too (the wire carries them
+        // inside `breakpoints`, so the deny must apply one level down).
+        let nested = serde_json::json!({
+            "target": "##class(A.B).M()",
+            "breakpoints": [{"class": "A.B", "method": "M", "bogus": 1}]
+        });
+        assert!(
+            serde_json::from_value::<DebugStartArgs>(nested).is_err(),
+            "nested BreakpointSpec must deny unknown fields"
+        );
     }
 }
