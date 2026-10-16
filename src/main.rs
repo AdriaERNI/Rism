@@ -153,6 +153,11 @@ async fn dispatch_repl(client: &IrisClient, cli: &Cli, timeout: Option<u64>) -> 
         .namespace
         .clone()
         .unwrap_or_else(|| client.settings().iris_namespace.clone());
+    // F-09: the namespace rides into the terminal WS config frame; the exec
+    // REPL is the one door that resolves it without a tool `*Args`, so the
+    // canonical guard runs here — a hostile value must refuse client-side
+    // like it does on every other door, before the server sees it.
+    rism::tools::guard_namespace(&ns)?;
     let per_cmd = Duration::from_secs(rism::tools::clamp_timeout_secs(
         timeout.unwrap_or(client.settings().timeout_secs),
     ));

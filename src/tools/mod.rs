@@ -22,6 +22,17 @@ pub mod testing;
 /// Wall-clock ceiling for any model-supplied timeout (7 days).
 pub const MAX_TIMEOUT_SECS: u64 = 7 * 24 * 60 * 60;
 
+/// F-09: canonical namespace guard, exposed for doors that resolve a
+/// namespace without going through a tool `*Args` (the interactive `exec`
+/// REPL hands it straight to the terminal WS config frame). Every path a
+/// namespace takes to the server must pass it through the allowlist first.
+///
+/// # Errors
+/// [`Error::Config`] naming the value when it would break the URL path.
+pub fn guard_namespace(ns: &str) -> crate::error::Result<()> {
+    names::guard_namespace(ns)
+}
+
 /// Seconds -> capped seconds, so `Instant + Duration` cannot overflow:
 /// an absurd `timeout_secs` (issue #16: `u64::MAX`) panicked the arithmetic
 /// silently — the request never answered. Clamps, never rejects: every

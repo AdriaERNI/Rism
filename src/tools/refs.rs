@@ -1248,9 +1248,18 @@ async fn fetch_candidates(
     let mut fetched: Vec<Fetched> = Vec::new();
     let cand: Vec<String> = candidates.into_iter().collect();
     for chunk in cand.chunks(FETCH_CONCURRENCY) {
-        let futs = chunk.iter().map(|d| {
+        let futs = chunk.iter().filter_map(|d| {
+            // Server-sourced doc names are NOT trusted: a dictionary entry
+            // shaped like a traversal must never reach the doc URL (the
+            // re-guard principle graph.rs applies to frontier names).
+            if crate::tools::names::guard_document_name(d).is_err() {
+                tracing::debug!("skipping unsafely-named candidate doc: {d}");
+                return None;
+            }
+            let d = d.clone();
+            let name = d.clone();
             let ns = ns.to_string();
-            async move { (d.clone(), docapi::get_doc(client, &ns, d).await) }
+            Some(async move { (name, docapi::get_doc(client, &ns, &d).await) })
         });
         for (name, res) in futures_util::future::join_all(futs).await {
             match res {
