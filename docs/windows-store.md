@@ -59,43 +59,114 @@ report repeats exactly these scenarios.
 | Item | Status |
 |---|---|
 | Installer passes silent install/upgrade/uninstall on real Windows | ✅ automated in CI |
-| Silent-mode switch provided for the Store (`/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-`) | ✅ documented in [installer exit codes](installer-exit-codes.md) |
+| Silent-mode switch for the Store (`/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /ALLUSERS`) | ✅ canonical string in [installer exit codes](installer-exit-codes.md), mirrored by CI |
 | Exit-code mapping (all 10 Store scenarios, unique values) | ✅ [installer exit codes](installer-exit-codes.md) + wired in `installer/rism.iss` |
 | App has a versioned, reproducible release build | ✅ `ci.yml` tag builds |
+| Privacy policy page | ✅ [Privacy Policy](privacy.md) → served at <https://adriaerni.github.io/Rism/privacy/> once merged to main (verify it 200s before submission) |
 | Publisher identity (Partner Center account, `Adria Sanchez`) | ⏳ one-time manual setup |
-| **Store signature** (EV cert, or Partner Center submission-time signing) | ⏳ decision pending |
-| Win32 packaging (MSIX wrapper) vs **unpackaged** Store listing | ⏳ decision pending |
-| Privacy policy URL, age ratings, data declaration | ⏳ needs a live site URL |
-| AGPL-3.0 notice in the Store listing | ⏳ copy is ready (`LICENSE`) |
+| **Code signing** (publisher must sign — see below) | ⏳ blocking: needs a code-signing certificate |
+| Package URL hosting + Packages page values | ⏳ manual (values below, copy-pasteable) |
+| Listing metadata (description, screenshots, age rating, data declaration) | ⏳ manual (text below) |
+| AGPL-3.0 notice in the Store listing | ⏳ copy ready — included in the listing text below |
 
-### What's left, concretely
+### Code signing — the truth for the EXE/MSI path
 
-1. **Sign the installer.** Store Desktop-app submissions must be signed.
-   Two supported paths: an **EV code-signing certificate** on the build (then
-   `msstore` CLI or Partner Center upload), or let **Partner Center sign it**
-   at submission (upload the unsigned `.exe`, Store injects the signature).
-   CI is already set up so the artifact submitted = the artifact tested.
-2. **Choose packaging.** For a CLI tool the pragmatic listing is a
-   **Win32 (MSIX) package** generated once with the Desktop App Installer —
-   `rism.exe` becomes launchable-as-command from the Store install folder.
-   An **unpackaged installer** submission is simpler but loses auto-update;
-   CI keeps both options open because the `.iss` and the raw exe ship side
-   by side in every release.
-3. **Store metadata.** Screenshots (CLI sessions render well), description
-   (reuse `docs/index.md`), privacy-policy URL — GitHub Pages is already
-   enabled; add a short `docs/privacy.md` with "Rism stores credentials in
-   `%APPDATA%`, never phones home" (true: zero telemetry).
-4. **Update policy.** Releases come from tags; the Store listing updates per
-   release (same artifact). Document the cadence in `docs/development.md`
-   Git Flow section — already matches: `vX.Y.Z` tag → CI → GitHub Release →
-   Store submission (`msstore upload`).
+Unlike MSIX, **Microsoft does NOT re-sign unpackaged EXE/MSI submissions**
+(re-signing is MSIX-only). The submission fails certification unless the
+**publisher** has signed both the installer `setup.exe` **and** every PE file
+inside it (`rism.exe`, the uninstaller Inno stamps) with a certificate whose
+chain anchors in the [Microsoft Trusted Root Program](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/the-root-certificate-program-and-windows). Self-signed certificates are not accepted.
 
-### Why this is low-risk
+- A **standard OV code-signing certificate** from any Trusted-Root vendor is
+  sufficient for certification. An **EV** certificate is not required by the
+  Store; it mainly buys immediate SmartScreen reputation.
+- With an OV cert, submit the signed binary to
+  [SmartScreen submission](https://www.microsoft.com/wdsi/filesubmission) early
+  and build reputation before going live, or expect first-run warnings.
+- Practical pipeline: sign `rism.exe` at build time, compile the installer,
+  sign the `setup.exe` output (`signtool sign /fd SHA256 /tr <timestamp-url>
+  /td SHA256`), then upload the signed artifact to the release. CI is already
+  set up so the artifact tested here is the artifact you sign.
 
-The only store-specific failure modes are signing and metadata — the binary
-needs no special capability handling (no COM, no install hooks beyond PATH),
-which the CI gate has already exercised on the exact runner image Microsoft
-uses (`windows-latest`).
+### Alternative: MSIX
+
+Packaging as **MSIX** instead lets Partner Center sign the package for you
+(free). Cost: a packaging layer (Desktop App Installer / `msix pack`) and
+reworking the PATH/upgrade contract this repo's CI proves. Kept as the fallback
+if buying a certificate stalls; everything below is for the EXE path.
+
+### Manual submission checklist (Partner Center)
+
+1. **Account** — register `Adria Sanchez` as publisher in Partner Center
+   (one-time; fee).
+2. **Reserve the product name** `Rism` in the new Windows App submission.
+3. **Certificate** — obtain the code-signing cert above; sign both the exe and
+   the setup output; keep the chain installed on the signing machine.
+4. **Host the package at a versioned, immutable HTTPS URL** — a GitHub Release
+   per tag works: `https://github.com/AdriaERNI/Rism/releases/download/v<X.Y.Z>/rism-<X.Y.Z>-setup.exe`. The binary at the URL must never change after submission.
+5. **Packages → Add package (EXE)** — enter exactly:
+   - Package URL: the release asset URL for this version
+   - Architecture: `x64`
+   - App type: `EXE`
+   - Installer parameters: `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /ALLUSERS`
+   - Language: `English`
+   - Installer handling exit codes: the table in
+     [installer exit codes](installer-exit-codes.md) (cancelled = `2` and `5`;
+     misc = `3`, `4`, `6`; success = `0`, upgrade = `100`).
+6. **Listing** — properties, description (below), screenshots: at least one
+   desktop PNG ≥1366×768 (≤50 MB, up to 10); recommended set: 300×300 app
+   tile, 16:9 1920×1080 promo/super-hero art, 9:16 720×1080 poster — all PNG
+   (<https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/screenshots-and-images>).
+   A CLI renders well: capture `rism --help`, `rism doctor`,
+   `rism sql "select …"` sessions.
+7. **Privacy** — policy URL <https://adriaerni.github.io/Rism/privacy/>;
+   data-declaration: **no data collected** (the app has zero telemetry).
+8. **Certification notes** — paste the block below.
+
+### Certification notes (paste text)
+
+```
+Rism is a command-line tool and MCP server for InterSystems IRIS. It has no
+GUI: after install, run "rism" from any new terminal (the installer registers
+C:\Program Files\Rism on the system PATH). No account or sign-in is required;
+nothing is locked behind a login. The app works offline for its configuration
+and help commands; connecting to a database requires you to point it at an
+IRIS server of your own, so reviewers without an IRIS instance can validate
+the CLI surface offline. Rism collects no telemetry and communicates only
+with the IRIS server configured by the user. A Start Menu folder "Rism" is
+created containing a documentation link; the executable itself is a CLI and
+intentionally has no tile or launch shortcut. User configuration lives in
+%APPDATA%\rism\config.toml and is intentionally preserved across uninstall
+(it is user data, not an installer remnant); uninstall removes all installed
+files, the PATH entry, and the registry entry. License: AGPL-3.0-or-later
+(see https://github.com/AdriaERNI/Rism/blob/main/LICENSE).
+```
+
+### Store listing text
+
+- **Short description:** `CLI + MCP server for InterSystems IRIS databases.`
+- **Description:** Rism is a Windows command-line tool and MCP (Model Context
+  Protocol) server for InterSystems IRIS, built on the Atelier REST API with
+  zero server-side code deployment. Browse and edit classes and routines, run
+  SQL and ObjectScript, diff and sync, manage jobs and CSP — from a terminal
+  or from any AI agent that speaks MCP. Pure Rust binary, no runtime
+  dependencies. License: AGPL-3.0-or-later; source:
+  <https://github.com/AdriaERNI/Rism>.
+- **Release notes:** per release from `git-cliff` (`CHANGELOG.md`).
+
+### Update policy
+
+Releases come from tags: `vX.Y.Z` → CI builds + gates the installer → GitHub
+Release (immutable asset URL) → new Store submission pointing at that URL. The
+Store does not manage versions for unpackaged apps, so each release is a
+submission; the `msstore` CLI can automate the upload once the listing exists.
+
+### Why the remaining risk is small
+
+The install contract itself is already proven on real Windows in CI (silent
+install/upgrade/uninstall, PATH, ARP entry, exit codes). The only unmet
+requirement is the publisher-side one no repository can close alone: a
+code-signing certificate.
 
 ## Quick links
 
