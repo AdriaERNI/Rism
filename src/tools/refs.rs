@@ -1397,6 +1397,14 @@ async fn macro_stage(
         )
         .await?;
         for d in &ms.results {
+            // Server-sourced names are NOT trusted here either: the same
+            // traversal filter the candidate fetch applies must guard this
+            // second door into `get_doc` (a search hit outside the fetched
+            // set would otherwise reach the doc URL unfiltered).
+            if crate::tools::names::guard_document_name(&d.doc).is_err() {
+                tracing::debug!("skipping unsafely-named macro definition doc: {}", d.doc);
+                continue;
+            }
             // Definition text: the line `Set Definition $$$NAME = {…}`
             // (or the `$$$NAME = {…}` shape). Reuse stage-2 content when
             // the doc was already fetched; otherwise one extra GET.

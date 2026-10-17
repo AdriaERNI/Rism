@@ -2005,3 +2005,84 @@ async fn refs_never_fetches_traversal_shaped_server_sourced_candidates() {
         "the safe candidate must still be fetched: {all_paths:?}"
     );
 }
+
+// The refs scan's SECOND door into `get_doc` — the macro-definition lookup
+// in stage 3 — must apply the same traversal filter as the candidate fetch:
+// a search hit named like a traversal may never address the document
+// endpoint, while the legitimate define doc is still fetched. Delete the
+// re-guard in `macro_stage` and the hostile GET goes out — this test is red.
+#[tokio::test]
+async fn refs_macro_lookup_skips_traversal_shaped_definition_docs() {
+    let mock = MockServer::start().await;
+    // Existence: the target class has a row.
+    Mock::given(method("POST"))
+        .and(path("/api/atelier/v8/USER/action/query"))
+        .and(body_query_contains(
+            "ClassDefinition WHERE Name = 'FProbeI_m.Tgt'",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(query_envelope(&[json!({"Name": "FProbeI_m.Tgt"})])),
+        )
+        .mount(&mock)
+        .await;
+    // Everything else SQL-side: empty rows.
+    Mock::given(method("POST"))
+        .and(path("/api/atelier/v8/USER/action/query"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(query_envelope(&[])))
+        .with_priority(5)
+        .mount(&mock)
+        .await;
+    // Stage-1 literal search (needle = member name): the caller doc uses a
+    // macro instead of naming the target directly.
+    Mock::given(method("GET"))
+        .and(path("/api/atelier/v8/USER/action/search"))
+        .and(query_param("query", "Go"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(search_envelope(&[(
+            "FProbeI_m.Safe.cls",
+            "  do ##class(FProbeI_m.Tgt).Go(1)",
+        )])))
+        .mount(&mock)
+        .await;
+    // Stage-3 macro-definition search: a traversal-shaped hit FIRST, the
+    // legitimate define doc second.
+    Mock::given(method("GET"))
+        .and(path("/api/atelier/v8/USER/action/search"))
+        .and(query_param("query", "FProbeIMAC"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(search_envelope(&[
+            ("../%SYS/Evil.mac", "  set x=1"),
+            ("FProbeI_m.Mac.mac", "  set y=1"),
+        ])))
+        .mount(&mock)
+        .await;
+    Mock::given(method("GET"))
+        .and(path_regex("/api/atelier/v8/USER/doc/.*"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(doc_envelope(&[
+            "Class FProbeI_m.Safe",
+            "{",
+            "ClassMethod M() { do $$$FProbeIMAC quit 1 }",
+            "}",
+        ])))
+        .mount(&mock)
+        .await;
+
+    let client = client(&mock);
+    let _ = rism::tools::refs::find_references(&client, &refs_args("FProbeI_m.Tgt.Go"))
+        .await
+        .expect("refs run");
+    let paths: Vec<String> = mock
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| r.url.path().to_string())
+        .collect();
+    assert!(
+        paths.iter().all(|p| !p.contains("Evil")),
+        "traversal-shaped macro doc must never reach the doc endpoint: {paths:?}"
+    );
+    assert!(
+        paths.iter().any(|p| p.ends_with("/doc/FProbeI_m.Mac.mac")),
+        "the legitimate define doc must still be fetched: {paths:?}"
+    );
+}
