@@ -71,10 +71,13 @@ Name: "{group}\{#MyAppName} documentation"; Filename: "{#MyAppURL}"
 {   Installation successful            0      Inno documented (run to         }
 {                                             completion)                     }
 {   Installation already in progress   1      Inno documented (Setup fails to }
-{                                             initialize). A second instance }
-{                                             now exits with this code: the  }
-{                                             SetupMutex above makes the     }
-{                                             concurrency scenario real.     }
+{                                             initialize). With SetupMutex    }
+{                                             wired, a second instance is     }
+{                                             refused: silently it fails to   }
+{                                             initialize (exit 1, no changes  }
+{                                             made); interactively Inno shows }
+{                                             the close-all-instances box     }
+{                                             (OK retries, Cancel = 2).       }
 {   Installation cancelled by user     2,5     Inno documented (2: Cancel     }
 {                                             before install started; 5:      }
 {                                             Cancel during the actual        }
