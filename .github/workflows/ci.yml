@@ -214,11 +214,29 @@ jobs:
           tar xzf /tmp/nfpm.tgz -C /tmp nfpm
           VER=${GITHUB_REF_NAME#v}
           mkdir -p dist/usr/bin && cp target/${{ matrix.target }}/release/rism dist/usr/bin/rism
-          export RISM_VERSION="$VER" RISM_ARCH=amd64 RISM_RELEASE=1
-          /tmp/nfpm pkg -f packaging/nfpm.yaml --packager deb       -t dist/
-          /tmp/nfpm pkg -f packaging/nfpm.yaml --packager rpm       -t dist/
-          /tmp/nfpm pkg -f packaging/nfpm.yaml --packager archlinux -t dist/
+          # Pre-release tags (vX.Y.Z-suffix) must package into versions that
+          # sort BELOW the eventual final release, so a test build never
+          # blocks the stable upgrade path. deb/rpm: "~" is the tilde-pre-
+          # release marker (dpkg + rpm vercmp both rank 0.2.3~pr.25 < 0.2.3).
+          # arch: pacman treats "~" as an ordinary separator (0.2.3~pr.25 >
+          # 0.2.3 there), and pkgver forbids "~" at makepkg level — append
+          # the suffix without it instead: vercmp ranks letters below the
+          # end-of-string, so 0.2.3pr.25 < 0.2.3 and > 0.2.2.
+          if [[ "$VER" == *-* ]]; then
+            BASE=${VER%%-*}; PRSUF=${VER#*-}; PRSUF=${PRSUF//-/.}
+            PKGVER="$BASE~$PRSUF"
+            ARCHVER="$BASE$PRSUF"
+          else
+            PKGVER="$VER"; ARCHVER="$VER"
+          fi
+          export RISM_ARCH=amd64 RISM_RELEASE=1
+          RISM_VERSION="$PKGVER"  /tmp/nfpm pkg -f packaging/nfpm.yaml --packager deb       -t dist/
+          RISM_VERSION="$PKGVER"  /tmp/nfpm pkg -f packaging/nfpm.yaml --packager rpm       -t dist/
+          RISM_VERSION="$ARCHVER" /tmp/nfpm pkg -f packaging/nfpm.yaml --packager archlinux -t dist/
           ls -la dist/
+          # Order check against the real artifacts (comparators: dpkg, rpm,
+          # pacman vercmp); previous-stable floor defaults inside the script.
+          RISM_VER="$VER" bash bench/version_order_check.sh
       - uses: actions/upload-artifact@v7
         with:
           name: rism-${{ github.ref_name }}-${{ matrix.label }}${{ matrix.label == 'windows-x86_64' && '-installer' || '' }}
