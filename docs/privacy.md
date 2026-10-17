@@ -9,8 +9,10 @@ It is the privacy-policy URL referenced by the Microsoft Store listing
 
 **None.** Rism contains no analytics, no usage tracking, no crash reporting,
 and no phone-home of any kind. The only network code in the binary issues
-requests to the IRIS server **you** configure (the Atelier REST API endpoints
-in `src/iris/http.rs`). Rism never contacts any other host on its own.
+requests to the IRIS server **you** configure: the Atelier REST API calls in
+`src/iris/http.rs` plus the terminal and debugger WebSocket streams in
+`src/iris/terminal.rs` / `src/iris/dbgp.rs`, whose URLs are derived from the
+same configured server address. Rism never contacts any other host on its own.
 
 ## Credentials
 
@@ -36,5 +38,5 @@ Microsoft Store package): the same binary, no Store-specific instrumentation.
 ## Source of truth
 
 Rism is open source (AGPL-3.0): <https://github.com/AdriaERNI/Rism>. The
-network-behavior claims above are auditable in the repository — the sole HTTP
-client lives in `src/iris/http.rs` and targets only the configured server URL.
+network-behavior claims above are auditable in the repository — every outbound
+connection (HTTP and WebSocket) targets only the configured server URL.
