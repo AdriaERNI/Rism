@@ -395,10 +395,11 @@ async fn dispatch_debug(
             };
             let info = debug_attach(client, &args).await?;
             render::render_debug_attach(&info, format);
-            // The WS dies with this process: resume the target with `run`
-            // (a `stop` here would END the attached job, not resume it) and
-            // then drop the session so the slot frees.
-            let _ = rism::tools::debugger::debug_step(
+            // The WS dies with this process: resume the target with `run`.
+            // If it is still running when the 5 s window lapses, DETACH
+            // (close without `stop`) so the job continues free — a `stop`
+            // on a running target would ABORT it.
+            let step = rism::tools::debugger::debug_step(
                 client,
                 &rism::tools::debugger::DebugStepArgs {
                     session_id: info.session_id.clone(),
@@ -406,13 +407,20 @@ async fn dispatch_debug(
                 },
             )
             .await;
-            let _ = rism::tools::debugger::debug_stop(
-                client,
-                &rism::tools::debugger::DebugStopArgs {
-                    session_id: info.session_id,
-                },
-            )
-            .await;
+            match step {
+                Ok(r) if r.state == "running" => {
+                    rism::tools::debugger::detach_session(&info.session_id).await;
+                }
+                _ => {
+                    let _ = rism::tools::debugger::debug_stop(
+                        client,
+                        &rism::tools::debugger::DebugStopArgs {
+                            session_id: info.session_id,
+                        },
+                    )
+                    .await;
+                }
+            }
         }
     }
     Ok(())

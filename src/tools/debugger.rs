@@ -30,6 +30,16 @@ use crate::iris::http::IrisClient;
 /// Idle sessions are reaped after this long (Prism parity).
 pub const IDLE_TIMEOUT_SECS: u64 = 300;
 
+/// How long `debug_step action=run` waits for the resume reply before
+/// reporting `state:"running"` (the job keeps executing; its frame arrives
+/// at the NEXT stop under the run's own transaction id).
+const RUN_RESUME_WINDOW: Duration = Duration::from_secs(5);
+
+/// How long a scripted `debug_run` walk waits for the pending run reply
+/// after a lapsed resume window before detaching (leaving the job to
+/// finish on its own).
+const RUN_AWAIT_TIMEOUT: Duration = Duration::from_secs(180);
+
 // ── Data types ────────────────────────────────────────────────────────
 
 /// One DBGP `<property>` (variable/child).
@@ -915,10 +925,7 @@ pub async fn debug_step(_client: &IrisClient, args: &DebugStepArgs) -> Result<De
             // long-running target would stall the default 30 s recv. Wait
             // with a short window and route by transaction id so stale
             // frames from an earlier timed-out command are discarded.
-            if let Some(r) = conn
-                .run_and_drain(std::time::Duration::from_secs(5))
-                .await?
-            {
+            if let Some(r) = conn.run_and_drain(RUN_RESUME_WINDOW).await? {
                 r
             } else {
                 session.set_state("running");
@@ -1145,6 +1152,15 @@ pub struct DebugStopArgs {
     pub session_id: String,
 }
 
+/// Free the session slot WITHOUT ending the target: closes the DBGP socket,
+/// which detaches the agent and lets a RUNNING job continue (verified live;
+/// `debug_stop` instead ABORTS a target that is still executing).
+pub async fn detach_session(session_id: &str) {
+    if let Some(s) = remove_session_now(session_id) {
+        s.conn.lock().await.close().await;
+    }
+}
+
 /// End a session (stop command best-effort, socket closed, slot freed).
 /// A `debug_start`-launched target is ABORTED by the stop (it never
 /// resumes); to let an attached process continue, use `debug_step`
@@ -1205,6 +1221,11 @@ pub struct DebugRunResult {
 /// Run a target to completion under the debugger in ONE call: start, walk
 /// every stop, then end the session (the target completes on its own once
 /// every stop has been stepped past; the final `stop` only frees the slot).
+/// When a gap between stops is longer than the resume window, the walk
+/// waits for the pending `run` reply instead of ending early — and if the
+/// target is STILL running when the walk gives up, the session detaches
+/// without `stop`, because `stop` on a running job ABORTS it (verified
+/// live: the target dies mid-loop with the socket closed).
 ///
 /// # Errors
 /// Transport, DBGP, or session-registry errors.
@@ -1227,15 +1248,13 @@ pub async fn debug_run(client: &IrisClient, args: &DebugRunArgs) -> Result<Debug
 
     if state == "break" {
         stops.push(RunStop {
-            location: info.location.clone().unwrap_or(Location {
-                namespace: None,
-                document: None,
-                line: None,
-                method: None,
-            }),
+            location: info.location.clone().unwrap_or_else(unknown_location),
             variables: info.variables.clone(),
         });
-        for _ in 0..max {
+        let session = get_session(&info.session_id).ok();
+        let mut iter = 0u32;
+        while iter < max {
+            iter += 1;
             let step = debug_step(
                 client,
                 &DebugStepArgs {
@@ -1244,43 +1263,102 @@ pub async fn debug_run(client: &IrisClient, args: &DebugRunArgs) -> Result<Debug
                 },
             )
             .await;
-            if let Ok(r) = step {
-                state = r.state;
-                if state == "break" {
-                    stops.push(RunStop {
-                        location: r.location.clone().unwrap_or(Location {
-                            namespace: None,
-                            document: None,
-                            line: None,
-                            method: None,
-                        }),
-                        variables: r.variables.clone(),
-                    });
-                    continue;
-                }
+            let Ok(r) = step else {
+                // Agent died (e.g. target raised): end the scripted `run`.
+                state = "ended".to_string();
                 break;
+            };
+            state = r.state;
+            match state.as_str() {
+                "break" => stops.push(RunStop {
+                    location: r.location.clone().unwrap_or_else(unknown_location),
+                    variables: r.variables.clone(),
+                }),
+                "running" => {
+                    // The resume window lapsed with the target still
+                    // executing. Its `run` reply arrives AT the next stop
+                    // under the run's own transaction id — wait for that
+                    // frame. Never re-send `run` (998/6709 while running,
+                    // verified live) and never `stop` (aborts the job).
+                    if let Some(session) = &session {
+                        state = await_next_stop(session, &mut stops).await?;
+                    }
+                }
+                _ => {}
             }
-            // Agent died (e.g. target raised): end the scripted `run`.
-            state = "ended".to_string();
-            break;
+            if state != "break" {
+                break; // ended | unknown | still-running after the budget
+            }
         }
-        if state == "break" {
-            capped = true;
-        }
+        capped = state == "break";
     }
-    let _ = debug_stop(
-        client,
-        &DebugStopArgs {
-            session_id: info.session_id.clone(),
-        },
-    )
-    .await;
+    if state == "running" {
+        // The target is still executing. Detaching (socket close, no
+        // `stop`) leaves it running (verified live); `debug_stop` here
+        // would abort it mid-loop.
+        detach_session(&info.session_id).await;
+    } else {
+        let _ = debug_stop(
+            client,
+            &DebugStopArgs {
+                session_id: info.session_id.clone(),
+            },
+        )
+        .await;
+    }
     Ok(DebugRunResult {
         target: args.target.clone(),
         state,
         stops,
         capped,
     })
+}
+
+/// A location we could not resolve (the server omitted it).
+fn unknown_location() -> Location {
+    Location {
+        namespace: None,
+        document: None,
+        line: None,
+        method: None,
+    }
+}
+
+/// Drain for the reply to the `run` already in flight on this session; when
+/// it lands on a break, capture that stop too. Returns the session state
+/// (`break` | `ended` | …) or `running` when the await budget lapsed with
+/// the target still executing. A clean `<exit>` (the target finished) ends
+/// the walk like the pre-window code did — not an error.
+async fn await_next_stop(session: &Arc<DebugSession>, stops: &mut Vec<RunStop>) -> Result<String> {
+    let resp = {
+        let mut conn = session.conn.lock().await;
+        match conn.await_reply(RUN_AWAIT_TIMEOUT).await {
+            Ok(r) => r,
+            Err(Error::Debug(m)) if m.contains("crashed") || m.contains("closed") => {
+                // The target ended or dropped the agent: the scripted run
+                // is over; `debug_stop` afterwards is best-effort anyway.
+                return Ok("ended".to_string());
+            }
+            Err(e) => return Err(e),
+        }
+    };
+    let Some(root) = resp else {
+        return Ok("running".to_string());
+    };
+    let status = attr(&root, "status").unwrap_or("unknown").to_string();
+    let state = state_of(&status).to_string();
+    session.set_state(&state);
+    if state == "break" {
+        let (loc, vars) = {
+            let mut conn = session.conn.lock().await;
+            break_context(&mut conn).await?
+        };
+        stops.push(RunStop {
+            location: loc.unwrap_or_else(unknown_location),
+            variables: vars,
+        });
+    }
+    Ok(state)
 }
 
 // ── tests ─────────────────────────────────────────────────────────────
