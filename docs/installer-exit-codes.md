@@ -25,7 +25,7 @@ the same value, so every scenario has a distinct code.
 | Code | Meaning | When Rism's installer returns it |
 |---|---|---|
 | `0` | Installation successful | Setup ran to completion (first install, or `/HELP` / `/?`). |
-| `1` | Installation already in progress | Setup failed to initialize. A second concurrent instance is caught by the `SetupMutex` and exits with this code; the Store scenario maps to it. |
+| `1` | Installation already in progress | Setup failed to initialize. A second concurrent instance is refused by the wired `SetupMutex` ([docs](https://jrsoftware.org/ishelp/topic_setup_setupmutex.htm)): silently it fails to initialize and exits `1` with no changes made; interactively Inno shows the "close all instances" box first, so **Cancel** there returns `2`. The Store scenario maps to it. |
 | `2` | Installation cancelled by user | **Cancel** clicked in the wizard before installation started, or **No** on the opening "This will install…" box. |
 | `3` | Miscellaneous install failure | Fatal error preparing to move to the next installation phase (out of memory / Windows resources — rare). |
 | `4` | Miscellaneous install failure | Fatal error during the actual installation. (Abort at an Abort/Retry/Ignore box is **5**, not fatal.) |
