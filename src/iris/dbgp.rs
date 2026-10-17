@@ -127,17 +127,38 @@ impl DbgpConnection {
             .await
             .map_err(|e| Error::Debug(format!("ws send: {e}")))?;
 
-        let raw = recv_frame(&mut self.ws, Duration::from_secs(30)).await?;
-
-        if raw.starts_with("<exit") || raw.contains("&lt;EXIT&gt;") || raw.contains("<UNDEFINED>") {
-            return Err(Error::Debug(format!(
-                "XDebug agent crashed on '{name}': {}",
-                raw.chars().take(200).collect::<String>()
-            )));
-        }
-
-        let root = Element::parse(std::io::Cursor::new(raw.as_bytes()))
-            .map_err(|e| Error::Debug(format!("bad DBGP xml for '{name}': {e}")))?;
+        // Route by transaction id: a stale reply from an earlier command
+        // whose recv timed out (a `run` that answered late, e.g.) can still
+        // be queued here. Frames that do not carry our id are drained
+        // inside the same 30 s budget; frames without a parseable id are
+        // the agent's own and pass through untouched (parity with the
+        // pre-routing behavior).
+        let expect = self.tx_id;
+        let started = std::time::Instant::now();
+        let budget = Duration::from_secs(30);
+        let root = loop {
+            let left = budget.saturating_sub(started.elapsed());
+            if left.is_zero() {
+                return Err(Error::Debug("dbgp recv timed out".to_string()));
+            }
+            let raw = recv_frame(&mut self.ws, left).await?;
+            if raw.starts_with("<exit")
+                || raw.contains("&lt;EXIT&gt;")
+                || raw.contains("<UNDEFINED>")
+            {
+                return Err(Error::Debug(format!(
+                    "XDebug agent crashed on '{name}': {}",
+                    raw.chars().take(200).collect::<String>()
+                )));
+            }
+            let root = Element::parse(std::io::Cursor::new(raw.as_bytes()))
+                .map_err(|e| Error::Debug(format!("bad DBGP xml for '{name}': {e}")))?;
+            if matches!(attr(&root, "transaction_id").and_then(|t| t.parse::<u32>().ok()), Some(tx) if tx != expect)
+            {
+                continue; // stale reply of an earlier command — drain it
+            }
+            break root;
+        };
 
         // <error code='N'><message>…</message></error> or <response><error…>
         if let Some(err) = find_error(&root) {
@@ -389,6 +410,55 @@ mod tests {
             .expect("the matching frame must be returned, not None");
         assert_eq!(attr(&root, "transaction_id"), Some("8"));
         assert_eq!(attr(&root, "command"), Some("run"));
+        drop(scripted.await.expect("script task"));
+    }
+
+    /// Same routing inside plain `command`: a late reply queued from a
+    /// timed-out `run` must not be mistaken for this command's answer.
+    #[tokio::test]
+    async fn command_discards_a_stale_frame_before_the_matching_reply() {
+        use futures_util::StreamExt as _;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("loopback bind");
+        let addr = listener.local_addr().expect("addr");
+        let client = tokio::net::TcpStream::connect(addr)
+            .await
+            .expect("loopback connect");
+        let (server, _) = listener.accept().await.expect("accept");
+        let mut conn = DbgpConnection::for_test(client).await;
+        let mut peer = tokio::time::timeout(
+            Duration::from_secs(5),
+            tokio_tungstenite::WebSocketStream::from_raw_socket(
+                server,
+                tokio_tungstenite::tungstenite::protocol::Role::Server,
+                None,
+            ),
+        )
+        .await
+        .expect("peer handshake");
+        conn.tx_id = 9;
+        let scripted = tokio::spawn(async move {
+            let _cmd = peer.next().await;
+            peer.send(Message::Text(
+                "<response command='run' transaction_id='8' status='break'/>".into(),
+            ))
+            .await
+            .expect("stale frame");
+            peer.send(Message::Text(
+                "<response command='status' transaction_id='10' status='break'><message/></response>"
+                    .into(),
+            ))
+            .await
+            .expect("fresh frame");
+            peer
+        });
+        let root = conn
+            .command("status", &[], None)
+            .await
+            .expect("stale frame must be drained, not returned");
+        assert_eq!(attr(&root, "transaction_id"), Some("10"));
+        assert_eq!(attr(&root, "command"), Some("status"));
         drop(scripted.await.expect("script task"));
     }
 

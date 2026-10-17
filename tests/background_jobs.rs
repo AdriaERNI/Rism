@@ -944,7 +944,7 @@ fn cap_churn_concurrent_starts_and_cancels_all_answer() {
             );
         }
     }
-    // CAP INVARIANT under churn: a snapshot of all 25 ids never shows
+    // CAP INVARIANT under churn: a snapshot of all submitted ids never shows
     // more than 16 `working` (admission checks the cap under the registry
     // lock; transient #6713 start failures only LOWER the count).
     let all: Vec<&String> = live.iter().chain(started.iter()).collect();
