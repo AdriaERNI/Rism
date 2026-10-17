@@ -26,9 +26,7 @@ use crate::error::{Error, Result};
 use crate::iris::IrisClient;
 use crate::iris::documents as docapi;
 use crate::iris::sql as sqlapi;
-use crate::tools::names::{
-    valid_class_name, valid_member_name, valid_namespace, valid_routine_name,
-};
+use crate::tools::names::{valid_class_name, valid_member_name, valid_routine_name};
 use crate::tools::search::{SearchCodeArgs, search_code};
 
 /// Candidate-doc ceiling for one narrowing search.
@@ -1101,11 +1099,8 @@ pub async fn find_references(
 /// otherwise.
 async fn resolve_target(client: &IrisClient, ns: &str, raw: &str) -> Result<RefTarget> {
     let mut target = parse_ref_target(raw)?;
-    if !valid_namespace(ns) {
-        return Err(Error::Config(format!(
-            "invalid namespace (URL path guard): {ns}"
-        )));
-    }
+    // One canonical guard text (names.rs) — same refusal, same wording.
+    crate::tools::names::guard_namespace(ns)?;
     match target.clone() {
         RefTarget::Routine(_) => {}
         RefTarget::Class(c) => {

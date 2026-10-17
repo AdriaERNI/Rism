@@ -4,10 +4,9 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::iris::IrisClient;
 use crate::iris::search as api;
-use crate::tools::names::valid_namespace;
 
 /// Default document masks when the caller does not choose any. `*.inc`
 /// joins the set: macro `$def` definitions live in include docs and were a
@@ -101,12 +100,8 @@ pub async fn search_code(client: &IrisClient, args: &SearchCodeArgs) -> Result<S
         .unwrap_or_else(|| client.settings().iris_namespace.clone());
     // F-09: the namespace interpolates raw into the URL path segment —
     // refuse unsafe values before any HTTP request, same policy as the
-    // graph tools' class-name guard.
-    if !valid_namespace(&ns) {
-        return Err(Error::Config(format!(
-            "invalid namespace (URL path guard): {ns}"
-        )));
-    }
+    // graph tools' class-name guard. One canonical guard text (names.rs).
+    crate::tools::names::guard_namespace(&ns)?;
     let documents: Vec<String> = args
         .documents
         .clone()
