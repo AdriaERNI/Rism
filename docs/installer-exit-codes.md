@@ -25,7 +25,7 @@ the same value, so every scenario has a distinct code.
 | Code | Meaning | When Rism's installer returns it |
 |---|---|---|
 | `0` | Installation successful | Setup ran to completion (first install, or `/HELP` / `/?`). |
-| `1` | Installation already in progress | Setup failed to initialize. **Reserved**: no `SetupMutex` is wired, so a second instance currently runs freely; kept as a unique value for the Store scenario and a future single-instance guard. |
+| `1` | Installation already in progress | Setup failed to initialize. A second concurrent instance is caught by the `SetupMutex` and exits with this code; the Store scenario maps to it. |
 | `2` | Installation cancelled by user | **Cancel** clicked in the wizard before installation started, or **No** on the opening "This will install…" box. |
 | `3` | Miscellaneous install failure | Fatal error preparing to move to the next installation phase (out of memory / Windows resources — rare). |
 | `4` | Miscellaneous install failure | Fatal error during the actual installation. (Abort at an Abort/Retry/Ignore box is **5**, not fatal.) |
@@ -54,16 +54,16 @@ Store page: **Packages → Add package (EXE)**
 | Package URL | Versioned secure URL to the **standalone/offline** `rism-<version>-setup.exe` on your CDN (e.g. `https://…/downloads/0.1.0/rism-0.1.0-setup.exe`). A downloader stub is grounds for rejection; the binary at the URL must not change after submission. |
 | Architecture | `x64` |
 | App type | `EXE` |
-| Installer parameters (silent) | `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART` (Inno's silent trio; `/SP-` suppresses the "This will install" box so the Store flow can't return 2) |
+| Installer parameters (silent) | `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /ALLUSERS` (this exact line is the single canonical string — CI, these docs, and Partner Center must match it; `/SP-` suppresses the "This will install" box so the Store flow can't return 2, and `/ALLUSERS` pins the per-machine install mode deterministically) |
 | Installation successful | `0` |
 | Application already exists | `100` |
-| Installation cancelled by user | `2` |
+| Installation cancelled by user | `2`, `5` (add both) |
 | Installation already in progress | `1` |
 | Disk space is full | `7` |
 | Reboot required | `8` |
 | Network failure | `101` |
 | Package rejected during installation | `102` |
-| Miscellaneous install failure | `3` (and, per Inno semantics, `4`/`5`/`6` may also occur — the Store lets you register multiple codes per scenario; add them) |
+| Miscellaneous install failure | `3`, `4`, `6` (add all three; per Inno semantics `5` is *cancelled*, not miscellaneous) |
 | Documentation URL (misc failures) | point at this page |
 
 ## Uninstall

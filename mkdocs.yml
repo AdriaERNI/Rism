@@ -53,5 +53,6 @@ nav:
   - Debugger: debugger.md
   - Development: development.md
   - Windows Store: windows-store.md
+  - Privacy Policy: privacy.md
   - Linux Packages: linux-packages.md
   - Installer Exit Codes: installer-exit-codes.md
