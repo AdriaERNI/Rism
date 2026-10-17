@@ -1618,7 +1618,7 @@ async fn list_documents_enforces_filetypes_and_count_client_side() {
     assert_eq!(r.count, 0);
 }
 
-// R3 guard: document names that would escape the namespace doc root (`..`
+// Guard: document names that would escape the namespace doc root (`..`
 // segment) or address the collection endpoint (empty) must refuse with ZERO
 // HTTP — the server error text they used to produce leaked the raw URL path.
 #[tokio::test]
@@ -1692,8 +1692,9 @@ async fn put_doc_surfaces_in_status_error() {
     );
 }
 
-// R3 completion: the test-runner, background-job, and debugger doors resolve
-// a namespace the same way as the SQL/document doors and must refuse hostile
+// Namespace guard completion: the test-runner, background-job, and debugger
+// doors resolve a namespace the same way as the SQL/document doors and must
+// refuse hostile
 // values client-side with ZERO HTTP before the server (or the debug agent)
 // sees them.
 async fn hostile_ns_calls_round2(
@@ -1852,4 +1853,155 @@ async fn start_job_refuses_hostile_namespace_without_touching_the_wire() {
             "jobs/start: zero HTTP for ns {ns:?}"
         );
     }
+}
+
+// The batched BFS must batch at the CALL SITE, not just in the helper:
+// a depth-2 walk whose level-1 frontier holds 49 classes has to answer the
+// level-2 fan-out in a handful of multi-predicate queries, not 49 single-
+// predicate scans (the pre-batching shape this commit exists to kill).
+// Revert the call site to `for f in &frontier` with a per-name query and
+// the request-count bound below goes red.
+#[tokio::test]
+async fn subclasses_frontier_fan_out_batches_into_multi_predicate_queries() {
+    let mut level1 = Vec::new();
+    for i in 0..49 {
+        level1.push(json!({"Name": format!("P.Child{i}"), "Super": "P.Base"}));
+    }
+    let mock = MockServer::start().await;
+    let client = client(&mock);
+    Mock::given(method("POST"))
+        .and(path("/api/atelier/v8/USER/action/query"))
+        .and(body_query_contains("WHERE Super [ 'P.Base' ORDER BY Name"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(query_envelope(&level1)))
+        .up_to_n_times(1)
+        .mount(&mock)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/atelier/v8/USER/action/query"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(query_envelope(&[])))
+        .with_priority(5)
+        .mount(&mock)
+        .await;
+    let res = rism::tools::graph::find_subclasses(
+        &client,
+        &rism::tools::graph::FindSubclassesArgs {
+            class: "P.Base".into(),
+            namespace: None,
+            depth: Some(2),
+        },
+    )
+    .await
+    .expect("walk");
+    assert_eq!(res.count, 49);
+    let incoming = mock.received_requests().await.unwrap();
+    let queries: Vec<String> = incoming
+        .iter()
+        .filter(|r| r.url.path().ends_with("/action/query"))
+        .map(|r| {
+            let v: serde_json::Value =
+                serde_json::from_slice(&r.body).unwrap_or(serde_json::Value::Null);
+            v["query"].as_str().unwrap_or_default().to_string()
+        })
+        .collect();
+    // 1 seed query + frontier chunks — far fewer than 1 + 49 per-name scans.
+    assert!(
+        queries.len() <= 6,
+        "frontier fan-out must batch: {} queries issued: {:?}",
+        queries.len(),
+        queries
+    );
+    let predicates = queries
+        .iter()
+        .filter(|q| q.contains("P.Child"))
+        .map(|q| q.matches("Super [").count())
+        .sum::<usize>();
+    assert!(
+        predicates >= 49,
+        "every frontier name must appear in exactly one chunk predicate ({predicates})"
+    );
+}
+
+// Server-sourced candidate names are re-guarded at the FETCH CALL SITE:
+// a search result whose `doc` is traversal-shaped must never reach the
+// document endpoint. Bypass `fetchable_candidates` in `fetch_candidates`
+// and the hostile GET below goes out — this test goes red.
+#[tokio::test]
+async fn refs_never_fetches_traversal_shaped_server_sourced_candidates() {
+    let mock = MockServer::start().await;
+    // Existence: the target class has a row.
+    Mock::given(method("POST"))
+        .and(path("/api/atelier/v8/USER/action/query"))
+        .and(body_query_contains(
+            "ClassDefinition WHERE Name = 'FProbeI_r.Tgt'",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(query_envelope(&[json!({"Name": "FProbeI_r.Tgt"})])),
+        )
+        .mount(&mock)
+        .await;
+    // Property/trigger narrowing + everything else: empty rows.
+    Mock::given(method("POST"))
+        .and(path("/api/atelier/v8/USER/action/query"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(query_envelope(&[])))
+        .with_priority(5)
+        .mount(&mock)
+        .await;
+    // Literal search: one safe doc + one traversal-shaped candidate name.
+    Mock::given(method("GET"))
+        .and(path("/api/atelier/v8/USER/action/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(search_envelope(&[
+            ("FProbeI_r.Safe.cls", "  do ##class(FProbeI_r.Tgt).M()"),
+            ("../%SYS/Evil.cls", "  do ##class(FProbeI_r.Tgt).M()"),
+        ])))
+        .mount(&mock)
+        .await;
+    // The safe candidate (and the target's own doc) resolve.
+    Mock::given(method("GET"))
+        .and(path_regex("/api/atelier/v8/USER/doc/.*"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(doc_envelope(&[
+            "Class FProbeI_r.Safe",
+            "{",
+            "ClassMethod Go() { do ##class(FProbeI_r.Tgt).M() quit 1 }",
+            "}",
+        ])))
+        .mount(&mock)
+        .await;
+
+    let client = client(&mock);
+    let res = rism::tools::refs::find_references(
+        &client,
+        &rism::tools::refs::FindReferencesArgs {
+            target: "FProbeI_r.Tgt.M".into(),
+            namespace: None,
+            include_system: None,
+            include_generated: None,
+            max_results: None,
+        },
+    )
+    .await
+    .expect("refs run");
+    let _ = res;
+    let incoming = mock.received_requests().await.unwrap();
+    let all_paths: Vec<String> = incoming.iter().map(|r| r.url.path().to_string()).collect();
+    // The hostile name reaches the wire either as `/doc/../…` or, if the
+    // HTTP stack normalizes the traversal away, as a path still naming the
+    // hostile doc — either shape is a breach.
+    assert!(
+        all_paths.iter().all(|p| !p.contains("Evil")),
+        "hostile candidate must never reach the doc endpoint: {all_paths:?}"
+    );
+    // No empty-name candidate addresses the collection endpoint either.
+    assert!(
+        !all_paths.iter().any(|p| p.ends_with("/doc/")),
+        "empty candidate name must never reach the doc endpoint: {all_paths:?}"
+    );
+    // And at least the safe candidate WAS fetched (the guard did not drop
+    // the whole traversal — recall stays intact).
+    assert!(
+        all_paths
+            .iter()
+            .any(|p| p.ends_with("/doc/FProbeI_r.Safe.cls")),
+        "the safe candidate must still be fetched: {all_paths:?}"
+    );
 }

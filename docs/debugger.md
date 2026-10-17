@@ -13,9 +13,11 @@ agents beyond what IRIS ships. Behavior is 1:1 with Prism's debugger.
   eight `debug_*` tools take `session_id`.
 - A stop suspends the target job. End sessions with `debug_stop` (aborts a
   `debug_start`ed target; for an attached job, prefer `debug_step`
-  `action=run` so the job continues — `debug_stop` ends it) — a crashed
-  client that leaves a session open pauses
-  the job until it times out. (If a job is orphaned this way, `docker restart`
+  `action=run` so the job continues — `debug_stop` ends it). If a client
+  dies while the target is PAUSED at a stop, the job stays paused until the
+  session times out; if it dies while the target is RUNNING (a lapsed
+  `run` window), the agent detaches and the job finishes on its own
+  (verified live). (If a job is orphaned paused this way, `docker restart`
   or terminating the job is the reliable recovery — `debug_stop` from a new
   session does not reclaim the old one.)
 
