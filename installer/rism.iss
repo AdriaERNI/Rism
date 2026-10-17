@@ -40,10 +40,11 @@ Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 WizardImageFile=assets\wizard-image.bmp
-WizardSmallImageFile=assets\wizard-small.bmp
+WizardSmallImageFile=assets\wizard-small.png
 ChangesEnvironment=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
+SetupMutex=Global\RismSetupMutex
 PrivilegesRequired=admin
 PrivilegesRequiredOverridesAllowed=dialog
 
@@ -70,16 +71,22 @@ Name: "{group}\{#MyAppName} documentation"; Filename: "{#MyAppURL}"
 {   Installation successful            0      Inno documented (run to         }
 {                                             completion)                     }
 {   Installation already in progress   1      Inno documented (Setup fails to }
-{                                             initialize). Reserved: no       }
-{                                             SetupMutex is wired, so a       }
-{                                             second instance runs freely.    }
-{   Installation cancelled by user     2      Inno documented (Cancel before  }
-{                                             install started)                }
-{   Miscellaneous install failure      3,5,6  Inno documented (prepare-phase  }
-{                                             fatal error; user Abort during  }
-{                                             install; debugger terminate)    }
+{                                             initialize). A second instance }
+{                                             now exits with this code: the  }
+{                                             SetupMutex above makes the     }
+{                                             concurrency scenario real.     }
+{   Installation cancelled by user     2,5     Inno documented (2: Cancel     }
+{                                             before install started; 5:      }
+{                                             Cancel during the actual        }
+{                                             install, or Abort at an         }
+{                                             Abort/Retry/Ignore box)         }
+{   Miscellaneous install failure      3       Inno documented (prepare-phase }
+{                                             fatal error)                    }
 {   Miscellaneous install failure      4      Inno documented (fatal error    }
 {                                             during the actual installation) }
+{   Miscellaneous install failure      6      Inno documented (debugger       }
+{                                             terminate; not reachable in    }
+{                                             production)                     }
 {   Disk space is full                 7      Inno documented                 }
 {   Reboot required                    8      Inno documented                 }
 {   Application already exists       100      custom (GetCustomSetupExitCode  }

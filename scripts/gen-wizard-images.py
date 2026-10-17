@@ -105,7 +105,7 @@ def render_small():
 
 def main():
     if "--check" in sys.argv:
-        for f in ("wizard-image.bmp", "wizard-small.bmp"):
+        for f in ("wizard-image.bmp", "wizard-small.png"):
             p = ASSETS / f
             if not p.exists():
                 print(f"MISSING {p}")
