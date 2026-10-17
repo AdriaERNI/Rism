@@ -2,10 +2,17 @@
 # Built in CI on the linux release leg (actions/download-tool + nfpm pkg).
 #
 # Env substitution (nfpm expands os.Env while parsing):
-#   RISM_VERSION  semver without leading v (from Cargo.toml)
+#   RISM_VERSION  package version: the tag minus its leading v, with a
+#                 pre-release suffix rewritten to sort below the eventual
+#                 final release — "0.2.3~beta1" for deb/rpm (tilde = pre-
+#                 release marker in both comparators) and "0.2.3beta1" for
+#                 arch (pacman ranks "~" after the end of a segment and
+#                 makepkg forbids it in pkgver). ci.yml derives both forms;
+#                 suffix-free tags pass through unchanged.
 #   RISM_ARCH     Go arch nomenclature: amd64 | arm64 (per matrix leg)
-#   RISM_RELEASE  numeric package release (1; CI uses 0.1 for pre-releases,
-#                 arch's pkgrel must parse as an integer)
+#   RISM_RELEASE  numeric package release (always 1; nfpm's arch packager
+#                 coerces a non-integer release to 1, so pre-release
+#                 ordering lives in RISM_VERSION, never in the release)
 #
 # Install contract (Prism/Inno parity, adapted to Linux): packages own ONLY
 # system paths (/usr/bin, /usr/share/doc). ~/.config/rism is created by the
