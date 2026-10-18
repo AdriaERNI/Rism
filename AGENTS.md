@@ -66,6 +66,57 @@ pinned toolchains miss (e.g. `unused_async`, renamed
 - MCP Tasks (SEP-2663) replaced dedicated job tools: long work is
   `execute_command background=true` → `tasks/get` / `tasks/cancel`, never
   new tools.
+- Security guards are load-bearing and pinned by wiremock zero-HTTP tests:
+  every door that interpolates a `namespace` into a URL must pass
+  `names::guard_namespace` BEFORE any request (sql/documents/compile/testing/
+  debug doors + the exec REPL config frame); document names from the server
+  pass the traversal filter before follow-up fetches (`find_references`'
+  macro stage — a second, server-sourced `get_doc` is still a door); every
+  argument interpolated into a DBGP text frame must pass `wire_safe` in
+  `src/iris/dbgp.rs` (newline/quote in an arg = command injection on the
+  debug wire). New tools/paths get the same guards — CI refuses otherwise.
+- Debugger semantics: `debug_stop` DETACHES without aborting; resumed or
+  attached targets must survive client teardown (tx-id-routed wait +
+  detach path). The DBGP agent slot is single-session: live debug tests run
+  serially (`--test-threads=1` in CI); a crashed harness poisons the slot
+  until the server restarts.
+
+## Windows installer & Microsoft Store (installer/)
+
+- `installer/rism.iss` (Inno Setup 6) is the Store-submitted artifact; the
+  PR's `windows-installer.yml` job (silent install → upgrade → uninstall →
+  absence census on a hosted runner) is the arbiter for any .iss change.
+- Canonical silent parameter string — ONE value, identical in
+  `docs/installer-exit-codes.md`, `docs/windows-store.md` and the CI install
+  legs: `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /ALLUSERS`
+  (uninstall takes the 3-switch form; `/SP-` + `/ALLUSERS` are setup-only).
+- Exit-code contract (see docs): 0 ok, 1 second instance refused
+  (`SetupMutex=Global\RismSetupMutex` — wired; silent → exit 1 no changes,
+  interactive → close-all-instances box), 2/5 cancel paths, 7 disk, 8 reboot,
+  100 = upgrade/re-install over existing (via `GetCustomSetupExitCode`).
+  Keep every value unique per Store scenario.
+- Wizard images are GENERATED, never hand-edited: `scripts/gen-wizard-images.py`
+  (run: regenerates `wizard-image.bmp` 606×1158 + `wizard-small.png` 240×240;
+  `--check`: verifies committed assets — Inno letterboxes anything that
+  violates the 164:314 / square ratios, so check before committing).
+- Store facts that must stay TRUE in docs: Microsoft does NOT re-sign
+  EXE/MSI submissions (MSIX-only) — publisher-side Trusted-Root-chain
+  signing is required for the EXE path; the package URL is versioned and
+  immutable after submission.
+
+## Releases & tags
+
+- Stable: Git Flow (release branch → `main` → tag `vX.Y.Z` on the new tip →
+  sync). Pre-releases: tag `vX.Y.Z-suffix` (e.g. `v0.2.3-beta1`) on
+  `development` — CI's tag build publishes a GitHub **prerelease** (any `-`
+  in the tag name triggers it); binaries/installer take the version from
+  Cargo.toml (suffix lives only in the tag/release name).
+- Tag suffixes must not leak into Linux package versions verbatim: the
+  linux-packages leg derives per-manager forms (deb/rpm `~suffix`, arch
+  dotless-suffix — pacman ranks `~` ABOVE the final, dpkg below) and
+  `bench/version_order_check.sh` (run by CI, extracts ci.yml's derivation
+  block so they cannot drift) asserts `previous < prerelease < final` on
+  real artifacts. Keep both in sync or the check fails loudly.
 
 ## Security notes (hints, not enforcement)
 
