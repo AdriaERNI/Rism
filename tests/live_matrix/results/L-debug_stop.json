@@ -1,8 +1,14 @@
 {
  "id": "L-debug_stop",
  "batch": "L:B5",
- "status": "PASS",
- "failures": [],
+ "status": "FAIL",
+ "failures": [
+  "[fresh session for stop row] assert.json requested but result is not JSON: debug error: dbgp recv: WebSocket protocol error: Connection reset without closing handshake",
+  "[stop ends session] unresolved placeholder in args: {\"session_id\": \"${sid}\"} \u2014 a chain row ran out of order",
+  "[gone after stop] unresolved placeholder in args: {\"session_id\": \"${sid}\"} \u2014 a chain row ran out of order",
+  "[squat guard: slot freed, start works again] assert.json requested but result is not JSON: debug error: dbgp recv: WebSocket protocol error: Connection reset without closing handshake",
+  "[stop the fresh session] unresolved placeholder in args: {\"session_id\": \"${sid2}\"} \u2014 a chain row ran out of order"
+ ],
  "notes": [],
- "seconds": 2.4
+ "seconds": 15.4
 }

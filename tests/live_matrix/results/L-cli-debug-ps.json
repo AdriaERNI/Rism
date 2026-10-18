@@ -1,0 +1,10 @@
+{
+ "id": "L-cli-debug-ps",
+ "batch": "L:B6",
+ "status": "PASS",
+ "failures": [],
+ "notes": [
+  "ns is client filter, not a guard (matches B1 finding): L12 finding: --ns filters jobs client-side; the URL never interpolates it"
+ ],
+ "seconds": 0.1
+}

@@ -1,0 +1,78 @@
+{
+ "id": "L-cli-test-run",
+ "batch": "L:B6",
+ "checks": [
+  {
+   "door": "restart",
+   "label": "slot recovery (B5 attach probe left the DBGP agent squatting; ledger rule: restart between crash rounds)"
+  },
+  {
+   "door": "stdio",
+   "label": "tool twin",
+   "tool": "run_tests",
+   "args": {
+    "test_class": "RismCI.LaneCliTest"
+   },
+   "assert": {
+    "isError": false
+   },
+   "save": "twin",
+   "env": {}
+  },
+  {
+   "door": "cli",
+   "label": "cli happy json",
+   "argv": [
+    "test",
+    "run",
+    "RismCI.LaneCliTest",
+    "--format",
+    "json"
+   ],
+   "assert": {
+    "exit_code": 0
+   },
+   "save": "cliout",
+   "env": {}
+  },
+  {
+   "door": "diff",
+   "label": "cli mirrors tool keys",
+   "a": "cliout",
+   "b": "twin",
+   "mode": "keys"
+  },
+  {
+   "door": "cli",
+   "label": "injection refused -> exit 1",
+   "argv": [
+    "test",
+    "run",
+    "Robert'; DROP TABLE"
+   ],
+   "assert": {
+    "exit_code": 1,
+    "stderr_regex": "invalid|guard|not found"
+   }
+  }
+ ],
+ "plant": [
+  {
+   "name": "RismCI.LaneCliTest.cls",
+   "compile": true,
+   "content": [
+    "Class RismCI.LaneCliTest Extends %UnitTest.TestCase",
+    "{",
+    "",
+    "Method TestOne()",
+    "{",
+    "    do $$$AssertEquals(1,1)",
+    "}",
+    "}"
+   ]
+  }
+ ],
+ "unplant": [
+  "RismCI.LaneCliTest.cls"
+ ]
+}

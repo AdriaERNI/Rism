@@ -73,6 +73,7 @@ class Ctx:
     """Per-run shared state: settings, sessions, saved values."""
 
     def __init__(self, os_cfg: dict):
+        self.os_cfg = os_cfg
         self.binary = str((HERE.parent.parent / os_cfg["binary"]).resolve()
                           if not Path(os_cfg["binary"]).is_absolute()
                           else os_cfg["binary"])
@@ -99,6 +100,23 @@ class Ctx:
             env.pop(k, None)
         env.update(check.get("env", {}))
         return env
+
+    def restart_server(self, wait_s: int = 90):
+        """Crash-round restart (ledger rule): run the configured restart
+        command, then poll the Atelier root until it answers 200."""
+        cmd = self.os_cfg.get("restart_cmd")
+        if not cmd:
+            return
+        subprocess.run(cmd, shell=True, check=False, capture_output=True)
+        deadline = time.time() + wait_s
+        while time.time() < deadline:
+            st, _ = http_call(self, "GET", self.base_url + "/api/atelier/",
+                              timeout=5)
+            if st == 200:
+                time.sleep(2)
+                return
+            time.sleep(2)
+        raise RuntimeError("server never returned 200 after restart")
 
     def resolve(self, obj, saved: dict):
         if isinstance(obj, str):
@@ -162,12 +180,24 @@ class Mcp:
         self._read(self.nid, 30)
         self._send({"jsonrpc": "2.0", "method": "notifications/initialized"})
 
-    def call(self, tool, args, timeout=90):
+    def call(self, tool, args, timeout=120):
         self.nid += 1
         rid = self.nid
         self._send({"jsonrpc": "2.0", "id": rid, "method": "tools/call",
                     "params": {"name": tool, "arguments": args}})
-        msg = self._read(rid, timeout)
+        try:
+            msg = self._read(rid, timeout)
+        except RuntimeError as e:
+            # terminal sessions die when IRIS restarts (mid-batch slot
+            # recovery): reconnect once, resend the exact same request.
+            if "EOF" not in str(e):
+                raise
+            self._init()
+            self.nid += 1
+            rid = self.nid
+            self._send({"jsonrpc": "2.0", "id": rid, "method": "tools/call",
+                        "params": {"name": tool, "arguments": args}})
+            msg = self._read(rid, timeout)
         if "error" in msg:
             # JSON-RPC-level error (schema rejection etc.): surface as tool error
             return True, json.dumps(msg["error"])
@@ -369,6 +399,9 @@ def _flat(obj):
 def execute_check(ctx: Ctx, ch: dict, saved: dict):
     door = ch["door"]
     label = ch.get("label", door)
+    if door == "restart":
+        ctx.restart_server(ch.get("wait_s", 90))
+        return label, [], None, "restarted"
     if door == "stdio":
         scope = row_scope[0] + (ch.get("scope_suffix") or "")
         sess = get_session(ctx, ch, scope)
@@ -469,6 +502,8 @@ def execute_check(ctx: Ctx, ch: dict, saved: dict):
                 host, port = m.group(1), m.group(2)
                 proc._mcp_url = f"http://{host}:{port}"
                 saved["httpd_url"] = proc._mcp_url
+                saved["door_url"] = proc._mcp_url
+                ctx.g["door_url"] = proc._mcp_url
             ctx.httpd = proc
             a = ch.get("assert", {})
             fails = []

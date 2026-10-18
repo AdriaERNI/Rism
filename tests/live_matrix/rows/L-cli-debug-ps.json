@@ -1,0 +1,59 @@
+{
+ "id": "L-cli-debug-ps",
+ "batch": "L:B6",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "tool twin",
+   "tool": "debug_list_processes",
+   "args": {
+    "system": true
+   },
+   "assert": {
+    "isError": false
+   },
+   "save": "twin",
+   "env": {}
+  },
+  {
+   "door": "cli",
+   "label": "cli happy json",
+   "argv": [
+    "debug",
+    "ps",
+    "--system",
+    "--format",
+    "json"
+   ],
+   "assert": {
+    "exit_code": 0
+   },
+   "save": "cliout",
+   "env": {}
+  },
+  {
+   "door": "diff",
+   "label": "cli mirrors tool keys",
+   "a": "cliout",
+   "b": "twin",
+   "mode": "keys"
+  },
+  {
+   "door": "cli",
+   "label": "ns is client filter, not a guard (matches B1 finding)",
+   "argv": [
+    "debug",
+    "ps",
+    "--ns",
+    "../x",
+    "--format",
+    "json"
+   ],
+   "assert": {
+    "exit_code": 0
+   },
+   "probe_note": "L12 finding: --ns filters jobs client-side; the URL never interpolates it"
+  }
+ ],
+ "serial": true
+}

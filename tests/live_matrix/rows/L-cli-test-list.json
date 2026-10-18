@@ -1,0 +1,53 @@
+{
+ "id": "L-cli-test-list",
+ "batch": "L:B6",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "tool twin",
+   "tool": "list_tests",
+   "args": {},
+   "assert": {
+    "isError": false
+   },
+   "save": "twin",
+   "env": {}
+  },
+  {
+   "door": "cli",
+   "label": "cli happy json",
+   "argv": [
+    "test",
+    "list",
+    "--format",
+    "json"
+   ],
+   "assert": {
+    "exit_code": 0
+   },
+   "save": "cliout",
+   "env": {}
+  },
+  {
+   "door": "diff",
+   "label": "cli mirrors tool keys",
+   "a": "cliout",
+   "b": "twin",
+   "mode": "keys"
+  },
+  {
+   "door": "cli",
+   "label": "wildcard rejected",
+   "argv": [
+    "test",
+    "list",
+    "--filter",
+    "My%"
+   ],
+   "assert": {
+    "exit_code": 1,
+    "stderr_regex": "filter|wildcard|invalid"
+   }
+  }
+ ]
+}

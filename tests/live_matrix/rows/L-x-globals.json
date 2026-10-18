@@ -3,6 +3,10 @@
  "batch": "L:B9",
  "checks": [
   {
+   "door": "restart",
+   "label": "fresh server for census legs"
+  },
+  {
    "door": "stdio",
    "label": "set global",
    "tool": "execute_command",

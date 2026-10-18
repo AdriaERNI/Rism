@@ -1,10 +1,11 @@
 {
  "id": "L-debug_attach",
  "batch": "L:B5",
- "status": "PASS",
- "failures": [],
- "notes": [
-  "hostile newline target: honest error, NO wire injection: observed: 'bad DBGP xml for feature_set' \u2014 the newline target derails the handshake's XML echo and the client aborts cleanly BEFORE any command frame; no second command executed, slot untouched by an injected op (wire_safe guards raw args; free-form values ride base64 -d data, src/iris/dbgp.rs)"
+ "status": "FAIL",
+ "failures": [
+  "[no-such pid honest error] text_regex '999999|[Pp][Ii][Dd]|not' not found in debug error: dbgp recv: WebSocket protocol error: Connection reset without closing handshake",
+  "[hostile newline target: honest error, NO wire injection] text_regex '6711|Invalid debugger target|wire guard|invalid DBGP|bad DBGP xml' not found in debug error: dbgp recv: WebSocket protocol error: Connection reset without closing handshake"
  ],
- "seconds": 0.1
+ "notes": [],
+ "seconds": 15.4
 }

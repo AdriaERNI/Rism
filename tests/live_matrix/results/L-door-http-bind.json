@@ -1,0 +1,10 @@
+{
+ "id": "L-door-http-bind",
+ "batch": "L:B7",
+ "status": "PASS",
+ "failures": [],
+ "notes": [
+  "cross-origin: session-gate 404 precedes origin 403 (guard order pinned in tests/http_door_status_matrix.rs): documented order 'method -> Accept/Content-Type -> session -> Origin/Host -> body size': uninitialised session POST answers 404 before the Origin gate ever fires; the full origin-bypass matrix is CI's job (P-door rows)"
+ ],
+ "seconds": 0.2
+}

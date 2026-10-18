@@ -1,0 +1,86 @@
+{
+ "id": "L-cli-search",
+ "batch": "L:B6",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "tool twin",
+   "tool": "search_code",
+   "args": {
+    "query": "Extends",
+    "regex": false,
+    "max_results": 3
+   },
+   "assert": {
+    "isError": false
+   },
+   "save": "twin",
+   "env": {}
+  },
+  {
+   "door": "cli",
+   "label": "cli happy json",
+   "argv": [
+    "search",
+    "Extends",
+    "--no-regex",
+    "--max",
+    "3",
+    "--format",
+    "json"
+   ],
+   "assert": {
+    "exit_code": 0
+   },
+   "save": "cliout",
+   "env": {}
+  },
+  {
+   "door": "diff",
+   "label": "cli mirrors tool keys",
+   "a": "cliout",
+   "b": "twin",
+   "mode": "keys"
+  },
+  {
+   "door": "cli",
+   "label": "unknown flag -> exit 2",
+   "argv": [
+    "search",
+    "x",
+    "--nope"
+   ],
+   "assert": {
+    "exit_code": 2
+   }
+  },
+  {
+   "door": "cli",
+   "label": "guard refusal",
+   "argv": [
+    "search",
+    "x",
+    "--namespace",
+    "../x"
+   ],
+   "assert": {
+    "exit_code": 1,
+    "stderr_regex": "invalid namespace"
+   }
+  },
+  {
+   "door": "cli",
+   "label": "unreachable",
+   "argv": [
+    "search",
+    "x",
+    "--url",
+    "http://127.0.0.1:1"
+   ],
+   "assert": {
+    "exit_code": 1
+   },
+   "timeout": 30
+  }
+ ]
+}

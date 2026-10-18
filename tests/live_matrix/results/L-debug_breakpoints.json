@@ -1,8 +1,19 @@
 {
  "id": "L-debug_breakpoints",
  "batch": "L:B5",
- "status": "PASS",
- "failures": [],
+ "status": "FAIL",
+ "failures": [
+  "[list has entry bp] unresolved placeholder in args: {\"session_id\": \"${sid}\", \"action\": \"list\"} \u2014 a chain row ran out of order",
+  "[set line bp] unresolved placeholder in args: {\"session_id\": \"${sid}\", \"action\": \"set\", \"breakpoint\": {\"class\": \"LRISLX.Dbg\", \"method\": \"Run\", \"offset\": 2}} \u2014 a chain row ran out of order",
+  "[disable] unresolved placeholder in args: {\"session_id\": \"${sid}\", \"action\": \"disable\", \"id\": \"${bpid}\"} \u2014 a chain row ran out of order",
+  "[enable] unresolved placeholder in args: {\"session_id\": \"${sid}\", \"action\": \"enable\", \"id\": \"${bpid}\"} \u2014 a chain row ran out of order",
+  "[bogus method = DBGP 201 surfaced] unresolved placeholder in args: {\"session_id\": \"${sid}\", \"action\": \"set\", \"breakpoint\": {\"class\": \"LRISLX.Dbg\", \"method\": \"NoSuchMethodAnywhere\", \"offse \u2014 a chain row ran out of order",
+  "[newline in class refused (wire guard on bp args)] unresolved placeholder in args: {\"session_id\": \"${sid}\", \"action\": \"set\", \"breakpoint\": {\"class\": \"LRISLX.Dbg\\n evil\", \"method\": \"Run\", \"offset\": 1}} \u2014 a chain row ran out of order",
+  "[remove] unresolved placeholder in args: {\"session_id\": \"${sid}\", \"action\": \"remove\", \"id\": \"${bpid}\"} \u2014 a chain row ran out of order",
+  "[list back to entry bp] unresolved placeholder in args: {\"session_id\": \"${sid}\", \"action\": \"list\"} \u2014 a chain row ran out of order",
+  "[behavioral oracle: set at loop line] unresolved placeholder in args: {\"session_id\": \"${sid}\", \"action\": \"set\", \"breakpoint\": {\"class\": \"LRISLX.Dbg\", \"method\": \"Run\", \"offset\": 3}} \u2014 a chain row ran out of order",
+  "[run -> stop at bp (or honest ended)] unresolved placeholder in args: {\"session_id\": \"${sid}\", \"action\": \"run\"} \u2014 a chain row ran out of order"
+ ],
  "notes": [],
- "seconds": 0.1
+ "seconds": 0.0
 }

@@ -459,6 +459,17 @@ mod tests {
     }
 
     #[test]
+    fn glob_bare_pattern_is_recursive() {
+        // Mission L defect pin: a bare filename pattern used to expand to
+        // `{pattern}/**/{pattern}` — a path no file can have, so `*.rs`
+        // (docs' own example shape) always answered an empty list.
+        assert_eq!(glob_for("*.rs"), "**/*.rs");
+        assert_eq!(glob_for("/abs/*.rs"), "**/abs/*.rs");
+        assert_eq!(glob_for("src/**/*.rs"), "src/**/*.rs");
+        assert_eq!(glob_for("**/*.rs"), "**/*.rs");
+    }
+
+    #[test]
     fn file_truncation_line_boundary() {
         let text = "x".repeat(MAX_FILE_CHARS + 100) + "\ny";
         let (cut, truncated, msg) = truncate_file(text);

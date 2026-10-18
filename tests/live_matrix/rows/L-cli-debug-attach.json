@@ -1,0 +1,52 @@
+{
+ "id": "L-cli-debug-attach",
+ "batch": "L:B6",
+ "checks": [
+  {
+   "door": "restart",
+   "label": "slot recovery (B5 attach probe left the DBGP agent squatting; ledger rule: restart between crash rounds)"
+  },
+  {
+   "door": "cli",
+   "label": "attach no-such pid -> exit 1",
+   "argv": [
+    "debug",
+    "attach",
+    "999999",
+    "--format",
+    "json"
+   ],
+   "assert": {
+    "exit_code": 1,
+    "stderr_regex": "."
+   }
+  },
+  {
+   "door": "cli",
+   "label": "unknown flag -> exit 2",
+   "argv": [
+    "debug",
+    "attach",
+    "1",
+    "--nope"
+   ],
+   "assert": {
+    "exit_code": 2
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "tool twin: same refusal shape",
+   "tool": "debug_attach",
+   "args": {
+    "pid": 999999
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "999999|pid|not|error"
+   }
+  }
+ ],
+ "serial": true,
+ "order": 120
+}

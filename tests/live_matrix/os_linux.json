@@ -1,6 +1,7 @@
 {
-  "os": "linux",
-  "binary": "target/debug/rism",
-  "settings": "~/.config/rism/config.toml",
-  "workspace": "."
+ "os": "linux",
+ "binary": "target/debug/rism",
+ "settings": "~/.config/rism/config.toml",
+ "workspace": ".",
+ "restart_cmd": "docker restart rism-iris >/dev/null"
 }

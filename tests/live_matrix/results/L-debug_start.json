@@ -1,8 +1,11 @@
 {
  "id": "L-debug_start",
  "batch": "L:B5",
- "status": "PASS",
- "failures": [],
+ "status": "FAIL",
+ "failures": [
+  "[start breaks at entry] assert.json requested but result is not JSON: DBGP error 3: ERROR #6713: Start target failed",
+  "[slot conflict surfaced] text_regex 'already active' not found in debug error: dbgp recv: WebSocket protocol error: Connection reset without closing handshake"
+ ],
  "notes": [],
- "seconds": 0.3
+ "seconds": 10.9
 }

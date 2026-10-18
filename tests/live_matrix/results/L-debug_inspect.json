@@ -1,10 +1,15 @@
 {
  "id": "L-debug_inspect",
  "batch": "L:B5",
- "status": "PASS",
- "failures": [],
- "notes": [
-  "pure expression eval: side-effect leg: pure-expression eval verified; docs silent on method-call side effects in break context (kept as note only)"
+ "status": "FAIL",
+ "failures": [
+  "[eval 1+1] unresolved placeholder in args: {\"session_id\": \"${sid}\", \"expression\": \"1+1\"} \u2014 a chain row ran out of order",
+  "[eval x (42 after step)] unresolved placeholder in args: {\"session_id\": \"${sid}\", \"expression\": \"x\"} \u2014 a chain row ran out of order",
+  "[oracle: execute_command 1+1] assert.json requested but result is not JSON: terminal error: server error: ERROR #6713: Start target failed",
+  "[pure expression eval] unresolved placeholder in args: {\"session_id\": \"${sid}\", \"expression\": \"\\\"str\\\"_$c(65)\"} \u2014 a chain row ran out of order",
+  "[garbage honest error] unresolved placeholder in args: {\"session_id\": \"${sid}\", \"expression\": \"@@@garbage@@@\"} \u2014 a chain row ran out of order",
+  "[NUL expression: honest error, no wire injection] unresolved placeholder in args: {\"session_id\": \"${sid}\", \"expression\": \"\\u0000run -i 1\"} \u2014 a chain row ran out of order"
  ],
- "seconds": 0.1
+ "notes": [],
+ "seconds": 3.1
 }

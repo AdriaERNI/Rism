@@ -1,0 +1,57 @@
+{
+ "id": "L-cli-test-results",
+ "batch": "L:B6",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "tool twin",
+   "tool": "get_test_results",
+   "args": {
+    "max_runs": 3
+   },
+   "assert": {
+    "isError": false
+   },
+   "save": "twin",
+   "env": {}
+  },
+  {
+   "door": "cli",
+   "label": "cli happy json",
+   "argv": [
+    "test",
+    "results",
+    "--limit",
+    "3",
+    "--format",
+    "json"
+   ],
+   "assert": {
+    "exit_code": 0
+   },
+   "save": "cliout",
+   "env": {}
+  },
+  {
+   "door": "diff",
+   "label": "cli mirrors tool keys",
+   "a": "cliout",
+   "b": "twin",
+   "mode": "keys"
+  },
+  {
+   "door": "cli",
+   "label": "guard",
+   "argv": [
+    "test",
+    "results",
+    "--class",
+    "a/../b"
+   ],
+   "assert": {
+    "exit_code": 1,
+    "stderr_regex": "invalid|guard"
+   }
+  }
+ ]
+}

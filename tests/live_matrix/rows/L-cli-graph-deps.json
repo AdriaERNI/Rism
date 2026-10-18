@@ -1,0 +1,69 @@
+{
+ "id": "L-cli-graph-deps",
+ "batch": "L:B6",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "tool twin",
+   "tool": "class_dependencies",
+   "args": {
+    "class": "%Library.RegisteredObject"
+   },
+   "assert": {
+    "isError": false
+   },
+   "save": "twin",
+   "env": {}
+  },
+  {
+   "door": "cli",
+   "label": "cli happy json",
+   "argv": [
+    "graph",
+    "deps",
+    "%Library.RegisteredObject",
+    "--format",
+    "json"
+   ],
+   "assert": {
+    "exit_code": 0
+   },
+   "save": "cliout",
+   "env": {}
+  },
+  {
+   "door": "diff",
+   "label": "cli mirrors tool keys",
+   "a": "cliout",
+   "b": "twin",
+   "mode": "keys"
+  },
+  {
+   "door": "cli",
+   "label": "allowlist refusal",
+   "argv": [
+    "graph",
+    "deps",
+    "Robert'; DROP TABLE"
+   ],
+   "assert": {
+    "exit_code": 1,
+    "stderr_regex": "invalid class name"
+   }
+  },
+  {
+   "door": "cli",
+   "label": "bad direction -> exit 2",
+   "argv": [
+    "graph",
+    "deps",
+    "%Library.RegisteredObject",
+    "--direction",
+    "sideways"
+   ],
+   "assert": {
+    "exit_code": 2
+   }
+  }
+ ]
+}

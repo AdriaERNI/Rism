@@ -1,8 +1,15 @@
 {
  "id": "L-debug_variables",
  "batch": "L:B5",
- "status": "PASS",
- "failures": [],
+ "status": "FAIL",
+ "failures": [
+  "[private ctx] unresolved placeholder in args: {\"session_id\": \"${sid}\", \"context\": \"private\"} \u2014 a chain row ran out of order",
+  "[public ctx] unresolved placeholder in args: {\"session_id\": \"${sid}\", \"context\": \"public\"} \u2014 a chain row ran out of order",
+  "[class ctx + level] unresolved placeholder in args: {\"session_id\": \"${sid}\", \"context\": \"class\", \"stack_level\": 1} \u2014 a chain row ran out of order",
+  "[step_over lands a break] unresolved placeholder in args: {\"session_id\": \"${sid}\", \"action\": \"step_over\"} \u2014 a chain row ran out of order",
+  "[x=42 visible in frame vars] unresolved placeholder in args: {\"session_id\": \"${sid}\"} \u2014 a chain row ran out of order",
+  "[inspect agrees with vars] unresolved placeholder in args: {\"session_id\": \"${sid}\", \"expression\": \"%data(x)\"} \u2014 a chain row ran out of order"
+ ],
  "notes": [],
- "seconds": 0.1
+ "seconds": 0.0
 }
