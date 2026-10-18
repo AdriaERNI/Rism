@@ -1,0 +1,102 @@
+{
+ "id": "L-find_references",
+ "batch": "L:B2",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "class target",
+   "tool": "find_references",
+   "args": {
+    "target": "LRISLX.FR1"
+   },
+   "assert": {
+    "isError": false,
+    "json": {
+     "edges": {
+      "len_gte": 1
+     },
+     "edges.0.doc": {
+      "regex": "FR1"
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "member target",
+   "tool": "find_references",
+   "args": {
+    "target": "LRISLX.FR1.Ok"
+   },
+   "assert": {
+    "isError": false
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "routine form (no refs docs planted \u2014 legal headers only .cls accepted by this Atelier build)",
+   "tool": "find_references",
+   "args": {
+    "target": "^LRISLXFRX"
+   },
+   "assert": {
+    "isError": false,
+    "json": {
+     "kind": {
+      "eq": "routine"
+     },
+     "edges": {
+      "len_eq": 0
+     }
+    }
+   },
+   "probe_note": "plant probe: .mac/.int with every header shape 16021s at PUT; routine targets work against existing docs"
+  },
+  {
+   "door": "stdio",
+   "label": "traversal refused",
+   "tool": "find_references",
+   "args": {
+    "target": "../../etc"
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "guard|invalid|refus"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "not found honest",
+   "tool": "find_references",
+   "args": {
+    "target": "Not.There"
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "not found"
+   }
+  }
+ ],
+ "plant": [
+  {
+   "name": "LRISLX.FR1.cls",
+   "compile": true,
+   "content": [
+    "Class LRISLX.FR1 Extends %RegisteredObject",
+    "{",
+    "",
+    "ClassMethod Ok() As %Status",
+    "{",
+    "    quit $$$OK",
+    "}",
+    "",
+    "ClassMethod Use() As %Status",
+    "{",
+    "    quit ##class(LRISLX.FR1).Ok()",
+    "}",
+    "}"
+   ]
+  }
+ ],
+ "unplant": []
+}

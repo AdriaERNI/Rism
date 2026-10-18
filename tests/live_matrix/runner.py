@@ -83,7 +83,10 @@ class Ctx:
         self.user = iris.get("username", "_SYSTEM")
         self.pw = iris.get("password", "SYS")
         self.workspace = os_cfg.get("workspace", str(HERE.parent.parent))
+        self.scratch = str(Path(self.workspace).resolve() / ".sf-live-matrix")
+        Path(self.scratch).mkdir(parents=True, exist_ok=True)
         self.sessions: dict[str, "Mcp"] = {}
+        self.g: dict[str, object] = {}  # cross-row saved values (debug chain)
         self.httpd: subprocess.Popen | None = None
         self.httpd_url = None
 
@@ -99,12 +102,15 @@ class Ctx:
 
     def resolve(self, obj, saved: dict):
         if isinstance(obj, str):
-            m = re.fullmatch(r"\$\{(\w+)\}", obj)
-            if m and m.group(1) in saved:
-                return saved[m.group(1)]
-            def sub(mm):
-                return str(saved.get(mm.group(1), mm.group(0)))
-            return re.sub(r"\$\{(\w+)\}", sub, obj)
+            m = re.fullmatch(r"\$\{(g:)?(\w+)\}", obj)
+            if m:
+                pool = self.g if m.group(1) else saved
+                if m.group(2) in pool:
+                    return pool[m.group(2)]
+            return re.sub(
+                r"\$\{(g:)?(\w+)\}",
+                lambda mm: str((self.g if mm.group(1) else saved).get(
+                    mm.group(2), mm.group(0))), obj)
         if isinstance(obj, dict):
             return {k: self.resolve(v, saved) for k, v in obj.items()}
         if isinstance(obj, list):
@@ -239,8 +245,17 @@ def cond_ok(val, cond):
         return val is not None and re.search(cond["regex"], str(val)) is not None
     if "len_gte" in cond:
         return val is not None and len(val) >= cond["len_gte"]
+    if "len_eq" in cond:
+        return val is not None and len(val) == cond["len_eq"]
     if "len_lte" in cond:
         return val is not None and len(val) <= cond["len_lte"]
+    if "gte" in cond:
+        return isinstance(val, (int, float)) and val >= cond["gte"]
+    if "lte" in cond:
+        return isinstance(val, (int, float)) and val <= cond["lte"]
+    if "sorted_desc" in cond:
+        vs = [get_path(x, cond["sorted_desc"])[0] for x in (val or [])]
+        return all(vs[i] >= vs[i + 1] for i in range(len(vs) - 1))
     if "set_eq" in cond:
         try:
             return set(map(str, val)) == set(map(str, cond["set_eq"]))
@@ -308,7 +323,8 @@ text_err_flag = [False]  # set per stdio check before asserts run
 def run_plant(ctx, sess, plant):
     for p in plant:
         err, text = sess.call("put_document",
-                              {"name": p["name"], "content": p["content"]})
+                              {"name": p["name"], "content": p["content"],
+                               "ignore_conflict": True})
         if err:
             raise RuntimeError(f"plant put {p['name']} failed: {text[:200]}")
         if p.get("compile"):
@@ -333,7 +349,8 @@ def execute_check(ctx: Ctx, ch: dict, saved: dict):
     door = ch["door"]
     label = ch.get("label", door)
     if door == "stdio":
-        sess = get_session(ctx, ch, row_scope[0])
+        scope = row_scope[0] + (ch.get("scope_suffix") or "")
+        sess = get_session(ctx, ch, scope)
         args = ctx.resolve(ch.get("args", {}), saved)
         err, text = sess.call(ch["tool"], args, ch.get("timeout", 120))
         text_err_flag[0] = err
@@ -344,6 +361,15 @@ def execute_check(ctx: Ctx, ch: dict, saved: dict):
             pass
         if ch.get("save"):
             saved[ch["save"]] = parsed if parsed is not None else text
+        if ch.get("extract") and parsed is not None:
+            for gname, pth in ch["extract"].items():
+                val, _ = get_path(parsed, pth)
+                ctx.g[gname] = val
+                saved[gname] = val
+        if ch.get("save_g"):
+            v = parsed if parsed is not None else text
+            ctx.g[ch["save_g"]] = v
+            saved[ch["save_g"]] = v
         return label, check_asserts(ctx, ch.get("assert", {}), saved,
                                     text=text), parsed, text
     if door == "cli":
@@ -381,10 +407,11 @@ def execute_check(ctx: Ctx, ch: dict, saved: dict):
                                     stderr=p.stderr), parsed, p.stdout
     if door == "http":
         path = ctx.resolve(ch["path"], saved)
-        url = ch.get("base", ctx.base_url) + path
+        url = ctx.resolve(ch.get("base", ctx.base_url), saved) + path
         st, body = http_call(ctx, ch.get("method", "GET"), url,
-                             ch.get("body"), ch.get("headers"),
-                             ch.get("timeout", 60), ch.get("auth", True))
+                            ctx.resolve(ch.get("body"), saved),
+                            ctx.resolve(ch.get("headers"), saved),
+                            ch.get("timeout", 60), ch.get("auth", True))
         parsed = None
         try:
             parsed = json.loads(body)
@@ -504,6 +531,21 @@ def execute_check(ctx: Ctx, ch: dict, saved: dict):
             if la - lb:
                 fails.append(f"{ch['a']} keys not in {ch['b']}: {sorted(la - lb)[:12]}")
         return label, fails, None, ""
+    if door == "hash_eq":
+        import hashlib
+
+        def sha_of(lines, join):
+            return hashlib.sha256(join.join(lines).encode()).hexdigest()
+        join = ch.get("join", "\n")
+        a_lines = ctx.resolve(ch["a"], saved)
+        b_val = saved.get(ch["b"])
+        b_lines = get_path(b_val, ch.get("path", "content"))[0] if isinstance(b_val, dict) else b_val
+        fails = []
+        if not isinstance(a_lines, list) or not isinstance(b_lines, list):
+            fails.append("hash_eq needs two line lists")
+        elif sha_of(a_lines, join) != sha_of(b_lines, join):
+            fails.append(f"sha mismatch: put={a_lines[:2]}… get={b_lines[:2]}…")
+        return label, fails, None, ""
     raise RuntimeError(f"unknown door {door}")
 
 
@@ -539,10 +581,15 @@ def run_row(ctx: Ctx, row: dict):
     finally:
         if row.get("unplant"):
             try:
-                s = sess or get_session(ctx, {"env": row.get("env", {})})
+                s = sess or get_session(ctx, {"env": row.get("env", {})}, row_scope[0])
                 run_unplant(ctx, s, row["unplant"])
             except Exception as e:
                 notes.append(f"unplant-failed: {e!r}")
+        # a per-row stdio session ends with the row; a shared-scope session
+        # (debug chain) lives until run end
+        pref = row["id"] + "|"
+        for k in [k for k in ctx.sessions if k.startswith(pref)]:
+            ctx.sessions.pop(k).kill()
     return {"id": row["id"], "batch": row.get("batch", "?"),
             "status": "FAIL" if failures else "PASS",
             "failures": failures, "notes": notes,
@@ -576,6 +623,9 @@ def main():
         if ids and row["id"] not in ids:
             continue
         selected.append((row["id"], row))
+    # in-batch order from the row's own "order" key (debug chain needs
+    # attach-last; default 100 keeps alphabetical)
+    selected.sort(key=lambda t: (t[1].get("batch", ""), t[1].get("order", 100), t[0]))
 
     summary = []
     for rid, row in selected:

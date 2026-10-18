@@ -1,0 +1,10 @@
+{
+ "id": "L-find_subclasses",
+ "batch": "L:B1",
+ "status": "PASS",
+ "failures": [],
+ "notes": [
+  "depth 65 clamped/rejected: depth>64 handled: result reports its effective depth"
+ ],
+ "seconds": 0.4
+}

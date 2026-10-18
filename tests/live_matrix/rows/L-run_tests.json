@@ -1,0 +1,113 @@
+{
+ "id": "L-run_tests",
+ "batch": "L:B3",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "happy run",
+   "tool": "run_tests",
+   "args": {
+    "test_class": "LRISLX.Tests"
+   },
+   "assert": {
+    "isError": false,
+    "json": {
+     "summary": {
+      "exists": true
+     }
+    }
+   },
+   "save": "rt"
+  },
+  {
+   "door": "stdio",
+   "label": "single method",
+   "tool": "run_tests",
+   "args": {
+    "test_class": "LRISLX.Tests",
+    "test_method": "TestPass"
+   },
+   "assert": {
+    "isError": false
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "history after",
+   "tool": "get_test_results",
+   "args": {
+    "test_class": "LRISLX.Tests",
+    "max_runs": 5
+   },
+   "assert": {
+    "json": {
+     "runs": {
+      "len_gte": 1
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "sql injection refused",
+   "tool": "run_tests",
+   "args": {
+    "test_class": "Robert'; DROP TABLE"
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "invalid|guard|refus"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "absurd timeout",
+   "tool": "run_tests",
+   "args": {
+    "test_class": "LRISLX.Tests",
+    "test_method": "TestPass",
+    "timeout_secs": 999999999
+   },
+   "assert": {
+    "isError": false
+   }
+  },
+  {
+   "door": "cli",
+   "label": "cli mirror",
+   "argv": [
+    "test",
+    "run",
+    "LRISLX.Tests",
+    "--method",
+    "TestPass",
+    "--format",
+    "json"
+   ],
+   "assert": {
+    "exit_code": 0
+   }
+  }
+ ],
+ "plant": [
+  {
+   "name": "LRISLX.Tests.cls",
+   "content": [
+    "Class LRISLX.Tests Extends %UnitTest.TestCase",
+    "{",
+    "",
+    "Method TestPass()",
+    "{",
+    "    do $$$AssertEquals(1,1)",
+    "}",
+    "",
+    "Method TestPass2()",
+    "{",
+    "    do $$$AssertEquals(2,2)",
+    "}",
+    "}"
+   ],
+   "compile": true
+  }
+ ]
+}

@@ -1,0 +1,87 @@
+{
+ "id": "L-delete_document",
+ "batch": "L:B2",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "delete",
+   "tool": "delete_document",
+   "args": {
+    "name": "LRISLX.Del1.cls"
+   },
+   "assert": {
+    "isError": false,
+    "json": {
+     "deleted": {
+      "eq": "LRISLX.Del1.cls"
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "gone",
+   "tool": "get_document",
+   "args": {
+    "name": "LRISLX.Del1.cls"
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "not found|HTTP 4"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "missing delete errors",
+   "tool": "delete_document",
+   "args": {
+    "name": "LRISLX.NeverWas.cls"
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "not found|404|HTTP 4"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "empty name",
+   "tool": "delete_document",
+   "args": {
+    "name": ""
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "invalid document name: empty"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "bad %nope ns",
+   "tool": "delete_document",
+   "args": {
+    "name": "X.cls",
+    "namespace": "%nope"
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "invalid namespace|non-JSON|HTTP|error"
+   },
+   "probe_note": "%nope passes valid_namespace ('%' + letter) so the URL carries it; server 404s with an HTML body surfaced as invalid Atelier response \u2014 honest error, never a panic/silent ok"
+  }
+ ],
+ "plant": [
+  {
+   "name": "LRISLX.Del1.cls",
+   "content": [
+    "Class LRISLX.Del1 Extends %RegisteredObject",
+    "{",
+    "",
+    "ClassMethod Ok() As %Status",
+    "{",
+    "    quit $$$OK",
+    "}",
+    "}"
+   ]
+  }
+ ]
+}

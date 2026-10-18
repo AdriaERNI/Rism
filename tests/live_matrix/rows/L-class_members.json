@@ -1,0 +1,83 @@
+{
+ "id": "L-class_members",
+ "batch": "L:B1",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "happy",
+   "tool": "class_members",
+   "args": {
+    "class": "%UnitTest.TestCase"
+   },
+   "assert": {
+    "json": {
+     "class": {
+      "eq": "%UnitTest.TestCase"
+     },
+     "methods": {
+      "len_gte": 1
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "kind narrowing",
+   "tool": "class_members",
+   "args": {
+    "class": "%UnitTest.TestCase",
+    "kind": "queries"
+   },
+   "assert": {
+    "json": {
+     "kind": {
+      "eq": "queries"
+     },
+     "methods": {
+      "len_eq": 0
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "allowlist refusal",
+   "tool": "class_members",
+   "args": {
+    "class": "..\\x"
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "invalid class name"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "no-row is error not zeros",
+   "tool": "class_members",
+   "args": {
+    "class": "NoSuchClass.Evil"
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "not found"
+   }
+  },
+  {
+   "door": "cli",
+   "label": "cli mirror",
+   "argv": [
+    "graph",
+    "members",
+    "%UnitTest.TestCase",
+    "--kind",
+    "methods",
+    "--format",
+    "json"
+   ],
+   "assert": {
+    "exit_code": 0
+   }
+  }
+ ]
+}

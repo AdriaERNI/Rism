@@ -1,0 +1,10 @@
+{
+ "id": "L-list_documents",
+ "batch": "L:B1",
+ "status": "PASS",
+ "failures": [],
+ "notes": [
+  "NUL in filetypes: accepted, filters to empty: no filetype guard in code (documents.rs client-side filter); NUL never reaches a URL (docnames endpoint carries no filetype param) \u2014 observed empty list, not a refusal"
+ ],
+ "seconds": 3.3
+}

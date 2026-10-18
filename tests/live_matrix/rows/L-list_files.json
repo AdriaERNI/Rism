@@ -1,0 +1,102 @@
+{
+ "id": "L-list_files",
+ "batch": "L:B4",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "pattern",
+   "tool": "list_files",
+   "args": {
+    "pattern": "*.toml"
+   },
+   "assert": {
+    "json": {
+     "files": {
+      "len_gte": 1
+     }
+    }
+   },
+   "env": {
+    "RISM_WORKSPACE": "/home/hermes/Projects/blkpws/Rism/.worktrees/coder"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "dir path",
+   "tool": "list_files",
+   "args": {
+    "path": "src",
+    "pattern": "*.rs"
+   },
+   "assert": {
+    "json": {
+     "files": {
+      "len_gte": 1
+     }
+    }
+   },
+   "env": {
+    "RISM_WORKSPACE": "/home/hermes/Projects/blkpws/Rism/.worktrees/coder"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "max 0 clamps",
+   "tool": "list_files",
+   "args": {
+    "pattern": "*.rs",
+    "max_results": 0
+   },
+   "assert": {
+    "isError": false,
+    "json": {
+     "files": {
+      "len_gte": 1
+     }
+    }
+   },
+   "env": {
+    "RISM_WORKSPACE": "/home/hermes/Projects/blkpws/Rism/.worktrees/coder"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "win-separator path: no such dir (Linux), never escapes",
+   "tool": "list_files",
+   "args": {
+    "path": "..\\..\\Windows"
+   },
+   "assert": {
+    "isError": false,
+    "json": {
+     "error": {
+      "regex": "Path not found|escapes"
+     }
+    }
+   },
+   "env": {
+    "RISM_WORKSPACE": "/home/hermes/Projects/blkpws/Rism/.worktrees/coder"
+   },
+   "probe_note": "backslash path is one weird filename on Linux \u2014 'Path not found'; guard NOT needed, traversal still impossible"
+  },
+  {
+   "door": "stdio",
+   "label": "nix traversal refused in-band",
+   "tool": "list_files",
+   "args": {
+    "path": "../../etc"
+   },
+   "assert": {
+    "isError": false,
+    "json": {
+     "error": {
+      "regex": "escapes workspace"
+     }
+    }
+   },
+   "env": {
+    "RISM_WORKSPACE": "/home/hermes/Projects/blkpws/Rism/.worktrees/coder"
+   }
+  }
+ ]
+}

@@ -1,0 +1,102 @@
+{
+ "id": "L-run_shell",
+ "batch": "L:B4",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "echo",
+   "tool": "run_shell",
+   "args": {
+    "command": "echo rism-ok"
+   },
+   "assert": {
+    "json": {
+     "stdout": {
+      "regex": "rism-ok"
+     },
+     "exit_code": {
+      "eq": 0
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "exit 3",
+   "tool": "run_shell",
+   "args": {
+    "command": "exit 3"
+   },
+   "assert": {
+    "json": {
+     "exit_code": {
+      "eq": 3
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "timeout",
+   "tool": "run_shell",
+   "args": {
+    "command": "sleep 5",
+    "timeout_secs": 1
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "timeout|killed|timed"
+   },
+   "timeout": 60
+  },
+  {
+   "door": "stdio",
+   "label": "cwd outside root",
+   "tool": "run_shell",
+   "args": {
+    "command": "pwd",
+    "cwd": "/etc"
+   },
+   "assert": {
+    "isError": false,
+    "json": {
+     "stdout": {
+      "regex": "^/etc"
+     }
+    },
+    "probe_note": "run_shell not root-gated: /etc cwd works on Linux"
+   },
+   "timeout": 30
+  },
+  {
+   "door": "stdio",
+   "label": "hostile cwd traversal",
+   "tool": "run_shell",
+   "args": {
+    "command": "pwd",
+    "cwd": "../.."
+   },
+   "assert": {
+    "json": {
+     "stdout": {
+      "regex": "/"
+     }
+    },
+    "probe_note": "cwd traversal NOT refused (docs: run_shell is not root-gated)"
+   }
+  },
+  {
+   "door": "exec",
+   "label": "host oracle",
+   "argv": [
+    "bash",
+    "-c",
+    "echo rism-ok"
+   ],
+   "assert": {
+    "exit_code": 0,
+    "stdout_regex": "rism-ok"
+   }
+  }
+ ]
+}

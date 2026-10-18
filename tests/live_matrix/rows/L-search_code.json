@@ -1,0 +1,100 @@
+{
+ "id": "L-search_code",
+ "batch": "L:B1",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "happy regex",
+   "tool": "search_code",
+   "args": {
+    "query": "Extends %Persistent",
+    "documents": [
+     "*.cls"
+    ],
+    "max_results": 5
+   },
+   "assert": {
+    "json": {
+     "match_count": {
+      "gte": 1
+     },
+     "truncated": {
+      "exists": true
+     }
+    }
+   },
+   "save": "s1"
+  },
+  {
+   "door": "stdio",
+   "label": "literal mode",
+   "tool": "search_code",
+   "args": {
+    "query": "Extends %Persistent",
+    "regex": false,
+    "max_results": 3
+   },
+   "assert": {
+    "isError": false
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "bad ns refused",
+   "tool": "search_code",
+   "args": {
+    "query": "x",
+    "namespace": "a b"
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "invalid namespace"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "huge max_results honored",
+   "tool": "search_code",
+   "args": {
+    "query": "Extends",
+    "max_results": 999999,
+    "documents": [
+     "*.cls"
+    ],
+    "regex": false
+   },
+   "assert": {
+    "json": {
+     "truncated": {
+      "exists": true
+     }
+    }
+   }
+  },
+  {
+   "door": "cli",
+   "label": "cli mirrors tool",
+   "argv": [
+    "search",
+    "Extends %Persistent",
+    "--documents",
+    "*.cls",
+    "--max",
+    "5",
+    "--format",
+    "json"
+   ],
+   "assert": {
+    "exit_code": 0
+   },
+   "save": "c1"
+  },
+  {
+   "door": "diff",
+   "label": "cli==tool keys",
+   "a": "c1",
+   "b": "s1",
+   "mode": "keys"
+  }
+ ]
+}
