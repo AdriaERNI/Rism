@@ -74,7 +74,7 @@
     "isError": false,
     "json": {
      "error": {
-      "regex": "binary"
+      "regex": "(?i)binary"
      }
     }
    },

@@ -104,13 +104,21 @@ class Ctx:
         if isinstance(obj, str):
             m = re.fullmatch(r"\$\{(g:)?(\w+)\}", obj)
             if m:
-                pool = self.g if m.group(1) else saved
-                if m.group(2) in pool:
-                    return pool[m.group(2)]
+                if m.group(1):
+                    if m.group(2) in self.g:
+                        return self.g[m.group(2)]
+                elif m.group(2) in saved:
+                    return saved[m.group(2)]
+                elif m.group(2) in self.g:
+                    return self.g[m.group(2)]
+                return obj
             return re.sub(
                 r"\$\{(g:)?(\w+)\}",
-                lambda mm: str((self.g if mm.group(1) else saved).get(
-                    mm.group(2), mm.group(0))), obj)
+                lambda mm: str(self.g.get(mm.group(2), "") if mm.group(1)
+                               else (saved.get(mm.group(2))
+                                     if mm.group(2) in saved
+                                     else self.g.get(mm.group(2), mm.group(0)))),
+                obj)
         if isinstance(obj, dict):
             return {k: self.resolve(v, saved) for k, v in obj.items()}
         if isinstance(obj, list):
@@ -301,6 +309,8 @@ def check_asserts(ctx: Ctx, a: dict, saved: dict, *, text=None, parsed=None,
     if "stderr_no_regex" in a:
         if re.search(a["stderr_no_regex"], (stderr or "") + (stdout or "")):
             note(f"stderr_no_regex {a['stderr_no_regex']!r} MUST NOT appear")
+    if "json" in a and parsed is None:
+        fails.append(f"assert.json requested but result is not JSON: {(text or '')[:220]}")
     if "json" in a and parsed is not None:
         for p, cond in a["json"].items():
             if isinstance(cond, dict):
@@ -345,6 +355,17 @@ def run_unplant(ctx, sess, names):
 row_scope = [None]
 
 
+def _flat(obj):
+    if isinstance(obj, dict):
+        for v in obj.values():
+            yield from _flat(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from _flat(v)
+    else:
+        yield obj
+
+
 def execute_check(ctx: Ctx, ch: dict, saved: dict):
     door = ch["door"]
     label = ch.get("label", door)
@@ -352,6 +373,9 @@ def execute_check(ctx: Ctx, ch: dict, saved: dict):
         scope = row_scope[0] + (ch.get("scope_suffix") or "")
         sess = get_session(ctx, ch, scope)
         args = ctx.resolve(ch.get("args", {}), saved)
+        if any(isinstance(v, str) and "${" in v for v in _flat(args)):
+            return (label, [f"unresolved placeholder in args: {json.dumps(args)[:120]}"
+                            " — a chain row ran out of order"], None, "")
         err, text = sess.call(ch["tool"], args, ch.get("timeout", 120))
         text_err_flag[0] = err
         parsed = None
@@ -371,7 +395,7 @@ def execute_check(ctx: Ctx, ch: dict, saved: dict):
             ctx.g[ch["save_g"]] = v
             saved[ch["save_g"]] = v
         return label, check_asserts(ctx, ch.get("assert", {}), saved,
-                                    text=text), parsed, text
+                                    text=text, parsed=parsed), parsed, text
     if door == "cli":
         argv = [ctx.binary] + ctx.resolve(ch.get("argv", []), saved)
         env = ctx.env_for(ch, [])
@@ -623,8 +647,8 @@ def main():
         if ids and row["id"] not in ids:
             continue
         selected.append((row["id"], row))
-    # in-batch order from the row's own "order" key (debug chain needs
-    # attach-last; default 100 keeps alphabetical)
+    # chain-safe order: batch, then explicit row order (debug chain: start
+    # first, attach LAST), then id
     selected.sort(key=lambda t: (t[1].get("batch", ""), t[1].get("order", 100), t[0]))
 
     summary = []

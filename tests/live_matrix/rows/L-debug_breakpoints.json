@@ -1,0 +1,180 @@
+{
+ "id": "L-debug_breakpoints",
+ "batch": "L:B5",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "list has entry bp",
+   "tool": "debug_breakpoints",
+   "args": {
+    "session_id": "${sid}",
+    "action": "list"
+   },
+   "assert": {
+    "json": {
+     "breakpoints": {
+      "len_gte": 1
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "set line bp",
+   "tool": "debug_breakpoints",
+   "args": {
+    "session_id": "${sid}",
+    "action": "set",
+    "breakpoint": {
+     "class": "LRISLX.Dbg",
+     "method": "Run",
+     "offset": 2
+    }
+   },
+   "assert": {
+    "json": {
+     "breakpoint.id": {
+      "exists": true
+     },
+     "breakpoint.state": {
+      "eq": "enabled"
+     }
+    }
+   },
+   "extract": {
+    "bpid": "breakpoint.id"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "disable",
+   "tool": "debug_breakpoints",
+   "args": {
+    "session_id": "${sid}",
+    "action": "disable",
+    "id": "${bpid}"
+   },
+   "assert": {
+    "isError": false
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "enable",
+   "tool": "debug_breakpoints",
+   "args": {
+    "session_id": "${sid}",
+    "action": "enable",
+    "id": "${bpid}"
+   },
+   "assert": {
+    "isError": false
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "bogus method = DBGP 201 surfaced",
+   "tool": "debug_breakpoints",
+   "args": {
+    "session_id": "${sid}",
+    "action": "set",
+    "breakpoint": {
+     "class": "LRISLX.Dbg",
+     "method": "NoSuchMethodAnywhere",
+     "offset": 1
+    }
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "201|Cannot|error|Error"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "newline in class refused (wire guard on bp args)",
+   "tool": "debug_breakpoints",
+   "args": {
+    "session_id": "${sid}",
+    "action": "set",
+    "breakpoint": {
+     "class": "LRISLX.Dbg\n evil",
+     "method": "Run",
+     "offset": 1
+    }
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "wire guard|invalid DBGP|201|Cannot|error"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "remove",
+   "tool": "debug_breakpoints",
+   "args": {
+    "session_id": "${sid}",
+    "action": "remove",
+    "id": "${bpid}"
+   },
+   "assert": {
+    "isError": false
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "list back to entry bp",
+   "tool": "debug_breakpoints",
+   "args": {
+    "session_id": "${sid}",
+    "action": "list"
+   },
+   "assert": {
+    "json": {
+     "breakpoints": {
+      "len_eq": 1
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "behavioral oracle: set at loop line",
+   "tool": "debug_breakpoints",
+   "args": {
+    "session_id": "${sid}",
+    "action": "set",
+    "breakpoint": {
+     "class": "LRISLX.Dbg",
+     "method": "Run",
+     "offset": 3
+    }
+   },
+   "assert": {
+    "json": {
+     "breakpoint.id": {
+      "exists": true
+     }
+    }
+   },
+   "extract": {
+    "bpid2": "breakpoint.id"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "run -> stop at bp (or honest ended)",
+   "tool": "debug_step",
+   "args": {
+    "session_id": "${sid}",
+    "action": "run"
+   },
+   "assert": {
+    "text_regex": "break|ended"
+   },
+   "timeout": 60
+  }
+ ],
+ "scope": "L-B5-chain",
+ "serial": true,
+ "order": 50
+}

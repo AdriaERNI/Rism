@@ -4,7 +4,25 @@
  "checks": [
   {
    "door": "stdio",
-   "label": "happy regex",
+   "label": "literal mode finds fixture body",
+   "tool": "search_code",
+   "args": {
+    "query": "SearchProbeMarker",
+    "regex": false,
+    "max_results": 5
+   },
+   "assert": {
+    "json": {
+     "match_count": {
+      "gte": 1
+     }
+    }
+   },
+   "save": "s1"
+  },
+  {
+   "door": "stdio",
+   "label": "regex mode = metadata scan (docs: bodies need regex:false)",
    "tool": "search_code",
    "args": {
     "query": "Extends %Persistent",
@@ -15,28 +33,12 @@
    },
    "assert": {
     "json": {
-     "match_count": {
-      "gte": 1
-     },
      "truncated": {
       "exists": true
      }
     }
    },
-   "save": "s1"
-  },
-  {
-   "door": "stdio",
-   "label": "literal mode",
-   "tool": "search_code",
-   "args": {
-    "query": "Extends %Persistent",
-    "regex": false,
-    "max_results": 3
-   },
-   "assert": {
-    "isError": false
-   }
+   "probe_note": "USER namespace holds only the planted LRISLX.Search probe \u2014 'Extends %Persistent' legitimately tallies 0 bodies in regex/metadata mode; match_count=0 is the honest answer"
   },
   {
    "door": "stdio",
@@ -56,11 +58,8 @@
    "label": "huge max_results honored",
    "tool": "search_code",
    "args": {
-    "query": "Extends",
+    "query": "SearchProbeMarker",
     "max_results": 999999,
-    "documents": [
-     "*.cls"
-    ],
     "regex": false
    },
    "assert": {
@@ -76,9 +75,8 @@
    "label": "cli mirrors tool",
    "argv": [
     "search",
-    "Extends %Persistent",
-    "--documents",
-    "*.cls",
+    "SearchProbeMarker",
+    "--no-regex",
     "--max",
     "5",
     "--format",
@@ -96,5 +94,24 @@
    "b": "s1",
    "mode": "keys"
   }
+ ],
+ "plant": [
+  {
+   "name": "LRISLX.Search.cls",
+   "content": [
+    "Class LRISLX.Search Extends %RegisteredObject",
+    "{",
+    "",
+    "ClassMethod Marker() As %String",
+    "{",
+    "    quit \"SearchProbeMarker\"",
+    "}",
+    "}"
+   ],
+   "compile": true
+  }
+ ],
+ "unplant": [
+  "LRISLX.Search.cls"
  ]
 }

@@ -4,7 +4,7 @@
  "checks": [
   {
    "door": "stdio",
-   "label": "pattern",
+   "label": "pattern (recursive bare glob \u2014 defect fixed in src/tools/host.rs)",
    "tool": "list_files",
    "args": {
     "pattern": "*.toml"
@@ -52,6 +52,9 @@
     "json": {
      "files": {
       "len_gte": 1
+     },
+     "truncated": {
+      "eq": true
      }
     }
    },

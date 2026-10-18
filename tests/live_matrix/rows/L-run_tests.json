@@ -12,8 +12,14 @@
    "assert": {
     "isError": false,
     "json": {
-     "summary": {
-      "exists": true
+     "status": {
+      "eq": "passed"
+     },
+     "passed": {
+      "gte": 2
+     },
+     "failed": {
+      "eq": 0
      }
     }
    },

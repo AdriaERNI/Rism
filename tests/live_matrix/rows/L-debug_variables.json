@@ -1,0 +1,105 @@
+{
+ "id": "L-debug_variables",
+ "batch": "L:B5",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "private ctx",
+   "tool": "debug_variables",
+   "args": {
+    "session_id": "${sid}",
+    "context": "private"
+   },
+   "assert": {
+    "json": {
+     "variables": {
+      "type": "list"
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "public ctx",
+   "tool": "debug_variables",
+   "args": {
+    "session_id": "${sid}",
+    "context": "public"
+   },
+   "assert": {
+    "isError": false
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "class ctx + level",
+   "tool": "debug_variables",
+   "args": {
+    "session_id": "${sid}",
+    "context": "class",
+    "stack_level": 1
+   },
+   "assert": {
+    "isError": false
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "step_over lands a break",
+   "tool": "debug_step",
+   "args": {
+    "session_id": "${sid}",
+    "action": "step_over"
+   },
+   "assert": {
+    "json": {
+     "state": {
+      "eq": "break"
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "x=42 visible in frame vars",
+   "tool": "debug_variables",
+   "args": {
+    "session_id": "${sid}"
+   },
+   "assert": {
+    "json": {
+     "variables": {
+      "regex": "42"
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "inspect agrees with vars",
+   "tool": "debug_inspect",
+   "args": {
+    "session_id": "${sid}",
+    "expression": "%data(x)"
+   },
+   "assert": {
+    "isError": false
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "newline sid refused",
+   "tool": "debug_variables",
+   "args": {
+    "session_id": "a\nb"
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "wire guard|invalid DBGP|no active|invalid"
+   }
+  }
+ ],
+ "scope": "L-B5-chain",
+ "serial": true,
+ "order": 30
+}

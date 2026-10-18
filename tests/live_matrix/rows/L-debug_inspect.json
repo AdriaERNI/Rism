@@ -1,0 +1,99 @@
+{
+ "id": "L-debug_inspect",
+ "batch": "L:B5",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "eval 1+1",
+   "tool": "debug_inspect",
+   "args": {
+    "session_id": "${sid}",
+    "expression": "1+1"
+   },
+   "assert": {
+    "json": {
+     "value": {
+      "regex": "2"
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "eval x (42 after step)",
+   "tool": "debug_inspect",
+   "args": {
+    "session_id": "${sid}",
+    "expression": "x"
+   },
+   "assert": {
+    "json": {
+     "value": {
+      "regex": "42"
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "oracle: execute_command 1+1",
+   "tool": "execute_command",
+   "args": {
+    "command": "write \"V=\", 1+1"
+   },
+   "assert": {
+    "json": {
+     "output": {
+      "regex": "V=2"
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "pure expression eval",
+   "tool": "debug_inspect",
+   "args": {
+    "session_id": "${sid}",
+    "expression": "\"str\"_$c(65)"
+   },
+   "assert": {
+    "json": {
+     "value": {
+      "regex": "strA"
+     }
+    }
+   },
+   "probe_note": "side-effect leg: pure-expression eval verified; docs silent on method-call side effects in break context (kept as note only)"
+  },
+  {
+   "door": "stdio",
+   "label": "garbage honest error",
+   "tool": "debug_inspect",
+   "args": {
+    "session_id": "${sid}",
+    "expression": "@@@garbage@@@"
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "error|Error|<"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "NUL expression: honest error, no wire injection",
+   "tool": "debug_inspect",
+   "args": {
+    "session_id": "${sid}",
+    "expression": "\u0000run -i 1"
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "error|Error|invalid|wire|<SUB>|no active"
+   }
+  }
+ ],
+ "scope": "L-B5-chain",
+ "serial": true,
+ "order": 40
+}

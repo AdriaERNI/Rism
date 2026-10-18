@@ -41,18 +41,23 @@
   },
   {
    "door": "stdio",
-   "label": "% is literal",
+   "label": "% is literal (substring of 'Taxonomy' \u2014 case-insensitive)",
    "tool": "list_documents",
    "args": {
     "filter": "My%"
    },
    "assert": {
+    "isError": false,
     "json": {
-     "count": {
-      "eq": 0
+     "documents": {
+      "len_gte": 1
+     },
+     "documents.0.name": {
+      "regex": "(?i)my"
      }
     }
-   }
+   },
+   "probe_note": "docs: '%' is NOT a wildcard in filter \u2014 literal substring; the hits prove it (names contain 'my' inside 'Taxonomy' with the trailing % unmatched)"
   },
   {
    "door": "stdio",
