@@ -1,0 +1,6 @@
+{
+  "os": "linux",
+  "binary": "target/debug/rism",
+  "settings": "~/.config/rism/config.toml",
+  "workspace": "."
+}
