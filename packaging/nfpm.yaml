@@ -3,11 +3,13 @@
 #
 # Env substitution (nfpm expands os.Env while parsing):
 #   RISM_VERSION  package version: the tag minus its leading v, with a
-#                 pre-release suffix rewritten to sort below the eventual
-#                 final release — "0.2.3~beta1" for deb/rpm (tilde = pre-
-#                 release marker in both comparators) and "0.2.3beta1" for
-#                 arch (pacman ranks "~" after the end of a segment and
-#                 makepkg forbids it in pkgver). ci.yml derives both forms;
+#                 pre-release suffix sanitized to [A-Za-z0-9.] and rewritten
+#                 to sort below the eventual final release — "0.2.3~beta1"
+#                 for deb/rpm (tilde = pre-release marker in both
+#                 comparators) and "0.2.3beta1" for arch (pacman's vercmp
+#                 ranks "~" after the end of a segment, so it must not
+#                 appear in the pkgver; a digit-led sanitized suffix gains
+#                 a "p" to stay legal). ci.yml derives both forms;
 #                 suffix-free tags pass through unchanged.
 #   RISM_ARCH     Go arch nomenclature: amd64 | arm64 (per matrix leg)
 #   RISM_RELEASE  numeric package release (always 1; nfpm's arch packager
