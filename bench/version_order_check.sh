@@ -7,9 +7,10 @@
 #      -f, rpm -qp, .PKGINFO) and compares it against the previous stable
 #      and, for a pre-release tag, against the future final. A final tag's
 #      artifacts must carry the plain version.
-#   2. Synthetic leg: the same comparison set for both pre-release spelling
-#      styles this repo tags (dotted "pr.25" and plain "beta1"), derived
-#      exactly the way the linux-packages step in ci.yml derives it.
+#      the same comparison set for both pre-release spelling
+#      styles this repo tags (dotted "pr.25" and plain "beta1"), using the
+#      derivation block extracted straight out of ci.yml (below), so the
+#      synthetic leg can never drift from what CI actually packages.
 #
 # Comparators are the package managers' own code: dpkg --compare-versions,
 # rpm's internal vercmp via `rpm --eval '%{lua: print(rpm.vercmp(..))}'`
@@ -91,16 +92,20 @@ gt_prev() { # gt_prev <desc> <fn> <prev-form> <pkg-form>
   fi
 }
 
-# --- version derivation (MUST mirror .github/workflows/ci.yml) --------------
-if [[ "$VER" == *-* ]]; then
-  BASE=${VER%%-*}; PRSUF=${VER#*-}; PRSUF=${PRSUF//-/.}
-  PKGVER="$BASE~$PRSUF"        # deb + rpm: tilde sorts before the final
-  ARCHVER="$BASE$PRSUF"        # arch: no tilde (pacman ranks it AFTER the
-                               # end of a segment, and makepkg forbids it
-                               # in pkgver); letters sort before the end.
-else
-  BASE="$VER"; PKGVER="$VER"; ARCHVER="$VER"
+# --- version derivation ------------------------------------------------------
+# The derivation is not duplicated here: the block between the
+# "version-derivation begin/end" markers in .github/workflows/ci.yml is
+# extracted and executed verbatim, so the check validates ci.yml's real
+# behavior and the two cannot drift apart. A missing/unparseable block
+# fails the run loudly.
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+CI_YML_FILE="${CI_YML_FILE:-$(dirname "$SCRIPT_DIR")/.github/workflows/ci.yml}"
+DERIV=$(sed -n '/version-derivation begin/,/version-derivation end/p' "$CI_YML_FILE" 2>/dev/null) || DERIV=""
+if ! printf '%s' "$DERIV" | grep -q 'PKGVER='; then
+  echo "FAIL: derivation block not found in $CI_YML_FILE" >&2
+  exit 1
 fi
+eval "$DERIV"
 
 # --- artifact leg -----------------------------------------------------------
 shopt -s nullglob
@@ -111,7 +116,7 @@ if [ ${#debs[@]} -gt 0 ]; then
   av=$(dpkg-deb -f "${debs[0]}" Version)      # "<upstream>-<release>"
   up=${av%-*}
   gt_prev "artifact deb > prev stable" dpkg_lt "$PREV-1" "$av"
-  if [[ "$VER" == *-* ]]; then
+  if [ "$PRE" = 1 ]; then
     check_lt "artifact deb < final" dpkg_lt "$av" "$BASE-1"
   elif [ "$up" = "$BASE" ]; then
     ok "artifact deb upstream == $BASE"
@@ -128,7 +133,7 @@ if [ ${#rpms[@]} -gt 0 ]; then
          rpm -qp --qf '%{VERSION}' "/d/${rpms[0]##*/}")
   fi
   gt_prev "artifact rpm > prev stable" rpm_cmp "$PREV" "$av"
-  if [[ "$VER" == *-* ]]; then
+  if [ "$PRE" = 1 ]; then
     check_lt "artifact rpm < final" rpm_cmp "$av" "$BASE"
   elif [ "$av" = "$BASE" ]; then
     ok "artifact rpm version == $BASE"
@@ -140,7 +145,7 @@ fi
 if [ ${#pkgs[@]} -gt 0 ]; then
   av=$(tar --zstd -xOf "${pkgs[0]}" .PKGINFO | sed -n 's/^pkgver = \(.*\)-[0-9.]*$/\1/p')
   gt_prev "artifact arch > prev stable" arch_cmp "$PREV-1" "$av-1"
-  if [[ "$VER" == *-* ]]; then
+  if [ "$PRE" = 1 ]; then
     check_lt "artifact arch < final" arch_cmp "$av-1" "$BASE-1"
   elif [ "$av" = "$BASE" ]; then
     ok "artifact arch pkgver == $BASE"

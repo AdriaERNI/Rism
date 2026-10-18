@@ -218,17 +218,39 @@ jobs:
           # sort BELOW the eventual final release, so a test build never
           # blocks the stable upgrade path. deb/rpm: "~" is the tilde-pre-
           # release marker (dpkg + rpm vercmp both rank 0.2.3~pr.25 < 0.2.3).
-          # arch: pacman treats "~" as an ordinary separator (0.2.3~pr.25 >
-          # 0.2.3 there), and pkgver forbids "~" at makepkg level — append
-          # the suffix without it instead: vercmp ranks letters below the
-          # end-of-string, so 0.2.3pr.25 < 0.2.3 and > 0.2.2.
-          if [[ "$VER" == *-* ]]; then
-            BASE=${VER%%-*}; PRSUF=${VER#*-}; PRSUF=${PRSUF//-/.}
-            PKGVER="$BASE~$PRSUF"
-            ARCHVER="$BASE$PRSUF"
+          # arch: pacman's vercmp treats "~" as an ordinary separator and
+          # ranks 0.2.3~pr.25 ABOVE 0.2.3 — append the suffix without it
+          # instead: vercmp ranks letters below the end-of-string, so
+          # 0.2.3pr.25 < 0.2.3 and > 0.2.2. The suffix is
+          # first sanitized to [A-Za-z0-9.]: "_" is rejected outright by
+          # dpkg's version parser and "+" ranks AFTER the end of a string,
+          # so a raw v1.0+build7 would sort above the final release. A
+          # sanitized suffix starting with a digit gets a "p" on arch so
+          # the pkgver stays legal by name (1.0p1, exact under vercmp).
+          # Tags that do not start with a digit pass through unchanged —
+          # the order check flags such a version loudly, not silently.
+          # version-derivation begin (bench/version_order_check.sh re-runs
+          # this exact block and fails if the two derivations diverge)
+          PRE=0
+          BASE=${VER%%[!0-9.]*}
+          while [[ "$BASE" == .* ]]; do BASE=${BASE#.}; done
+          BASE=${BASE%.}
+          SUF=${VER#"$BASE"}
+          SUF=${SUF//[-_+~]/.}
+          SUF=${SUF//[!A-Za-z0-9.]/}
+          while [[ "$SUF" == .* ]]; do SUF=${SUF#.}; done
+          while [[ "$SUF" == *. ]]; do SUF=${SUF%.}; done
+          while [[ "$SUF" == *..* ]]; do SUF=${SUF//../.}; done
+          if [[ -z "$BASE" ]]; then
+            BASE="$VER"; PKGVER="$VER"; ARCHVER="$VER"
+          elif [[ -n "$SUF" ]]; then
+            PRE=1
+            PKGVER="$BASE~$SUF"; ARCHVER="$BASE$SUF"
+            [[ "$SUF" == [[:alpha:]]* ]] || ARCHVER="$BASE""p$SUF"
           else
-            PKGVER="$VER"; ARCHVER="$VER"
+            PKGVER="$BASE"; ARCHVER="$BASE"
           fi
+          # version-derivation end
           export RISM_ARCH=amd64 RISM_RELEASE=1
           RISM_VERSION="$PKGVER"  /tmp/nfpm pkg -f packaging/nfpm.yaml --packager deb       -t dist/
           RISM_VERSION="$PKGVER"  /tmp/nfpm pkg -f packaging/nfpm.yaml --packager rpm       -t dist/
