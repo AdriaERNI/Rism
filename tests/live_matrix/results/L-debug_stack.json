@@ -1,11 +1,8 @@
 {
  "id": "L-debug_stack",
  "batch": "L:B5",
- "status": "FAIL",
- "failures": [
-  "[frames at stop, level 1] unresolved placeholder in args: {\"session_id\": \"${sid}\"} \u2014 a chain row ran out of order",
-  "[vars agree with frames] unresolved placeholder in args: {\"session_id\": \"${sid}\", \"stack_level\": 1} \u2014 a chain row ran out of order"
- ],
+ "status": "PASS",
+ "failures": [],
  "notes": [],
  "seconds": 0.0
 }

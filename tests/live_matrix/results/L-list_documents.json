@@ -7,5 +7,5 @@
   "% is literal (substring of 'Taxonomy' \u2014 case-insensitive): docs: '%' is NOT a wildcard in filter \u2014 literal substring; the hits prove it (names contain 'my' inside 'Taxonomy' with the trailing % unmatched)",
   "NUL in filetypes: accepted, filters to empty: no filetype guard in code (documents.rs client-side filter); NUL never reaches a URL (docnames endpoint carries no filetype param) \u2014 observed empty list, not a refusal"
  ],
- "seconds": 3.0
+ "seconds": 4.3
 }

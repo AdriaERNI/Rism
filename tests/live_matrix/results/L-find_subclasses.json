@@ -6,5 +6,5 @@
  "notes": [
   "depth 65 clamped/rejected: depth>64 handled: result reports its effective depth"
  ],
- "seconds": 0.3
+ "seconds": 0.4
 }
