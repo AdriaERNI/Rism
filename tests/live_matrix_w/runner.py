@@ -111,25 +111,31 @@ class Ctx:
         env.update(check.get("env", {}))
         return env
 
-    def restart_server(self, wait_s: int = 90):
+    def restart_server(self, wait_s: int = 0):
         """Crash-round restart (ledger rule): run the configured restart
         command, then poll the Atelier root until it answers 200."""
         cmd = self.os_cfg.get("restart_cmd")
         if not cmd:
             return
+        wait_s = self.os_cfg.get("restart_wait_s") or wait_s or 90
         argv = self.os_cfg.get("restart_argv")
         if argv:  # Windows: argv list — no shell quoting traps
             subprocess.run(argv, check=False, capture_output=True)
         else:
             subprocess.run(cmd, shell=True, check=False, capture_output=True)
         deadline = time.time() + wait_s
+        ensure = self.os_cfg.get("restart_ensure_argv")
         while time.time() < deadline:
             st, _ = http_call(self, "GET", self.base_url + "/api/atelier/",
                               timeout=5)
             if st == 200:
                 time.sleep(2)
                 return
-            time.sleep(2)
+            # VM fact: the httpd service can be mid-restart when the poll
+            # loop starts — re-assert it's running every ~15s
+            if ensure:
+                subprocess.run(ensure, check=False, capture_output=True)
+            time.sleep(5 if ensure else 2)
         raise RuntimeError("server never returned 200 after restart")
 
     def resolve(self, obj, saved: dict):
