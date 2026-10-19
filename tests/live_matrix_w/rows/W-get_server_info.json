@@ -10,7 +10,7 @@
    "assert": {
     "json": {
      "version": {
-      "regex": "IRIS for UNIX"
+      "regex": "IRIS for Windows"
      },
      "api": {
       "exists": true

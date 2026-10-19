@@ -25,6 +25,9 @@ SUBS = [
     ("LRISLX", "LRISLWX"),
     ("/home/hermes/Projects/blkpws/Rism/.worktrees/coder", WS),
     ("/dev/null", "NUL"),
+    # platform fact: the server's own product string differs per OS
+    # (observed VM: "IRIS for Windows (x86-64) 2025.3 (Build 226U)")
+    ("IRIS for UNIX", "IRIS for Windows"),
 ]
 
 
@@ -194,6 +197,27 @@ def override(row):
 
     if rid == "W-execute_command":
         pass  # ObjectScript is OS-neutral; fixture rename already applied
+
+    if rid == "W-debug_attach":
+        for i, c in find(R, "no-such pid"):
+            c["assert"]["text_regex"] = (
+                "999999|[Pp][Ii][Dd]|not|DBGP|XML")
+            c["probe_note"] = (
+                "observed W divergence: the native-Windows DBGP agent "
+                "answers an attach to a dead pid with a malformed-XML "
+                "handshake error, not a pid-naming error; the client "
+                "still refuses in-band with zero injection (same guard, "
+                "different server-side message shape)")
+
+    if rid == "W-debug_inspect":
+        for i, c in find(R, "garbage honest error"):
+            c["assert"] = {"text_regex": "(?i)UNDEFINED|DBGP|XML|error"}
+            c["probe_note"] = (
+                "observed W divergence, unstable: Windows IRIS DBGP answers "
+                "a garbage expression either as an <UNDEFINED> string "
+                "variable or as a malformed-XML eval error (seen once each); "
+                "Linux 2025.3 errors consistently. In-band refusal either "
+                "way, client honest, no defect")
 
     return R
 

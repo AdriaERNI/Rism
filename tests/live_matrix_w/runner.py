@@ -80,10 +80,19 @@ class Ctx:
         self.settings_path = Path(
             os.path.expandvars(os_cfg["settings"])).expanduser()
         s = load_config(self.settings_path)
-        iris = s["iris"]
-        self.base_url = iris["base_url"].rstrip("/")
-        self.user = iris.get("username", "_SYSTEM")
-        self.pw = iris.get("password", "SYS")
+        # The client SKIPS the password field when parsing config (env
+        # RISM_IRIS_PASSWORD is the only file-independent door), so a valid
+        # connection implies the default auth. Read whatever shape the file
+        # actually has for the independent HTTP oracle.
+        iris = s.get("iris", s)
+        self.base_url = (iris.get("base_url")
+                         or iris.get("iris_base_url")
+                         or s.get("iris_base_url", "http://localhost:52773")
+                         ).rstrip("/")
+        self.user = (iris.get("username") or iris.get("iris_username")
+                     or s.get("iris_username", "_SYSTEM"))
+        self.pw = (os.environ.get("RISM_IRIS_PASSWORD")
+                   or os_cfg.get("default_password", "SYS"))
         self.workspace = os_cfg.get("workspace", str(HERE.parent.parent))
         self.scratch = str(Path(self.workspace).resolve() / ".sf-live-matrix")
         Path(self.scratch).mkdir(parents=True, exist_ok=True)
@@ -156,7 +165,7 @@ class Mcp:
         self.p = subprocess.Popen(
             [binary, "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True, env=env,
-            encoding="utf-8", errors="replace", newline="\n")
+            encoding="utf-8", errors="replace")
         self.nid = 0
         self._init()
 

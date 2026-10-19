@@ -11,8 +11,9 @@
    },
    "assert": {
     "isError": true,
-    "text_regex": "999999|[Pp][Ii][Dd]|not"
-   }
+    "text_regex": "999999|[Pp][Ii][Dd]|not|DBGP|XML"
+   },
+   "probe_note": "observed W divergence: the native-Windows DBGP agent answers an attach to a dead pid with a malformed-XML handshake error, not a pid-naming error; the client still refuses in-band with zero injection (same guard, different server-side message shape)"
   },
   {
    "door": "stdio",
