@@ -256,11 +256,11 @@ pub async fn list_files(client: &IrisClient, args: &ListFilesArgs) -> Result<Lis
     let mut truncated = false;
 
     if let Some(pattern) = &args.pattern {
-        let full = if pattern.contains("**") {
-            pattern.clone()
-        } else {
-            format!("{}/**/{pattern}", strip_absolute(pattern))
-        };
+        // A bare glob (`*.rs`) means "recursively" — a name can never sit
+        // inside a directory named after the pattern itself, so expanding
+        // to `{pattern}/**/{pattern}` (the old shape) matched nothing.
+        // Patterns that already carry `**` (or a path) are taken verbatim.
+        let full = glob_for(pattern);
         let mut paths: Vec<PathBuf> = glob::glob(&target.join(full).display().to_string())
             .map_err(|e| Error::Config(format!("bad glob pattern: {e}")))?
             .filter_map(std::result::Result::ok)
@@ -304,6 +304,16 @@ pub async fn list_files(client: &IrisClient, args: &ListFilesArgs) -> Result<Lis
 
 fn strip_absolute(pattern: &str) -> String {
     pattern.trim_start_matches('/').to_string()
+}
+
+/// Glob expansion for `list_files`: a bare filename pattern is recursive
+/// (`*.rs` finds `src/x.rs`); anything already carrying `**` is verbatim.
+fn glob_for(pattern: &str) -> String {
+    if pattern.contains("**") {
+        pattern.to_string()
+    } else {
+        format!("**/{}", strip_absolute(pattern))
+    }
 }
 
 fn file_entry(root: &Path, p: &Path) -> Option<FileEntry> {
@@ -446,6 +456,17 @@ mod tests {
         assert!(!is_binary(b"normal text \xc3\xa9 with utf8"));
         let junk: Vec<u8> = (0..100u8).map(|i| i % 8).collect(); // mostly control
         assert!(is_binary(&junk));
+    }
+
+    #[test]
+    fn glob_bare_pattern_is_recursive() {
+        // Regression pin: a bare filename pattern used to expand to
+        // `{pattern}/**/{pattern}` — a path no file can have, so `*.rs`
+        // (docs' own example shape) always answered an empty list.
+        assert_eq!(glob_for("*.rs"), "**/*.rs");
+        assert_eq!(glob_for("/abs/*.rs"), "**/abs/*.rs");
+        assert_eq!(glob_for("src/**/*.rs"), "src/**/*.rs");
+        assert_eq!(glob_for("**/*.rs"), "**/*.rs");
     }
 
     #[test]
