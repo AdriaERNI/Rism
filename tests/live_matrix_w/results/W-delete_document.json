@@ -1,0 +1,10 @@
+{
+ "id": "W-delete_document",
+ "group": "L:2",
+ "status": "PASS",
+ "failures": [],
+ "notes": [
+  "bad %nope ns: %nope passes valid_namespace ('%' + letter) so the URL carries it; server 404s with an HTML body surfaced as invalid Atelier response \u2014 honest error, never a panic/silent ok"
+ ],
+ "seconds": 0.2
+}

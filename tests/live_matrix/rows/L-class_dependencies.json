@@ -1,0 +1,71 @@
+{
+ "id": "L-class_dependencies",
+ "group": "L:1",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "happy",
+   "tool": "class_dependencies",
+   "args": {
+    "class": "%Library.RegisteredObject",
+    "direction": "depends_on"
+   },
+   "assert": {
+    "json": {
+     "depends_on": {
+      "exists": true
+     },
+     "direction": {
+      "eq": "depends_on"
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "used_by both default",
+   "tool": "class_dependencies",
+   "args": {
+    "class": "%Library.Persistent"
+   },
+   "assert": {
+    "json": {
+     "used_by": {
+      "exists": true
+     },
+     "depends_on": {
+      "exists": true
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "injection refused",
+   "tool": "class_dependencies",
+   "args": {
+    "class": "Robert'; DROP TABLE"
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "invalid class name"
+   }
+  },
+  {
+   "door": "cli",
+   "label": "cli mirror",
+   "argv": [
+    "graph",
+    "deps",
+    "%Library.RegisteredObject",
+    "--direction",
+    "depends_on",
+    "--format",
+    "json"
+   ],
+   "assert": {
+    "exit_code": 0
+   }
+  }
+ ]
+}

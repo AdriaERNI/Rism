@@ -1,0 +1,67 @@
+{
+ "id": "L-cli-doc-get",
+ "group": "L:6",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "tool twin",
+   "tool": "get_document",
+   "args": {
+    "name": "%File.cls"
+   },
+   "assert": {
+    "isError": false
+   },
+   "save": "twin",
+   "env": {}
+  },
+  {
+   "door": "cli",
+   "label": "cli happy json",
+   "argv": [
+    "doc",
+    "get",
+    "%File.cls",
+    "--format",
+    "json"
+   ],
+   "assert": {
+    "exit_code": 0
+   },
+   "save": "cliout",
+   "env": {}
+  },
+  {
+   "door": "diff",
+   "label": "cli mirrors tool keys",
+   "a": "cliout",
+   "b": "twin",
+   "mode": "keys"
+  },
+  {
+   "door": "cli",
+   "label": "traversal guard -> exit 1",
+   "argv": [
+    "doc",
+    "get",
+    "a/../../b"
+   ],
+   "assert": {
+    "exit_code": 1,
+    "stderr_regex": "path traversal guard"
+   }
+  },
+  {
+   "door": "cli",
+   "label": "missing -> exit 1",
+   "argv": [
+    "doc",
+    "get",
+    "NoSuch.Doc9.cls"
+   ],
+   "assert": {
+    "exit_code": 1
+   }
+  }
+ ]
+}

@@ -1,0 +1,94 @@
+{
+ "id": "W-put_and_compile",
+ "group": "L:2",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "happy",
+   "tool": "put_and_compile",
+   "args": {
+    "name": "LRISLWX.PAC1.cls",
+    "content": [
+     "Class LRISLWX.PAC1 Extends %RegisteredObject",
+     "{",
+     "",
+     "ClassMethod Ok() As %Status",
+     "{",
+     "    quit $$$OK",
+     "}",
+     "}"
+    ]
+   },
+   "assert": {
+    "isError": false,
+    "json": {
+     "console": {
+      "len_gte": 1
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "compiled row",
+   "tool": "execute_sql",
+   "args": {
+    "query": "SELECT NAME FROM %Dictionary.CompiledClass WHERE NAME='LRISLWX.PAC1'"
+   },
+   "assert": {
+    "json": {
+     "row_count": {
+      "eq": 1
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "trav refused",
+   "tool": "put_and_compile",
+   "args": {
+    "name": "x/../../y.cls",
+    "content": [
+     "x"
+    ]
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "invalid document name"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "broken surfaces errors",
+   "tool": "put_and_compile",
+   "args": {
+    "name": "LRISLWX.PABad.cls",
+    "content": [
+     "Class LRISLWX.PABad Extends %RegisteredObject",
+     "{",
+     "this is not valid objectscript"
+    ]
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "ERROR|error"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "doc still stored",
+   "tool": "get_document",
+   "args": {
+    "name": "LRISLWX.PABad.cls"
+   },
+   "assert": {
+    "isError": false
+   }
+  }
+ ],
+ "unplant": [
+  "LRISLWX.PAC1.cls",
+  "LRISLWX.PABad.cls"
+ ]
+}

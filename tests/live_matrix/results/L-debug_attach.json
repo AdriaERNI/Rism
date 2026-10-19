@@ -1,0 +1,10 @@
+{
+ "id": "L-debug_attach",
+ "group": "L:5",
+ "status": "PASS",
+ "failures": [],
+ "notes": [
+  "hostile newline target: honest error, NO wire injection: observed: 'bad DBGP xml for feature_set' \u2014 the newline target derails the handshake's XML echo and the client aborts cleanly BEFORE any command frame; no second command executed, slot untouched by an injected op (wire_safe guards raw args; free-form values ride base64 -d data, src/iris/dbgp.rs)"
+ ],
+ "seconds": 0.1
+}

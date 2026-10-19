@@ -1,0 +1,50 @@
+{
+ "id": "L-debug_attach",
+ "group": "L:5",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "no-such pid honest error",
+   "tool": "debug_attach",
+   "args": {
+    "pid": 999999
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "999999|[Pp][Ii][Dd]|not"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "type confusion refused",
+   "tool": "debug_attach",
+   "args": {
+    "pid": "1; breakpoint set"
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "deserialize|invalid|number|error|wire_safe"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "hostile newline target: honest error, NO wire injection",
+   "tool": "debug_start",
+   "args": {
+    "target": "x\n run -i 1",
+    "stop_on_entry": false
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "6711|Invalid debugger target|wire guard|invalid DBGP|bad DBGP xml"
+   },
+   "probe_note": "observed: 'bad DBGP xml for feature_set' \u2014 the newline target derails the handshake's XML echo and the client aborts cleanly BEFORE any command frame; no second command executed, slot untouched by an injected op (wire_safe guards raw args; free-form values ride base64 -d data, src/iris/dbgp.rs)"
+  }
+ ],
+ "unplant": [
+  "LRISLX.Dbg.cls"
+ ],
+ "scope": "L-debug-chain",
+ "serial": true,
+ "order": 90
+}

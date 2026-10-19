@@ -1,0 +1,12 @@
+{
+ "id": "W-read_file",
+ "group": "L:4",
+ "status": "PASS",
+ "failures": [],
+ "notes": [
+  "no root refuses: refusal is IN-BAND: result.error set, isError false (host tools answer with an error field, not a tool error)",
+  "traversal refused: Windows row edge: an absolute path outside the root must refuse (TASK.md traversal-vs-Windows-syntax hunt)",
+  "binary refused: staged binary file inside the VM workspace plays the ELF-client role the Linux debug binary plays on the L side"
+ ],
+ "seconds": 0.2
+}

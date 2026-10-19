@@ -1,0 +1,74 @@
+{
+ "id": "W-cli-cat",
+ "group": "L:6",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "tool twin",
+   "tool": "read_file",
+   "args": {
+    "path": "README.md"
+   },
+   "assert": {
+    "isError": false
+   },
+   "save": "twin",
+   "env": {
+    "RISM_WORKSPACE": "${workspace}"
+   }
+  },
+  {
+   "door": "cli",
+   "label": "cli happy json",
+   "argv": [
+    "cat",
+    "README.md",
+    "--format",
+    "json"
+   ],
+   "assert": {
+    "exit_code": 0
+   },
+   "save": "cliout",
+   "env": {
+    "RISM_WORKSPACE": "${workspace}"
+   }
+  },
+  {
+   "door": "diff",
+   "label": "cli mirrors tool keys",
+   "a": "cliout",
+   "b": "twin",
+   "mode": "keys"
+  },
+  {
+   "door": "cli",
+   "label": "traversal -> exit 1",
+   "argv": [
+    "cat",
+    "C:\\Windows\\win.ini"
+   ],
+   "assert": {
+    "exit_code": 1
+   },
+   "env": {
+    "RISM_WORKSPACE": "${workspace}"
+   }
+  },
+  {
+   "door": "cli",
+   "label": "no workspace refuses",
+   "argv": [
+    "cat",
+    "README.md"
+   ],
+   "assert": {
+    "exit_code": 1,
+    "stderr_regex": "RISM_WORKSPACE|not configured|root"
+   },
+   "unset": [
+    "RISM_WORKSPACE"
+   ]
+  }
+ ]
+}

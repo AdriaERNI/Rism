@@ -1,0 +1,10 @@
+{
+ "id": "L-debug_inspect",
+ "group": "L:5",
+ "status": "PASS",
+ "failures": [],
+ "notes": [
+  "pure expression eval: side-effect leg: pure-expression eval verified; docs silent on method-call side effects in break context (kept as note only)"
+ ],
+ "seconds": 0.1
+}

@@ -1,0 +1,98 @@
+{
+ "id": "W-compile_documents",
+ "group": "L:2",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "already planted",
+   "tool": "compile_documents",
+   "args": {
+    "names": [
+     "LRISLWX.CD1.cls"
+    ]
+   },
+   "assert": {
+    "isError": false,
+    "json": {
+     "console": {
+      "len_gte": 1
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "batch bad name",
+   "tool": "compile_documents",
+   "args": {
+    "names": [
+     "LRISLWX.CD1.cls",
+     "LRISLWX.Absent9.cls"
+    ]
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "ERROR|not exist|error"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "empty list",
+   "tool": "compile_documents",
+   "args": {
+    "names": []
+   },
+   "assert": {
+    "json": {
+     "statuses": {
+      "len_lte": 0
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "trav refused",
+   "tool": "compile_documents",
+   "args": {
+    "names": [
+     "../x"
+    ]
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "invalid document name"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "compiled state",
+   "tool": "execute_sql",
+   "args": {
+    "query": "SELECT NAME FROM %Dictionary.CompiledClass WHERE NAME='LRISLWX.CD1'"
+   },
+   "assert": {
+    "json": {
+     "row_count": {
+      "eq": 1
+     }
+    }
+   }
+  }
+ ],
+ "plant": [
+  {
+   "name": "LRISLWX.CD1.cls",
+   "content": [
+    "Class LRISLWX.CD1 Extends %RegisteredObject",
+    "{",
+    "",
+    "ClassMethod Ok() As %Status",
+    "{",
+    "    quit $$$OK",
+    "}",
+    "}"
+   ]
+  }
+ ]
+}

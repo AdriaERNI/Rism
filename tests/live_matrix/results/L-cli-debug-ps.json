@@ -1,0 +1,10 @@
+{
+ "id": "L-cli-debug-ps",
+ "group": "L:6",
+ "status": "PASS",
+ "failures": [],
+ "notes": [
+  "ns is client filter, not a guard (client-side filter, same as the ns rows): L12 finding: --ns filters jobs client-side; the URL never interpolates it"
+ ],
+ "seconds": 0.2
+}

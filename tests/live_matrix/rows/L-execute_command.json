@@ -1,0 +1,124 @@
+{
+ "id": "L-execute_command",
+ "group": "L:3",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "happy write",
+   "tool": "execute_command",
+   "args": {
+    "command": "write \"1+1=\", 1+1"
+   },
+   "assert": {
+    "json": {
+     "output": {
+      "regex": "1\\+1=2"
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "fixture do",
+   "tool": "execute_command",
+   "args": {
+    "command": "do ##class(LRISLX.Echo).Greet(\"hi\")"
+   },
+   "assert": {
+    "isError": false
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "read auto-answer",
+   "tool": "execute_command",
+   "args": {
+    "command": "read x",
+    "timeout_secs": 5
+   },
+   "assert": {
+    "isError": false,
+    "json": {
+     "output": {
+      "exists": true
+     }
+    },
+    "timeout": 30
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "nul command: no panic, NUL stripped server-side",
+   "tool": "execute_command",
+   "args": {
+    "command": "write 1+1\u0000"
+   },
+   "assert": {
+    "isError": false,
+    "json": {
+     "output": {
+      "regex": "^2"
+     }
+    }
+   },
+   "probe_note": "checklist expected 'server error text, never panic' \u2014 observed: no panic AND no error: IRIS terminal strips the NUL and executes; honest output returned"
+  },
+  {
+   "door": "stdio",
+   "label": "absurd clamp",
+   "tool": "execute_command",
+   "args": {
+    "command": "write \"ok\"",
+    "timeout_secs": 999999999
+   },
+   "assert": {
+    "isError": false,
+    "json": {
+     "output": {
+      "regex": "ok"
+     }
+    }
+   }
+  },
+  {
+   "door": "cli",
+   "label": "cli same output",
+   "argv": [
+    "exec",
+    "write \"1+1=\", 1+1",
+    "--format",
+    "json"
+   ],
+   "assert": {
+    "exit_code": 0,
+    "json": {
+     "output": {
+      "regex": "1\\+1=2"
+     }
+    }
+   }
+  }
+ ],
+ "plant": [
+  {
+   "name": "LRISLX.Echo.cls",
+   "content": [
+    "Class LRISLX.Echo Extends %RegisteredObject",
+    "{",
+    "",
+    "ClassMethod Ok() As %Status",
+    "{",
+    "    quit $$$OK",
+    "}",
+    "",
+    "ClassMethod Greet(s As %String) As %String",
+    "{",
+    "    write \"greet:\",s",
+    "    quit s",
+    "}",
+    "}"
+   ],
+   "compile": true
+  }
+ ]
+}

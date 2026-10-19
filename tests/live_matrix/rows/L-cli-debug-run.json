@@ -1,0 +1,80 @@
+{
+ "id": "L-cli-debug-run",
+ "group": "L:6",
+ "checks": [
+  {
+   "door": "restart",
+   "label": "slot recovery (attach probe left the DBGP agent squatting; rule: restart the server between crash rounds)"
+  },
+  {
+   "door": "cli",
+   "label": "cli debug run to completion",
+   "argv": [
+    "debug",
+    "run",
+    "##class(LRISLX.CliDbg).Run()",
+    "--stop-on-entry",
+    "--format",
+    "json"
+   ],
+   "assert": {
+    "exit_code": 0
+   },
+   "save": "cliout"
+  },
+  {
+   "door": "stdio",
+   "label": "tool twin start (break, or ended if the trivial target finished first)",
+   "tool": "debug_start",
+   "args": {
+    "target": "##class(LRISLX.CliDbg).Run()",
+    "stop_on_entry": true
+   },
+   "assert": {
+    "isError": false,
+    "json": {
+     "state": {
+      "in": [
+       "break",
+       "ended"
+      ]
+     }
+    }
+   },
+   "extract": {
+    "tsid": "session_id"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "twin session closed",
+   "tool": "debug_stop",
+   "args": {
+    "session_id": "${tsid}"
+   },
+   "assert": {
+    "text_regex": "ended|no active"
+   }
+  }
+ ],
+ "plant": [
+  {
+   "name": "LRISLX.CliDbg.cls",
+   "compile": true,
+   "content": [
+    "Class LRISLX.CliDbg Extends %RegisteredObject",
+    "{",
+    "",
+    "ClassMethod Run() As %Integer",
+    "{",
+    "    quit 7",
+    "}",
+    "}"
+   ]
+  }
+ ],
+ "unplant": [
+  "LRISLX.CliDbg.cls"
+ ],
+ "serial": true
+}

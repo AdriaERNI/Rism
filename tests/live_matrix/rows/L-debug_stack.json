@@ -1,0 +1,48 @@
+{
+ "id": "L-debug_stack",
+ "group": "L:5",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "frames at stop, level 1",
+   "tool": "debug_stack",
+   "args": {
+    "session_id": "${sid}"
+   },
+   "assert": {
+    "json": {
+     "0.level": {
+      "eq": 1
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "vars agree with frames",
+   "tool": "debug_variables",
+   "args": {
+    "session_id": "${sid}",
+    "stack_level": 1
+   },
+   "assert": {
+    "isError": false
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "newline sid refused pre-frame",
+   "tool": "debug_stack",
+   "args": {
+    "session_id": "abc\n quit"
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "wire guard|invalid DBGP|no active|invalid"
+   }
+  }
+ ],
+ "scope": "L-debug-chain",
+ "serial": true,
+ "order": 20
+}

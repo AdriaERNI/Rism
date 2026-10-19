@@ -1,0 +1,51 @@
+{
+ "id": "L-cfg-env-over-file",
+ "group": "L:8",
+ "checks": [
+  {
+   "door": "cli",
+   "label": "env wins over file",
+   "argv": [
+    "sql",
+    "SELECT 1"
+   ],
+   "assert": {
+    "exit_code": 1
+   },
+   "env": {
+    "XDG_CONFIG_HOME": "${g:cfgroot}",
+    "RISM_IRIS_BASE_URL": "http://127.0.0.1:1"
+   },
+   "timeout": 40,
+   "probe_note": "file says live, env says dead: the error names the ENV url (env > file)"
+  },
+  {
+   "door": "cli",
+   "label": "--url beats env+file",
+   "argv": [
+    "sql",
+    "SELECT 1",
+    "--url",
+    "http://127.0.0.1:1"
+   ],
+   "assert": {
+    "exit_code": 1,
+    "stderr_regex": "127[.]0[.]0[.]1:1"
+   },
+   "timeout": 40
+  },
+  {
+   "door": "exec",
+   "label": "no RISM_MCP_HOST env exists",
+   "argv": [
+    "bash",
+    "-c",
+    "env RISM_MCP_HOST=0.0.0.0 timeout 6 ${exe} mcp --transport http --port 0 2>&1 | grep -c 'listening on http://127[.]0[.]0[.]1'"
+   ],
+   "assert": {
+    "exit_code": 0,
+    "stdout_regex": "^1"
+   }
+  }
+ ]
+}

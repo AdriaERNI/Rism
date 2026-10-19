@@ -1,0 +1,88 @@
+{
+ "id": "W-read_file",
+ "group": "L:4",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "happy README",
+   "tool": "read_file",
+   "args": {
+    "path": "README.md"
+   },
+   "assert": {
+    "json": {
+     "content": {
+      "regex": "."
+     },
+     "error": {
+      "eq": null
+     }
+    }
+   },
+   "env": {
+    "RISM_WORKSPACE": "${workspace}"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "no root refuses",
+   "tool": "read_file",
+   "args": {
+    "path": "README.md"
+   },
+   "assert": {
+    "isError": false,
+    "json": {
+     "error": {
+      "regex": "not configured"
+     }
+    }
+   },
+   "probe_note": "refusal is IN-BAND: result.error set, isError false (host tools answer with an error field, not a tool error)",
+   "unset": [
+    "RISM_WORKSPACE"
+   ],
+   "scope_suffix": "-noroot"
+  },
+  {
+   "door": "stdio",
+   "label": "traversal refused",
+   "tool": "read_file",
+   "args": {
+    "path": "C:\\Windows\\win.ini"
+   },
+   "assert": {
+    "isError": false,
+    "json": {
+     "error": {
+      "regex": "escapes workspace|outside|not found|absolute"
+     }
+    }
+   },
+   "env": {
+    "RISM_WORKSPACE": "${workspace}"
+   },
+   "probe_note": "Windows row edge: an absolute path outside the root must refuse (TASK.md traversal-vs-Windows-syntax hunt)"
+  },
+  {
+   "door": "stdio",
+   "label": "binary refused",
+   "tool": "read_file",
+   "args": {
+    "path": "blob.bin"
+   },
+   "assert": {
+    "isError": false,
+    "json": {
+     "error": {
+      "regex": "(?i)binary"
+     }
+    }
+   },
+   "env": {
+    "RISM_WORKSPACE": "${workspace}"
+   },
+   "probe_note": "staged binary file inside the VM workspace plays the ELF-client role the Linux debug binary plays on the L side"
+  }
+ ]
+}

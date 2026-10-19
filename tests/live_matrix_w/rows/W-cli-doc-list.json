@@ -1,0 +1,57 @@
+{
+ "id": "W-cli-doc-list",
+ "group": "L:6",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "tool twin",
+   "tool": "list_documents",
+   "args": {
+    "count": 5
+   },
+   "assert": {
+    "isError": false
+   },
+   "save": "twin",
+   "env": {}
+  },
+  {
+   "door": "cli",
+   "label": "cli happy json",
+   "argv": [
+    "doc",
+    "list",
+    "--count",
+    "5",
+    "--format",
+    "json"
+   ],
+   "assert": {
+    "exit_code": 0
+   },
+   "save": "cliout",
+   "env": {}
+  },
+  {
+   "door": "diff",
+   "label": "cli mirrors tool keys",
+   "a": "cliout",
+   "b": "twin",
+   "mode": "keys"
+  },
+  {
+   "door": "cli",
+   "label": "guard",
+   "argv": [
+    "doc",
+    "list",
+    "--namespace",
+    "../x"
+   ],
+   "assert": {
+    "exit_code": 1,
+    "stderr_regex": "invalid namespace"
+   }
+  }
+ ]
+}

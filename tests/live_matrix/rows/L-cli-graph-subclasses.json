@@ -1,0 +1,69 @@
+{
+ "id": "L-cli-graph-subclasses",
+ "group": "L:6",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "tool twin",
+   "tool": "find_subclasses",
+   "args": {
+    "class": "%Library.Persistent"
+   },
+   "assert": {
+    "isError": false
+   },
+   "save": "twin",
+   "env": {}
+  },
+  {
+   "door": "cli",
+   "label": "cli happy json",
+   "argv": [
+    "graph",
+    "subclasses",
+    "%Library.Persistent",
+    "--format",
+    "json"
+   ],
+   "assert": {
+    "exit_code": 0
+   },
+   "save": "cliout",
+   "env": {}
+  },
+  {
+   "door": "diff",
+   "label": "cli mirrors tool keys",
+   "a": "cliout",
+   "b": "twin",
+   "mode": "keys"
+  },
+  {
+   "door": "cli",
+   "label": "allowlist refusal -> exit 1",
+   "argv": [
+    "graph",
+    "subclasses",
+    "Robert'; DROP TABLE"
+   ],
+   "assert": {
+    "exit_code": 1,
+    "stderr_regex": "invalid class name"
+   }
+  },
+  {
+   "door": "cli",
+   "label": "bad value -> exit 2",
+   "argv": [
+    "graph",
+    "subclasses",
+    "%Library.Persistent",
+    "--depth",
+    "notanum"
+   ],
+   "assert": {
+    "exit_code": 2
+   }
+  }
+ ]
+}

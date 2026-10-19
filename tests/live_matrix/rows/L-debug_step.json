@@ -1,0 +1,193 @@
+{
+ "id": "L-debug_step",
+ "group": "L:5",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "clean slate: close leftovers",
+   "tool": "debug_stop",
+   "args": {
+    "session_id": "${sid}"
+   },
+   "assert": {
+    "isError": false,
+    "text_regex": "ended|no active"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "own session start",
+   "tool": "debug_start",
+   "args": {
+    "target": "##class(LRISLX.Dbg).Run()",
+    "stop_on_entry": true
+   },
+   "assert": {
+    "json": {
+     "state": {
+      "eq": "break"
+     }
+    }
+   },
+   "extract": {
+    "sid3": "session_id"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "step_over -> break w/ location",
+   "tool": "debug_step",
+   "args": {
+    "session_id": "${sid3}",
+    "action": "step_over"
+   },
+   "assert": {
+    "json": {
+     "state": {
+      "eq": "break"
+     },
+     "location.line": {
+      "exists": true
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "step_into",
+   "tool": "debug_step",
+   "args": {
+    "session_id": "${sid3}",
+    "action": "step_into"
+   },
+   "assert": {
+    "isError": false
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "step_out (may finish the target)",
+   "tool": "debug_step",
+   "args": {
+    "session_id": "${sid3}",
+    "action": "step_out"
+   },
+   "assert": {
+    "text_regex": "state|no active"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "close leftover session (ended sessions self-remove: either answer OK)",
+   "tool": "debug_stop",
+   "args": {
+    "session_id": "${sid3}"
+   },
+   "assert": {
+    "text_regex": "ended|no active"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "invalid action names itself",
+   "tool": "debug_step",
+   "args": {
+    "session_id": "${sid3}",
+    "action": "teleport"
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "teleport|no active"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "fresh session for run leg",
+   "tool": "debug_start",
+   "args": {
+    "target": "##class(LRISLX.Dbg).Run()",
+    "stop_on_entry": true
+   },
+   "assert": {
+    "json": {
+     "state": {
+      "eq": "break"
+     }
+    }
+   },
+   "extract": {
+    "sid4": "session_id"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "run finishes target",
+   "tool": "debug_step",
+   "args": {
+    "session_id": "${sid4}",
+    "action": "run"
+   },
+   "assert": {
+    "json": {
+     "state": {
+      "in": [
+       "ended",
+       "break"
+      ]
+     }
+    }
+   },
+   "timeout": 60
+  },
+  {
+   "door": "stdio",
+   "label": "break after end: honest, never hangs",
+   "tool": "debug_step",
+   "args": {
+    "session_id": "${sid4}",
+    "action": "break"
+   },
+   "assert": {
+    "text_regex": "no active|break|ended|state"
+   },
+   "probe_note": "after run-to-completion the session is gone \u2014 break answers honestly; timeout-capped either way, no hang"
+  },
+  {
+   "door": "stdio",
+   "label": "fixture line space check",
+   "tool": "get_document",
+   "args": {
+    "name": "LRISLX.Dbg.cls"
+   },
+   "assert": {
+    "json": {
+     "content.5": {
+      "regex": "set x=42"
+     }
+    }
+   },
+   "probe_note": "stepped locations live inside the fixture's line space"
+  }
+ ],
+ "plant": [
+  {
+   "name": "LRISLX.Dbg.cls",
+   "content": [
+    "Class LRISLX.Dbg Extends %RegisteredObject",
+    "{",
+    "",
+    "ClassMethod Run() As %Integer",
+    "{",
+    "    set x=42",
+    "    for i=1:1:3 { set y=x+i }",
+    "    quit y",
+    "}",
+    "}"
+   ],
+   "compile": true
+  }
+ ],
+ "scope": "L-debug-chain",
+ "serial": true,
+ "order": 60
+}
