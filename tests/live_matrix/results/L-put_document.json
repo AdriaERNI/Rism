@@ -7,5 +7,5 @@
   "conflict default (ignore_conflict:false, doc changed since read): proven live: second MCP put without a fresh ts 409s \u2014 conflicts enforced by default at the documents door",
   "encoded traversal: guard passes client-side (no '..' segment), server 400s: client guard sees literal '..%2f..' (no traversal segment); URL is double-encoded server-side and rejected there \u2014 zero WRITE occurred"
  ],
- "seconds": 0.2
+ "seconds": 0.3
 }

@@ -7,5 +7,5 @@
   "break after end: honest, never hangs: after run-to-completion the session is gone \u2014 break answers honestly; timeout-capped either way, no hang",
   "fixture line space check: stepped locations live inside the fixture's line space"
  ],
- "seconds": 5.4
+ "seconds": 5.3
 }

@@ -6,5 +6,5 @@
  "notes": [
   "win-separator path: no such dir (Linux), never escapes: backslash path is one weird filename on Linux \u2014 'Path not found'; guard NOT needed, traversal still impossible"
  ],
- "seconds": 0.1
+ "seconds": 0.5
 }

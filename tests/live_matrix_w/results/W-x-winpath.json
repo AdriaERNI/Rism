@@ -6,5 +6,5 @@
  "notes": [
   "encoded dotdot reaches URL, server rejects (guard is literal-segment based): client guard inspects LITERAL segments (names.rs) \u2014 '..%2f..' has no bare '..' segment so it is sent URL-encoded ONCE; double-encoding means the server never sees a traversing path \u2014 probe settles: no escape, no data leak"
  ],
- "seconds": 0.4
+ "seconds": 0.2
 }

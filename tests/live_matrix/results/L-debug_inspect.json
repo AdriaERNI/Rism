@@ -6,5 +6,5 @@
  "notes": [
   "pure expression eval: side-effect leg: pure-expression eval verified; docs silent on method-call side effects in break context (kept as note only)"
  ],
- "seconds": 0.1
+ "seconds": 0.2
 }
