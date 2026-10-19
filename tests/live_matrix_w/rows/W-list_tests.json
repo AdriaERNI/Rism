@@ -1,0 +1,55 @@
+{
+ "id": "W-list_tests",
+ "batch": "W:B1",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "happy",
+   "tool": "list_tests",
+   "args": {},
+   "assert": {
+    "json": {
+     "classes": {
+      "len_gte": 1
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "prefix filter",
+   "tool": "list_tests",
+   "args": {
+    "filter": "%UnitTest"
+   },
+   "assert": {
+    "isError": false
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "wildcard rejected",
+   "tool": "list_tests",
+   "args": {
+    "filter": "My%"
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "filter|wildcard|invalid"
+   }
+  },
+  {
+   "door": "cli",
+   "label": "cli mirror",
+   "argv": [
+    "test",
+    "list",
+    "--format",
+    "json"
+   ],
+   "assert": {
+    "exit_code": 0
+   }
+  }
+ ]
+}

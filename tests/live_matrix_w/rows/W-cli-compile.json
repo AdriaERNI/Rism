@@ -1,0 +1,76 @@
+{
+ "id": "W-cli-compile",
+ "batch": "W:B6",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "tool twin",
+   "tool": "compile_documents",
+   "args": {
+    "names": [
+     "RismCI.LaneOnSrv.cls"
+    ]
+   },
+   "assert": {
+    "isError": false
+   },
+   "save": "twin",
+   "env": {}
+  },
+  {
+   "door": "cli",
+   "label": "cli happy json",
+   "argv": [
+    "compile",
+    "RismCI.LaneOnSrv.cls",
+    "--format",
+    "json"
+   ],
+   "assert": {
+    "exit_code": 0
+   },
+   "save": "cliout",
+   "env": {}
+  },
+  {
+   "door": "diff",
+   "label": "cli mirrors tool keys",
+   "a": "cliout",
+   "b": "twin",
+   "mode": "keys"
+  },
+  {
+   "door": "cli",
+   "label": "guard",
+   "argv": [
+    "compile",
+    "../x"
+   ],
+   "assert": {
+    "exit_code": 1,
+    "stderr_regex": "invalid document name"
+   }
+  },
+  {
+   "door": "cli",
+   "label": "missing doc -> exit 1",
+   "argv": [
+    "compile",
+    "RismCI.Absent99.cls"
+   ],
+   "assert": {
+    "exit_code": 1
+   }
+  }
+ ],
+ "plant": [
+  {
+   "name": "RismCI.LaneOnSrv.cls",
+   "content": [
+    "Class RismCI.LaneOnSrv Extends %RegisteredObject",
+    "{",
+    "}"
+   ]
+  }
+ ]
+}

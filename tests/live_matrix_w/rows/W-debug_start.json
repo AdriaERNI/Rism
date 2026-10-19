@@ -1,0 +1,68 @@
+{
+ "id": "W-debug_start",
+ "batch": "W:B5",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "start breaks at entry",
+   "tool": "debug_start",
+   "args": {
+    "target": "##class(LRISLWX.Dbg).Run()",
+    "stop_on_entry": true
+   },
+   "assert": {
+    "json": {
+     "state": {
+      "eq": "break"
+     },
+     "session_id": {
+      "exists": true
+     },
+     "location.document": {
+      "regex": "\\.cls$"
+     },
+     "breakpoints.0.state": {
+      "eq": "enabled"
+     }
+    }
+   },
+   "extract": {
+    "sid": "session_id"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "slot conflict surfaced",
+   "tool": "debug_start",
+   "args": {
+    "target": "##class(LRISLWX.Dbg).Run()",
+    "stop_on_entry": true
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "already active"
+   }
+  }
+ ],
+ "plant": [
+  {
+   "name": "LRISLWX.Dbg.cls",
+   "content": [
+    "Class LRISLWX.Dbg Extends %RegisteredObject",
+    "{",
+    "",
+    "ClassMethod Run() As %Integer",
+    "{",
+    "    set x=42",
+    "    for i=1:1:3 { set y=x+i }",
+    "    quit y",
+    "}",
+    "}"
+   ],
+   "compile": true
+  }
+ ],
+ "scope": "W-B5-chain",
+ "serial": true,
+ "order": 10
+}

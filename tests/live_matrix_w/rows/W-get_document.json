@@ -1,0 +1,135 @@
+{
+ "id": "W-get_document",
+ "batch": "W:B2",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "metadata",
+   "tool": "get_document",
+   "args": {
+    "name": "LRISLWX.Get1.cls"
+   },
+   "assert": {
+    "json": {
+     "content": {
+      "len_gte": 5
+     },
+     "ts": {
+      "exists": true
+     },
+     "cat": {
+      "eq": "CLS"
+     }
+    }
+   },
+   "save": "toolget"
+  },
+  {
+   "door": "stdio",
+   "label": "missing",
+   "tool": "get_document",
+   "args": {
+    "name": "LRISLWX.Absent9.cls"
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "not found|HTTP 4|404"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "empty name",
+   "tool": "get_document",
+   "args": {
+    "name": ""
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "invalid document name: empty"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "traversal",
+   "tool": "get_document",
+   "args": {
+    "name": "a/../../b"
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "path traversal guard"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "win traversal",
+   "tool": "get_document",
+   "args": {
+    "name": "C:\\..\\..\\evil.cls"
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "path traversal guard"
+   }
+  },
+  {
+   "door": "cli",
+   "label": "cli byte-equal",
+   "argv": [
+    "doc",
+    "get",
+    "LRISLWX.Get1.cls",
+    "--format",
+    "json"
+   ],
+   "assert": {
+    "exit_code": 0
+   },
+   "save": "cliget"
+  },
+  {
+   "door": "diff",
+   "label": "cli==tool content",
+   "a": "cliget",
+   "b": "toolget",
+   "mode": "eq"
+  },
+  {
+   "door": "http",
+   "label": "raw doc endpoint",
+   "method": "GET",
+   "path": "/api/atelier/v8/USER/doc/LRISLWX.Get1.cls",
+   "auth": true,
+   "assert": {
+    "status": [
+     200
+    ],
+    "json": {
+     "result.name": {
+      "eq": "LRISLWX.Get1.cls"
+     }
+    }
+   }
+  }
+ ],
+ "plant": [
+  {
+   "name": "LRISLWX.Get1.cls",
+   "content": [
+    "Class LRISLWX.Get1 Extends %RegisteredObject",
+    "{",
+    "",
+    "ClassMethod Ok() As %Status",
+    "{",
+    "    quit $$$OK",
+    "}",
+    "",
+    "ClassMethod Greet() As %String",
+    "{",
+    "    quit \"hi\"",
+    "}",
+    "}"
+   ]
+  }
+ ]
+}

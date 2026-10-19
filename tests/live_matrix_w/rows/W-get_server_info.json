@@ -1,0 +1,70 @@
+{
+ "id": "W-get_server_info",
+ "batch": "W:B1",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "happy",
+   "tool": "get_server_info",
+   "args": {},
+   "assert": {
+    "json": {
+     "version": {
+      "regex": "IRIS for UNIX"
+     },
+     "api": {
+      "exists": true
+     },
+     "namespaces": {
+      "regex": "USER"
+     }
+    }
+   },
+   "save": "info"
+  },
+  {
+   "door": "http",
+   "label": "raw 200",
+   "method": "GET",
+   "path": "/api/atelier/",
+   "auth": true,
+   "assert": {
+    "status": [
+     200
+    ]
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "extra key refused (deny_unknown_fields)",
+   "tool": "get_server_info",
+   "args": {
+    "namespace": "USER"
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "unknown field"
+   }
+  },
+  {
+   "door": "cli",
+   "label": "cli mirror",
+   "argv": [
+    "info",
+    "--format",
+    "json"
+   ],
+   "assert": {
+    "exit_code": 0
+   },
+   "save": "cliinfo"
+  },
+  {
+   "door": "diff",
+   "label": "cli==tool keys",
+   "a": "cliinfo",
+   "b": "info",
+   "mode": "keys"
+  }
+ ]
+}

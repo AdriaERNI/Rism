@@ -1,0 +1,135 @@
+{
+ "id": "W-put_document",
+ "batch": "W:B2",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "happy put",
+   "tool": "put_document",
+   "args": {
+    "name": "LRISLWX.Put1.cls",
+    "content": [
+     "Class LRISLWX.Put1",
+     "Extends %Persistent",
+     "{",
+     "}"
+    ]
+   },
+   "assert": {
+    "isError": false,
+    "json": {
+     "name": {
+      "eq": "LRISLWX.Put1.cls"
+     },
+     "ts": {
+      "exists": true
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "get shows content",
+   "tool": "get_document",
+   "args": {
+    "name": "LRISLWX.Put1.cls"
+   },
+   "assert": {
+    "json": {
+     "content": {
+      "len_gte": 3
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "not compiled",
+   "tool": "execute_sql",
+   "args": {
+    "query": "SELECT NAME FROM %Dictionary.CompiledClass WHERE NAME='LRISLWX.Put1'"
+   },
+   "assert": {
+    "json": {
+     "row_count": {
+      "eq": 0
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "conflict default (ignore_conflict:false, doc changed since read)",
+   "tool": "put_document",
+   "args": {
+    "name": "LRISLWX.Put1.cls",
+    "content": [
+     "Class LRISLWX.Put1",
+     "Extends %Persistent",
+     "{",
+     "}",
+     ""
+    ]
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "HTTP 409|conflict"
+   },
+   "probe_note": "proven live: second MCP put without a fresh ts 409s \u2014 conflicts enforced by default at the documents door"
+  },
+  {
+   "door": "stdio",
+   "label": "ignore_conflict true overrides",
+   "tool": "put_document",
+   "args": {
+    "name": "LRISLWX.Put1.cls",
+    "content": [
+     "Class LRISLWX.Put1",
+     "Extends %Persistent",
+     "{",
+     "}",
+     ""
+    ],
+    "ignore_conflict": true
+   },
+   "assert": {
+    "isError": false
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "bad ns",
+   "tool": "put_document",
+   "args": {
+    "name": "LRISLWX.Put2.cls",
+    "content": [
+     "x"
+    ],
+    "namespace": "../x"
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "invalid namespace \\(URL path guard\\)"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "encoded traversal: guard passes client-side (no '..' segment), server 400s",
+   "tool": "put_document",
+   "args": {
+    "name": "..%2f..",
+    "content": [
+     "x"
+    ]
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "HTTP 400|invalid document name"
+   },
+   "probe_note": "client guard sees literal '..%2f..' (no traversal segment); URL is double-encoded server-side and rejected there \u2014 zero WRITE occurred"
+  }
+ ],
+ "unplant": [
+  "LRISLWX.Put1.cls"
+ ]
+}

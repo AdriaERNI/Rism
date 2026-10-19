@@ -1,0 +1,66 @@
+{
+ "id": "W-cli-shell",
+ "batch": "W:B6",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "tool twin",
+   "tool": "run_shell",
+   "args": {
+    "command": "echo rism-ok"
+   },
+   "assert": {
+    "isError": false
+   },
+   "save": "twin",
+   "env": {}
+  },
+  {
+   "door": "cli",
+   "label": "cli happy json",
+   "argv": [
+    "shell",
+    "echo rism-ok",
+    "--format",
+    "json"
+   ],
+   "assert": {
+    "exit_code": 0
+   },
+   "save": "cliout",
+   "env": {}
+  },
+  {
+   "door": "diff",
+   "label": "cli mirrors tool keys",
+   "a": "cliout",
+   "b": "twin",
+   "mode": "keys"
+  },
+  {
+   "door": "cli",
+   "label": "exit code passthrough",
+   "argv": [
+    "shell",
+    "exit 3"
+   ],
+   "assert": {
+    "exit_code": 3
+   }
+  },
+  {
+   "door": "cli",
+   "label": "timeout kills",
+   "argv": [
+    "shell",
+    "Start-Sleep 5",
+    "--timeout",
+    "1"
+   ],
+   "assert": {
+    "exit_code": 1
+   },
+   "timeout": 40
+  }
+ ]
+}

@@ -1,0 +1,10 @@
+{
+ "os": "windows",
+ "binary": "C:\\RismL\\bin\\rism.exe",
+ "settings": "%APPDATA%\\rism\\config.toml",
+ "workspace": "C:\\RismL\\ws",
+ "restart_cmd": "powershell",
+ "restart_argv": ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                  "Restart-Service -Force IRIS_c-_intersystems_iris; Start-Sleep 2; Restart-Service -Force IRIShttpd"],
+ "note": "restart_cmd is a presence gate for runner.py; restart_argv is what actually runs (argv lists only - WinRM/cmd quoting trap, see .sf-local/CO.md)"
+}

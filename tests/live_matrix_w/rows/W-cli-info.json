@@ -1,0 +1,51 @@
+{
+ "id": "W-cli-info",
+ "batch": "W:B6",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "tool twin",
+   "tool": "get_server_info",
+   "args": {},
+   "assert": {
+    "isError": false
+   },
+   "save": "twin",
+   "env": {}
+  },
+  {
+   "door": "cli",
+   "label": "cli happy json",
+   "argv": [
+    "info",
+    "--format",
+    "json"
+   ],
+   "assert": {
+    "exit_code": 0
+   },
+   "save": "cliout",
+   "env": {}
+  },
+  {
+   "door": "diff",
+   "label": "cli mirrors tool keys",
+   "a": "cliout",
+   "b": "twin",
+   "mode": "keys"
+  },
+  {
+   "door": "cli",
+   "label": "unreachable -> exit 1",
+   "argv": [
+    "info",
+    "--url",
+    "http://127.0.0.1:1"
+   ],
+   "assert": {
+    "exit_code": 1
+   },
+   "timeout": 30
+  }
+ ]
+}

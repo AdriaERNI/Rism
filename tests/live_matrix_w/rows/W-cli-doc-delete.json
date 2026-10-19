@@ -1,0 +1,88 @@
+{
+ "id": "W-cli-doc-delete",
+ "batch": "W:B6",
+ "checks": [
+  {
+   "door": "restart",
+   "label": "slot recovery (B5 attach probe left the DBGP agent squatting; ledger rule: restart between crash rounds)"
+  },
+  {
+   "door": "stdio",
+   "label": "tool delete second",
+   "tool": "delete_document",
+   "args": {
+    "name": "RismCI.LaneDel2.cls"
+   },
+   "assert": {
+    "isError": false
+   },
+   "save": "twin"
+  },
+  {
+   "door": "cli",
+   "label": "cli delete first",
+   "argv": [
+    "doc",
+    "delete",
+    "RismCI.LaneDel1.cls",
+    "--format",
+    "json"
+   ],
+   "assert": {
+    "exit_code": 0
+   },
+   "save": "cliout"
+  },
+  {
+   "door": "diff",
+   "label": "cli mirrors tool keys",
+   "a": "cliout",
+   "b": "twin",
+   "mode": "keys"
+  },
+  {
+   "door": "cli",
+   "label": "missing -> exit 1",
+   "argv": [
+    "doc",
+    "delete",
+    "RismCI.LaneDel1.cls"
+   ],
+   "assert": {
+    "exit_code": 1,
+    "stderr_regex": "not found|404"
+   }
+  },
+  {
+   "door": "cli",
+   "label": "guard",
+   "argv": [
+    "doc",
+    "delete",
+    "x/../../y.cls"
+   ],
+   "assert": {
+    "exit_code": 1,
+    "stderr_regex": "invalid document name"
+   }
+  }
+ ],
+ "plant": [
+  {
+   "name": "RismCI.LaneDel1.cls",
+   "content": [
+    "Class RismCI.LaneDel1",
+    "{",
+    "}"
+   ]
+  },
+  {
+   "name": "RismCI.LaneDel2.cls",
+   "content": [
+    "Class RismCI.LaneDel2",
+    "{",
+    "}"
+   ]
+  }
+ ]
+}

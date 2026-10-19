@@ -1,0 +1,91 @@
+{
+ "id": "W-cli-graph-refs",
+ "batch": "W:B6",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "tool twin",
+   "tool": "find_references",
+   "args": {
+    "target": "LRISLWX.CliRef"
+   },
+   "assert": {
+    "isError": false
+   },
+   "save": "twin",
+   "env": {}
+  },
+  {
+   "door": "cli",
+   "label": "cli happy json",
+   "argv": [
+    "graph",
+    "refs",
+    "LRISLWX.CliRef",
+    "--format",
+    "json"
+   ],
+   "assert": {
+    "exit_code": 0
+   },
+   "save": "cliout",
+   "env": {}
+  },
+  {
+   "door": "diff",
+   "label": "cli mirrors tool keys",
+   "a": "cliout",
+   "b": "twin",
+   "mode": "keys"
+  },
+  {
+   "door": "cli",
+   "label": "traversal guard",
+   "argv": [
+    "graph",
+    "refs",
+    "C:\\..\\..\\etc"
+   ],
+   "assert": {
+    "exit_code": 1,
+    "stderr_regex": "guard|invalid"
+   }
+  },
+  {
+   "door": "cli",
+   "label": "not-found -> exit 1",
+   "argv": [
+    "graph",
+    "refs",
+    "Not.There"
+   ],
+   "assert": {
+    "exit_code": 1
+   }
+  }
+ ],
+ "plant": [
+  {
+   "name": "LRISLWX.CliRef.cls",
+   "compile": true,
+   "content": [
+    "Class LRISLWX.CliRef Extends %RegisteredObject",
+    "{",
+    "",
+    "ClassMethod Ok() As %Status",
+    "{",
+    "    quit ##class(LRISLWX.CliRef).U()",
+    "}",
+    "",
+    "ClassMethod U() As %Status",
+    "{",
+    "    quit $$$OK",
+    "}",
+    "}"
+   ]
+  }
+ ],
+ "unplant": [
+  "LRISLWX.CliRef.cls"
+ ]
+}

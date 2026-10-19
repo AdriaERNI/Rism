@@ -1,0 +1,72 @@
+{
+ "id": "W-x-winpath",
+ "batch": "W:B2",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "backslash legal-no-traversal",
+   "tool": "get_document",
+   "args": {
+    "name": "a\\b"
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "not found"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "win traversal refused",
+   "tool": "get_document",
+   "args": {
+    "name": "C:\\..\\..\\evil.cls"
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "path traversal guard"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "encoded dotdot reaches URL, server rejects (guard is literal-segment based)",
+   "tool": "get_document",
+   "args": {
+    "name": "..%2f.."
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "HTTP 400|not found|traversal"
+   },
+   "probe_note": "client guard inspects LITERAL segments (names.rs) \u2014 '..%2f..' has no bare '..' segment so it is sent URL-encoded ONCE; double-encoding means the server never sees a traversing path \u2014 probe settles: no escape, no data leak"
+  },
+  {
+   "door": "stdio",
+   "label": "csp path allowed",
+   "tool": "get_document",
+   "args": {
+    "name": "/csp/user/menu.csp"
+   },
+   "assert": {
+    "isError": false,
+    "json": {
+     "content": {
+      "len_gte": 1
+     }
+    }
+   }
+  },
+  {
+   "door": "http",
+   "label": "raw csp equal",
+   "method": "GET",
+   "path": "/api/atelier/v8/USER/doc/%2Fcsp%2Fuser%2Fmenu.csp",
+   "auth": true,
+   "assert": {
+    "status": [
+     200,
+     404
+    ]
+   }
+  }
+ ]
+}

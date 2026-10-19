@@ -1,0 +1,50 @@
+{
+ "id": "W-cfg-env-over-file",
+ "batch": "W:B8",
+ "checks": [
+  {
+   "door": "cli",
+   "label": "env wins over file",
+   "argv": [
+    "sql",
+    "SELECT 1"
+   ],
+   "assert": {
+    "exit_code": 1
+   },
+   "env": {
+    "APPDATA": "C:\\RismL\\cfgstub",
+    "RISM_IRIS_BASE_URL": "http://127.0.0.1:1"
+   },
+   "timeout": 40,
+   "probe_note": "file says live, env says dead: the error names the ENV url (env > file)"
+  },
+  {
+   "door": "cli",
+   "label": "--url beats env+file",
+   "argv": [
+    "sql",
+    "SELECT 1",
+    "--url",
+    "http://127.0.0.1:1"
+   ],
+   "assert": {
+    "exit_code": 1,
+    "stderr_regex": "127[.]0[.]0[.]1:1"
+   },
+   "timeout": 40
+  },
+  {
+   "door": "exec",
+   "label": "no RISM_MCP_HOST env exists (py probe)",
+   "argv": [
+    "C:\\Python312\\python.exe",
+    "C:\\RismL\\tools\\probe_env_host.py"
+   ],
+   "assert": {
+    "exit_code": 0,
+    "stdout_regex": "^1"
+   }
+  }
+ ]
+}

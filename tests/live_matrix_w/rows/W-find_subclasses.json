@@ -1,0 +1,92 @@
+{
+ "id": "W-find_subclasses",
+ "batch": "W:B1",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "happy depth 1",
+   "tool": "find_subclasses",
+   "args": {
+    "class": "%Library.Persistent",
+    "depth": 1
+   },
+   "assert": {
+    "json": {
+     "subclasses": {
+      "len_gte": 1
+     },
+     "depth": {
+      "eq": 1
+     },
+     "class": {
+      "eq": "%Library.Persistent"
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "depth 65 clamped/rejected",
+   "tool": "find_subclasses",
+   "args": {
+    "class": "%Library.Persistent",
+    "depth": 65
+   },
+   "assert": {
+    "isError": false
+   },
+   "probe_note": "depth>64 handled: result reports its effective depth"
+  },
+  {
+   "door": "stdio",
+   "label": "injection refused",
+   "tool": "find_subclasses",
+   "args": {
+    "class": "Robert'; DROP TABLE"
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "invalid class name"
+   }
+  },
+  {
+   "door": "http",
+   "label": "oracle SQL",
+   "method": "POST",
+   "path": "/api/atelier/v1/USER/action/query",
+   "auth": true,
+   "assert": {
+    "json": {
+     "result.content": {
+      "len_gte": 1
+     }
+    }
+   },
+   "body": {
+    "query": "SELECT TOP 5 NAME FROM %Dictionary.CompiledClass WHERE SUPER='%Library.Persistent'",
+    "max_rows": 100
+   }
+  },
+  {
+   "door": "cli",
+   "label": "cli mirror",
+   "argv": [
+    "graph",
+    "subclasses",
+    "%Library.Persistent",
+    "--depth",
+    "1",
+    "--format",
+    "json"
+   ],
+   "assert": {
+    "exit_code": 0,
+    "json": {
+     "subclasses": {
+      "len_gte": 1
+     }
+    }
+   }
+  }
+ ]
+}
