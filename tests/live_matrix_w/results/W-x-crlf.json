@@ -1,0 +1,11 @@
+{
+ "id": "W-x-crlf",
+ "batch": "W:B2",
+ "status": "PASS",
+ "failures": [],
+ "notes": [
+  "CR round-trip: text survives, server re-splits (documented probe): CRs folded by storage; line COUNT differs, text preserved",
+  "no CR in returned lines: get_document lines contain no stray CR \u2014 folds at storage, not at read"
+ ],
+ "seconds": 0.4
+}

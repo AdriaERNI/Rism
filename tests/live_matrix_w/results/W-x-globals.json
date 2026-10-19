@@ -1,0 +1,10 @@
+{
+ "id": "W-x-globals",
+ "batch": "W:B9",
+ "status": "PASS",
+ "failures": [],
+ "notes": [
+  "zwrite empty after: IRIS detail: zkill ^G kills the root but leaves subtrees \u2014 cleanup zkills the global AND node (1) to reach census 0"
+ ],
+ "seconds": 21.5
+}

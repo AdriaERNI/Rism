@@ -1,0 +1,8 @@
+{
+ "id": "W-get_server_info",
+ "batch": "W:B1",
+ "status": "PASS",
+ "failures": [],
+ "notes": [],
+ "seconds": 0.3
+}

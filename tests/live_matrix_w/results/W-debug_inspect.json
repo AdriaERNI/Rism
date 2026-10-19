@@ -1,0 +1,11 @@
+{
+ "id": "W-debug_inspect",
+ "batch": "W:B5",
+ "status": "PASS",
+ "failures": [],
+ "notes": [
+  "pure expression eval: side-effect leg: pure-expression eval verified; docs silent on method-call side effects in break context (kept as note only)",
+  "garbage honest error: observed W divergence, unstable: Windows IRIS DBGP answers a garbage expression either as an <UNDEFINED> string variable or as a malformed-XML eval error (seen once each); Linux 2025.3 errors consistently. In-band refusal either way, client honest, no defect"
+ ],
+ "seconds": 0.3
+}

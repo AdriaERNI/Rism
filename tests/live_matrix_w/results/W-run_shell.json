@@ -1,0 +1,11 @@
+{
+ "id": "W-run_shell",
+ "batch": "W:B4",
+ "status": "PASS",
+ "failures": [],
+ "notes": [
+  "cwd outside root: run_shell is not root-gated on Windows either (docs: same table): an absolute cwd outside the workspace works",
+  "hostile cwd traversal: W leg: '../..' resolves on Windows too (run_shell is not root-gated) \u2014 stdout must show a drive-rooted path"
+ ],
+ "seconds": 4.3
+}

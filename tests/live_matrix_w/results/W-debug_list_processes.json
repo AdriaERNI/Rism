@@ -1,0 +1,10 @@
+{
+ "id": "W-debug_list_processes",
+ "batch": "W:B1",
+ "status": "PASS",
+ "failures": [],
+ "notes": [
+  "hostile ns = client-side filter, NO guard (no URL interpolation): ledger Edge 2 predicted a guard refusal; code (debugger.rs:594+) filters client-side against hardcoded %SYS jobs \u2014 namespace never reaches a URL, so the AGENTS.md URL-guard rule does not apply; observed: empty filtered list"
+ ],
+ "seconds": 0.3
+}

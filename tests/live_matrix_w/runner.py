@@ -523,7 +523,11 @@ def execute_check(ctx: Ctx, ch: dict, saved: dict):
             m = re.search(r"http://([\d.]+|localhost):(\d+)", ready)
             if m:
                 host, port = m.group(1), m.group(2)
-                proc._mcp_url = f"http://{host}:{port}"
+                # 0.0.0.0 is a LISTEN wildcard, not a connect destination:
+                # Linux maps such a connect to loopback, Windows refuses it.
+                # Probe the same socket via loopback on both OSes.
+                probe_host = "127.0.0.1" if host == "0.0.0.0" else host
+                proc._mcp_url = f"http://{probe_host}:{port}"
                 saved["httpd_url"] = proc._mcp_url
                 saved["door_url"] = proc._mcp_url
                 ctx.g["door_url"] = proc._mcp_url

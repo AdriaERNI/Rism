@@ -1,0 +1,11 @@
+{
+ "id": "W-debug_attach",
+ "batch": "W:B5",
+ "status": "PASS",
+ "failures": [],
+ "notes": [
+  "no-such pid honest error: observed W divergence: the native-Windows DBGP agent answers an attach to a dead pid with a malformed-XML handshake error, not a pid-naming error; the client still refuses in-band with zero injection (same guard, different server-side message shape)",
+  "hostile newline target: honest error, NO wire injection: observed: 'bad DBGP xml for feature_set' \u2014 the newline target derails the handshake's XML echo and the client aborts cleanly BEFORE any command frame; no second command executed, slot untouched by an injected op (wire_safe guards raw args; free-form values ride base64 -d data, src/iris/dbgp.rs)"
+ ],
+ "seconds": 0.6
+}

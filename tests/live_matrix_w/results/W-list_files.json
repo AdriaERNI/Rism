@@ -1,0 +1,15 @@
+{
+ "id": "W-list_files",
+ "batch": "W:B4",
+ "status": "FAIL",
+ "failures": [
+  "[pattern (recursive bare glob \u2014 defect fixed in src/tools/host.rs)] json files: {'len_gte': 1} -> []",
+  "[dir path] json files: {'len_gte': 1} -> []",
+  "[max 0 clamps] json files: {'len_gte': 1} -> []",
+  "[max 0 clamps] json truncated: {'eq': True} -> false"
+ ],
+ "notes": [
+  "win-separator path: no such dir (Linux), never escapes: W edge: the backslash path is real traversal syntax on Windows \u2014 guard must refuse it (names/host split on [/]) or it simply never resolves outside root"
+ ],
+ "seconds": 0.2
+}
