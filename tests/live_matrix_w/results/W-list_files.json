@@ -1,0 +1,10 @@
+{
+ "id": "W-list_files",
+ "group": "L:4",
+ "status": "PASS",
+ "failures": [],
+ "notes": [
+  "win-separator path: no such dir (Linux), never escapes: W edge: the backslash path is real traversal syntax on Windows \u2014 guard must refuse it (names/host split on [/]) or it simply never resolves outside root"
+ ],
+ "seconds": 0.3
+}

@@ -1,0 +1,97 @@
+{
+ "id": "L-execute_sql",
+ "group": "L:1",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "happy",
+   "tool": "execute_sql",
+   "args": {
+    "query": "SELECT TOP 5 NAME FROM %Dictionary.CompiledClass"
+   },
+   "assert": {
+    "json": {
+     "row_count": {
+      "gte": 5
+     },
+     "columns": {
+      "len_gte": 1
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "sys ns query",
+   "tool": "execute_sql",
+   "args": {
+    "query": "select top 3 * from %SYS.ProcessQuery",
+    "namespace": "%SYS"
+   },
+   "assert": {
+    "isError": false
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "bad ns refused pre-HTTP",
+   "tool": "execute_sql",
+   "args": {
+    "query": "SELECT 1",
+    "namespace": "../x"
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "invalid namespace \\(URL path guard\\): \\.\\./x"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "drop surfaces server error",
+   "tool": "execute_sql",
+   "args": {
+    "query": "DROP TABLE %Library.Nope"
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "ERROR|error"
+   }
+  },
+  {
+   "door": "cli",
+   "label": "cli mirror",
+   "argv": [
+    "sql",
+    "SELECT TOP 5 NAME FROM %Dictionary.CompiledClass",
+    "--format",
+    "json"
+   ],
+   "assert": {
+    "exit_code": 0,
+    "json": {
+     "row_count": {
+      "gte": 5
+     }
+    }
+   }
+  },
+  {
+   "door": "http",
+   "label": "raw query oracle",
+   "method": "POST",
+   "path": "/api/atelier/v1/USER/action/query",
+   "auth": true,
+   "assert": {
+    "json": {
+     "result.content.0.TWO": {
+      "eq": 2
+     }
+    }
+   },
+   "body": {
+    "query": "SELECT 1+1 AS TWO",
+    "max_rows": 100
+   }
+  }
+ ]
+}

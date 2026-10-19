@@ -1,0 +1,64 @@
+{
+ "id": "W-get_test_results",
+ "group": "L:1",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "happy history",
+   "tool": "get_test_results",
+   "args": {},
+   "assert": {
+    "json": {
+     "runs": {
+      "len_gte": 1
+     },
+     "runs.0.run_time": {
+      "exists": true
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "max_runs 1",
+   "tool": "get_test_results",
+   "args": {
+    "max_runs": 1
+   },
+   "assert": {
+    "json": {
+     "runs": {
+      "len_lte": 1
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "bad class refused",
+   "tool": "get_test_results",
+   "args": {
+    "test_class": "a/../b"
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "invalid|guard"
+   }
+  },
+  {
+   "door": "cli",
+   "label": "cli mirror",
+   "argv": [
+    "test",
+    "results",
+    "--limit",
+    "3",
+    "--format",
+    "json"
+   ],
+   "assert": {
+    "exit_code": 0
+   }
+  }
+ ]
+}

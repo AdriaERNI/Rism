@@ -1,0 +1,89 @@
+{
+ "id": "L-x-globals",
+ "group": "L:9",
+ "checks": [
+  {
+   "door": "restart",
+   "label": "fresh server for census legs"
+  },
+  {
+   "door": "stdio",
+   "label": "set global",
+   "tool": "execute_command",
+   "args": {
+    "command": "set ^LRISLX(1)=\"x\""
+   },
+   "assert": {
+    "isError": false
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "get global",
+   "tool": "execute_command",
+   "args": {
+    "command": "write ^LRISLX(1)"
+   },
+   "assert": {
+    "json": {
+     "output": {
+      "regex": "x"
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "zwrite before kill",
+   "tool": "execute_command",
+   "args": {
+    "command": "zwrite ^LRISLX"
+   },
+   "assert": {
+    "json": {
+     "output": {
+      "regex": "1"
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "cleanup zkill (whole global \u2014 harness NEVER emits bare zkill)",
+   "tool": "execute_command",
+   "args": {
+    "command": "zkill ^LRISLX"
+   },
+   "assert": {
+    "isError": false
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "zkill subscript for nested nodes",
+   "tool": "execute_command",
+   "args": {
+    "command": "zkill ^LRISLX(1)"
+   },
+   "assert": {
+    "isError": false
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "zwrite empty after",
+   "tool": "execute_command",
+   "args": {
+    "command": "zwrite ^LRISLX"
+   },
+   "assert": {
+    "json": {
+     "output": {
+      "regex": "^\\s*$"
+     }
+    }
+   },
+   "probe_note": "IRIS detail: zkill ^G kills the root but leaves subtrees \u2014 cleanup zkills the global AND node (1) to reach census 0"
+  }
+ ]
+}

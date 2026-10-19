@@ -1,0 +1,112 @@
+{
+ "id": "W-list_documents",
+ "group": "L:1",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "filter+count",
+   "tool": "list_documents",
+   "args": {
+    "filter": "%Dictionary.CompiledClass",
+    "count": 5
+   },
+   "assert": {
+    "json": {
+     "documents": {
+      "len_lte": 5
+     },
+     "count": {
+      "lte": 5
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "filetypes+count",
+   "tool": "list_documents",
+   "args": {
+    "filetypes": [
+     "cls"
+    ],
+    "count": 5
+   },
+   "assert": {
+    "json": {
+     "count": {
+      "lte": 5
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "% is literal (substring of 'Taxonomy' \u2014 case-insensitive)",
+   "tool": "list_documents",
+   "args": {
+    "filter": "My%"
+   },
+   "assert": {
+    "isError": false,
+    "json": {
+     "documents": {
+      "len_gte": 1
+     },
+     "documents.0.name": {
+      "regex": "(?i)my"
+     }
+    }
+   },
+   "probe_note": "docs: '%' is NOT a wildcard in filter \u2014 literal substring; the hits prove it (names contain 'my' inside 'Taxonomy' with the trailing % unmatched)"
+  },
+  {
+   "door": "stdio",
+   "label": "negative count -> serde error",
+   "tool": "list_documents",
+   "args": {
+    "filter": "My%",
+    "count": -1
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "deserialize|invalid|error"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "NUL in filetypes: accepted, filters to empty",
+   "tool": "list_documents",
+   "args": {
+    "filetypes": [
+     "cls\u0000"
+    ]
+   },
+   "assert": {
+    "isError": false,
+    "json": {
+     "documents": {
+      "len_eq": 0
+     }
+    }
+   },
+   "probe_note": "no filetype guard in code (documents.rs client-side filter); NUL never reaches a URL (docnames endpoint carries no filetype param) \u2014 observed empty list, not a refusal"
+  },
+  {
+   "door": "cli",
+   "label": "cli mirror",
+   "argv": [
+    "doc",
+    "list",
+    "--filter",
+    "%Dictionary.CompiledClass",
+    "--count",
+    "5",
+    "--format",
+    "json"
+   ],
+   "assert": {
+    "exit_code": 0
+   }
+  }
+ ]
+}

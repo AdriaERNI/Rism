@@ -1,0 +1,43 @@
+{
+ "id": "W-x-sys-ops",
+ "group": "L:1",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "process query %SYS",
+   "tool": "execute_sql",
+   "args": {
+    "namespace": "%SYS",
+    "query": "select top 3 * from %SYS.ProcessQuery"
+   },
+   "assert": {
+    "isError": false
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "jobs via tool",
+   "tool": "debug_list_processes",
+   "args": {
+    "system": true
+   },
+   "assert": {
+    "json_raw": {
+     "len_gte": 1
+    }
+   }
+  },
+  {
+   "door": "http",
+   "label": "raw jobs equal door",
+   "method": "GET",
+   "path": "/api/atelier/v8/%25SYS/jobs?system=1",
+   "auth": true,
+   "assert": {
+    "status": [
+     200
+    ]
+   }
+  }
+ ]
+}

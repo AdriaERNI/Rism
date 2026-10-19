@@ -1,0 +1,43 @@
+{
+ "id": "W-cli-mcp",
+ "group": "L:6",
+ "checks": [
+  {
+   "door": "cli",
+   "label": "bogus transport -> exit 2",
+   "argv": [
+    "mcp",
+    "--transport",
+    "sse"
+   ],
+   "assert": {
+    "exit_code": 2
+   }
+  },
+  {
+   "door": "cli",
+   "label": "unknown flag -> exit 2",
+   "argv": [
+    "mcp",
+    "--nope"
+   ],
+   "assert": {
+    "exit_code": 2
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "server twin answers over stdio (the door itself)",
+   "tool": "get_server_info",
+   "args": {},
+   "assert": {
+    "isError": false,
+    "json": {
+     "version": {
+      "regex": "IRIS"
+     }
+    }
+   }
+  }
+ ]
+}

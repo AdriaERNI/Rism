@@ -64,3 +64,6 @@ bench/.work/
 
 # Python bytecode from bench scripts
 __pycache__/
+
+# live-matrix harness runtime scratch (recreated by runner.py)
+.live-matrix/

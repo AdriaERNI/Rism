@@ -1,0 +1,10 @@
+{
+ "id": "L-cfg-env-over-file",
+ "group": "L:8",
+ "status": "PASS",
+ "failures": [],
+ "notes": [
+  "env wins over file: file says live, env says dead: the error names the ENV url (env > file)"
+ ],
+ "seconds": 6.1
+}

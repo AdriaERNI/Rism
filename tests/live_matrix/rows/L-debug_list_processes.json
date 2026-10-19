@@ -1,0 +1,57 @@
+{
+ "id": "L-debug_list_processes",
+ "group": "L:1",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "happy",
+   "tool": "debug_list_processes",
+   "args": {},
+   "assert": {
+    "json_raw": {
+     "type": "list"
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "system widens",
+   "tool": "debug_list_processes",
+   "args": {
+    "system": true
+   },
+   "assert": {
+    "json_raw": {
+     "len_gte": 1
+    }
+   },
+   "save": "jobs"
+  },
+  {
+   "door": "stdio",
+   "label": "hostile ns = client-side filter, NO guard (no URL interpolation)",
+   "tool": "debug_list_processes",
+   "args": {
+    "namespace": "a b/../"
+   },
+   "assert": {
+    "isError": false
+   },
+   "probe_note": "checklist edge 2 predicted a guard refusal; code (debugger.rs:594+) filters client-side against hardcoded %SYS jobs \u2014 namespace never reaches a URL, so the AGENTS.md URL-guard rule does not apply; observed: empty filtered list"
+  },
+  {
+   "door": "http",
+   "label": "oracle raw jobs",
+   "method": "GET",
+   "path": "/api/atelier/v8/%25SYS/jobs?system=1",
+   "auth": true,
+   "assert": {
+    "json": {
+     "result.content": {
+      "len_gte": 1
+     }
+    }
+   }
+  }
+ ]
+}

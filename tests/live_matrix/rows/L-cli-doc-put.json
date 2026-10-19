@@ -1,0 +1,78 @@
+{
+ "id": "L-cli-doc-put",
+ "group": "L:6",
+ "checks": [
+  {
+   "door": "exec",
+   "label": "stage file",
+   "argv": [
+    "python3",
+    "-c",
+    "import pathlib; pathlib.Path('${scratch}/MatrixCliPut.cls').write_text('Class RismCI.MatrixCliPut Extends %RegisteredObject\\n{\\n}')"
+   ],
+   "assert": {
+    "exit_code": 0
+   }
+  },
+  {
+   "door": "cli",
+   "label": "cli doc put",
+   "argv": [
+    "doc",
+    "put",
+    "RismCI.MatrixCliPut.cls",
+    "--file",
+    "${scratch}/MatrixCliPut.cls",
+    "--format",
+    "json"
+   ],
+   "assert": {
+    "exit_code": 0
+   },
+   "save": "cliout"
+  },
+  {
+   "door": "stdio",
+   "label": "tool twin",
+   "tool": "put_document",
+   "args": {
+    "name": "RismCI.MatrixCliPut.cls",
+    "content": [
+     "Class RismCI.MatrixCliPut Extends %RegisteredObject",
+     "{",
+     "}"
+    ],
+    "ignore_conflict": true
+   },
+   "assert": {
+    "isError": false
+   },
+   "save": "twin"
+  },
+  {
+   "door": "diff",
+   "label": "cli mirrors tool keys",
+   "a": "cliout",
+   "b": "twin",
+   "mode": "keys"
+  },
+  {
+   "door": "cli",
+   "label": "guard",
+   "argv": [
+    "doc",
+    "put",
+    "x/../../y.cls",
+    "--file",
+    "/dev/null"
+   ],
+   "assert": {
+    "exit_code": 1,
+    "stderr_regex": "invalid document name"
+   }
+  }
+ ],
+ "unplant": [
+  "RismCI.MatrixCliPut.cls"
+ ]
+}

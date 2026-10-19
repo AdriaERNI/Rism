@@ -1,0 +1,10 @@
+{
+ "id": "W-find_references",
+ "group": "L:2",
+ "status": "PASS",
+ "failures": [],
+ "notes": [
+  "routine form (no refs docs planted \u2014 legal headers only .cls accepted by this Atelier build): plant probe: .mac/.int with every header shape 16021s at PUT; routine targets work against existing docs"
+ ],
+ "seconds": 25.3
+}

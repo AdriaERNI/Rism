@@ -1,0 +1,73 @@
+{
+ "id": "W-cli-exec",
+ "group": "L:6",
+ "checks": [
+  {
+   "door": "restart",
+   "label": "slot recovery (attach probe left the DBGP agent squatting; rule: restart the server between crash rounds)"
+  },
+  {
+   "door": "stdio",
+   "label": "tool twin",
+   "tool": "execute_command",
+   "args": {
+    "command": "write \"1+1=\", 1+1"
+   },
+   "assert": {
+    "isError": false
+   },
+   "save": "twin",
+   "env": {}
+  },
+  {
+   "door": "cli",
+   "label": "cli happy json",
+   "argv": [
+    "exec",
+    "write \"1+1=\", 1+1",
+    "--format",
+    "json"
+   ],
+   "assert": {
+    "exit_code": 0
+   },
+   "save": "cliout",
+   "env": {}
+  },
+  {
+   "door": "diff",
+   "label": "cli mirrors tool keys",
+   "a": "cliout",
+   "b": "twin",
+   "mode": "keys"
+  },
+  {
+   "door": "cli",
+   "label": "guard",
+   "argv": [
+    "exec",
+    "write 1",
+    "--namespace",
+    "../x"
+   ],
+   "assert": {
+    "exit_code": 1,
+    "stderr_regex": "invalid namespace"
+   }
+  },
+  {
+   "door": "cli",
+   "label": "absurd timeout clamps",
+   "argv": [
+    "exec",
+    "write \"t\"",
+    "--timeout",
+    "999999999"
+   ],
+   "assert": {
+    "exit_code": 0
+   },
+   "timeout": 60
+  }
+ ]
+}

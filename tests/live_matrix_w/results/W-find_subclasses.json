@@ -1,0 +1,10 @@
+{
+ "id": "W-find_subclasses",
+ "group": "L:1",
+ "status": "PASS",
+ "failures": [],
+ "notes": [
+  "depth 65 clamped/rejected: depth>64 handled: result reports its effective depth"
+ ],
+ "seconds": 0.5
+}

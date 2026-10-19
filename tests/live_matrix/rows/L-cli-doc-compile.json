@@ -1,0 +1,63 @@
+{
+ "id": "L-cli-doc-compile",
+ "group": "L:6",
+ "checks": [
+  {
+   "door": "exec",
+   "label": "stage file",
+   "argv": [
+    "python3",
+    "-c",
+    "open('${scratch}/MatrixDocComp.cls','w').write('Class RismCI.MatrixDocComp Extends %RegisteredObject\\n{\\n}')"
+   ],
+   "assert": {
+    "exit_code": 0
+   }
+  },
+  {
+   "door": "cli",
+   "label": "cli doc compile",
+   "argv": [
+    "doc",
+    "compile",
+    "RismCI.MatrixDocComp.cls",
+    "--file",
+    "${scratch}/MatrixDocComp.cls",
+    "--format",
+    "json"
+   ],
+   "assert": {
+    "exit_code": 0
+   },
+   "save": "cliout"
+  },
+  {
+   "door": "stdio",
+   "label": "tool twin",
+   "tool": "put_and_compile",
+   "args": {
+    "name": "RismCI.MatrixDocComp.cls",
+    "content": [
+     "Class RismCI.MatrixDocComp Extends %RegisteredObject",
+     "{",
+     "}"
+    ],
+    "ignore_conflict": true
+   },
+   "assert": {
+    "isError": false
+   },
+   "save": "twin"
+  },
+  {
+   "door": "diff",
+   "label": "cli mirrors tool keys",
+   "a": "cliout",
+   "b": "twin",
+   "mode": "keys"
+  }
+ ],
+ "unplant": [
+  "RismCI.MatrixDocComp.cls"
+ ]
+}

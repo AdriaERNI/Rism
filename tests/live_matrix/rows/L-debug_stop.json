@@ -1,0 +1,101 @@
+{
+ "id": "L-debug_stop",
+ "group": "L:5",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "fresh session for stop row",
+   "tool": "debug_start",
+   "args": {
+    "target": "##class(LRISLX.Dbg).Run()",
+    "stop_on_entry": true
+   },
+   "assert": {
+    "json": {
+     "state": {
+      "eq": "break"
+     }
+    }
+   },
+   "extract": {
+    "sid": "session_id"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "stop ends session",
+   "tool": "debug_stop",
+   "args": {
+    "session_id": "${sid}"
+   },
+   "assert": {
+    "json": {
+     "state": {
+      "eq": "ended"
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "gone after stop",
+   "tool": "debug_stack",
+   "args": {
+    "session_id": "${sid}"
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "no active"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "unknown sid honest",
+   "tool": "debug_stop",
+   "args": {
+    "session_id": "nonexistent-zz"
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "no active|not found|error"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "squat guard: slot freed, start works again",
+   "tool": "debug_start",
+   "args": {
+    "target": "##class(LRISLX.Dbg).Run()",
+    "stop_on_entry": true
+   },
+   "assert": {
+    "json": {
+     "state": {
+      "eq": "break"
+     }
+    }
+   },
+   "extract": {
+    "sid2": "session_id"
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "stop the fresh session",
+   "tool": "debug_stop",
+   "args": {
+    "session_id": "${sid2}"
+   },
+   "assert": {
+    "json": {
+     "state": {
+      "eq": "ended"
+     }
+    }
+   }
+  }
+ ],
+ "scope": "L-debug-chain",
+ "serial": true,
+ "order": 80
+}

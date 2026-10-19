@@ -1,0 +1,12 @@
+{
+ "os": "windows",
+ "binary": "C:\\RismL\\bin\\rism.exe",
+ "settings": "%APPDATA%\\rism\\config.toml",
+ "workspace": "C:\\RismL\\ws",
+ "restart_cmd": "powershell",
+ "restart_argv": ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                  "$t0=Get-Date; Stop-Service IRIS_c-_intersystems_iris -Force -ErrorAction Continue; while((Get-Service IRIS_c-_intersystems_iris).Status -ne 'Stopped' -and ((Get-Date)-$t0).TotalSeconds -lt 120){Start-Sleep 3}; Start-Service IRIS_c-_intersystems_iris -ErrorAction Continue; Start-Sleep 3; if ((Get-Service IRIShttpd).Status -ne 'Running') { Start-Service IRIShttpd -ErrorAction Continue }"],
+ "restart_ensure_argv": ["sc.exe", "start", "IRIShttpd"],
+ "restart_wait_s": 240,
+ "note": "restart_cmd is a presence gate for runner.py; restart_argv is what actually runs (argv list only - never nested quotes over WinRM). VM facts (CO.md + measured in B6): Restart-Service on the controller hangs its own pipeline (stop-wait-start works, ~30s); after a controller bounce IRIShttpd can stay Stopped or be mid-restart, so the poll loop re-asserts `sc.exe start IRIShttpd` every ~15s (harmless 1056 when already running) until the Atelier root answers 200."
+}

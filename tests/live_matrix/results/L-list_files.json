@@ -1,0 +1,10 @@
+{
+ "id": "L-list_files",
+ "group": "L:4",
+ "status": "PASS",
+ "failures": [],
+ "notes": [
+  "win-separator path: no such dir (Linux), never escapes: backslash path is one weird filename on Linux \u2014 'Path not found'; guard NOT needed, traversal still impossible"
+ ],
+ "seconds": 1.3
+}

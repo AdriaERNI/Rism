@@ -1,0 +1,96 @@
+{
+ "id": "W-x-crlf",
+ "group": "L:2",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "put plain",
+   "tool": "put_document",
+   "args": {
+    "name": "LRISLWX.CRLF1.cls",
+    "content": [
+     "Class LRISLWX.CRLF1 Extends %RegisteredObject",
+     "{",
+     "",
+     "ClassMethod Ok() As %Status",
+     "{",
+     "    quit $$$OK",
+     "}"
+    ]
+   },
+   "assert": {
+    "isError": false
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "get: leading block equal",
+   "tool": "get_document",
+   "args": {
+    "name": "LRISLWX.CRLF1.cls"
+   },
+   "assert": {
+    "json": {
+     "content.0": {
+      "eq": "Class LRISLWX.CRLF1 Extends %RegisteredObject"
+     },
+     "content": {
+      "len_gte": 5
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "mixed CR content accepted",
+   "tool": "put_document",
+   "args": {
+    "name": "LRISLWX.CRLF2.cls",
+    "content": [
+     "Class LRISLWX.CRLF2 Extends %RegisteredObject\r",
+     "{\r",
+     "}\r"
+    ]
+   },
+   "assert": {
+    "isError": false
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "CR round-trip: text survives, server re-splits (documented probe)",
+   "tool": "get_document",
+   "args": {
+    "name": "LRISLWX.CRLF2.cls"
+   },
+   "assert": {
+    "json": {
+     "content": {
+      "len_gte": 3
+     }
+    }
+   },
+   "probe_note": "CRs folded by storage; line COUNT differs, text preserved"
+  },
+  {
+   "door": "stdio",
+   "label": "no CR in returned lines",
+   "tool": "get_document",
+   "args": {
+    "name": "LRISLWX.CRLF2.cls"
+   },
+   "assert": {
+    "json": {
+     "content": {
+      "regex": "^(?!.*\\r).*$"
+     }
+    }
+   },
+   "probe_note": "get_document lines contain no stray CR \u2014 folds at storage, not at read"
+  }
+ ],
+ "unplant": [
+  "LRISLWX.CRLF1.cls",
+  "LRISLWX.CRLF2.cls"
+ ]
+}

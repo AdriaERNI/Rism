@@ -1,0 +1,10 @@
+{
+ "id": "L-execute_command",
+ "group": "L:3",
+ "status": "PASS",
+ "failures": [],
+ "notes": [
+  "nul command: no panic, NUL stripped server-side: checklist expected 'server error text, never panic' \u2014 observed: no panic AND no error: IRIS terminal strips the NUL and executes; honest output returned"
+ ],
+ "seconds": 0.9
+}

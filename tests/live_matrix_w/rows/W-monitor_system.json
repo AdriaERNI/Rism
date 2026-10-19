@@ -1,0 +1,62 @@
+{
+ "id": "W-monitor_system",
+ "group": "L:1",
+ "checks": [
+  {
+   "door": "stdio",
+   "label": "happy scores",
+   "tool": "monitor_system",
+   "args": {},
+   "assert": {
+    "json": {
+     "score.overall": {
+      "exists": true
+     },
+     "timestamp": {
+      "gte": 1700000000
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "raw metrics",
+   "tool": "monitor_system",
+   "args": {
+    "include_raw_metrics": true
+   },
+   "assert": {
+    "json": {
+     "raw_metrics": {
+      "exists": true
+     }
+    }
+   }
+  },
+  {
+   "door": "stdio",
+   "label": "namespace key rejected (deny_unknown_fields)",
+   "tool": "monitor_system",
+   "args": {
+    "namespace": "x"
+   },
+   "assert": {
+    "isError": true,
+    "text_regex": "unknown field"
+   }
+  },
+  {
+   "door": "cli",
+   "label": "cli mirror",
+   "argv": [
+    "monitor",
+    "--raw",
+    "--format",
+    "json"
+   ],
+   "assert": {
+    "exit_code": 0
+   }
+  }
+ ]
+}
