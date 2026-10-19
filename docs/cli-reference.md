@@ -176,18 +176,30 @@ Stored results history, newest first. Flags: `--limit <N>`, `--class <NAME>` fil
 
 ## Debugger
 
-One-shot helpers around the DBGP session engine (details in [Debugger](debugger.md)):
+One-shot helpers around the DBGP session engine (details in [Debugger](debugger.md)).
+The DBGP agent slot is single-session per server: one debug session at a time.
+
+### `rism debug ps`
+List debuggable IRIS processes (jobs). Flags: `--system` (include system
+processes), `--ns <NS>` (filter by namespace).
+
+### `rism debug run <TARGET>`
+Run a target under the debugger to completion, printing each stop. The target is
+a positional `ObjectScript` expression, e.g. `'##class(MyApp.Svc).Main()'`.
+Flags: `--stop-on-entry` (break at the entry line, then continue),
+`--class <CLS>` + `--method <M>` (breakpoint location), `--offset <N>`
+(breakpoint line offset in the method, default 1), `--max-stops <N>`
+(max stops before forcing completion, default 50).
+
+### `rism debug attach <PID>`
+Attach to a running process (pid from `rism debug ps`), capture its location,
+and resume it.
 
 ```bash
 rism debug ps                              # list debuggable processes
 rism debug run '##class(MyApp.Svc).Main()' --stop-on-entry
-rism debug attach <pid>
+rism debug attach 12345
 ```
-
-`debug run` flags: `--stop-on-entry`, `--class <CLS>`, `--method <M>`,
-`--offset <N>` (breakpoint line offset in the method, default 1),
-`--max-stops <N>` (max stops before forcing completion, default 50), plus the
-target as a positional expression.
 
 ## Host tools
 
@@ -197,6 +209,21 @@ Rism. `read_file` / `list_files` (`rism cat` / `rism ls`) require
 default to `/`); traversal outside the root is refused. `rism shell` runs
 regardless — it executes in the current working directory unless the MCP
 `run_shell` `cwd` parameter says otherwise.
+
+### `rism shell <COMMAND>`
+Run a shell command on the local host — bash on Unix, PowerShell on Windows.
+Flags: `--timeout <SECS>` (per-command timeout, default 30 s, clamped to
+[1, 3600]). Exit code mirrors the command's.
+
+### `rism cat <PATH>`
+Read a workspace file. The path is relative to `RISM_WORKSPACE` /
+`workspace_root`; traversal outside the root is refused; binary files are
+detected and rejected.
+
+### `rism ls [PATH] [--pattern <GLOB>]`
+List workspace files. The positional is a directory (default: the workspace
+root); `--pattern` takes the glob. `--pattern '*.rs'` with no path matches
+recursively from the root.
 
 ```bash
 rism shell "cargo test"                    # bash here, PowerShell on Windows
